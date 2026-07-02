@@ -157,6 +157,40 @@ export function deriveFindings(a: Analysis): Finding[] {
       anchor: "#deadtuples",
     });
   }
+  // Transaction-ID wraparound headroom (age(relfrozenxid) toward the 2B ceiling).
+  const maxXidPct = a.sql.txidWraparound.reduce((mx, r) => Math.max(mx, num(r.pct_wraparound)), 0);
+  if (maxXidPct >= 20) {
+    out.push({
+      severity: maxXidPct >= 40 ? "high" : "med",
+      category: "Capacity",
+      title: `Transaction-ID wraparound at ${maxXidPct}% on the oldest table (freeze autovacuum falling behind)`,
+      anchor: "#txid",
+    });
+  }
+  // Replication slots: inactive slots pin WAL (disk-fill risk); large active lag
+  // signals a slow downstream consumer.
+  const inactiveSlots = a.sql.replicationSlots.filter(
+    (r) => r.active === false && num(r.retained_wal_bytes) > 0,
+  ).length;
+  if (inactiveSlots > 0) {
+    out.push({
+      severity: "high",
+      category: "Capacity",
+      title: `${inactiveSlots} inactive replication ${inactiveSlots === 1 ? "slot" : "slots"} retaining WAL (pins disk until dropped)`,
+      anchor: "#slots",
+    });
+  }
+  const laggingSlots = a.sql.replicationSlots.filter(
+    (r) => r.active === true && num(r.retained_wal_bytes) >= 1_073_741_824,
+  ).length;
+  if (laggingSlots > 0) {
+    out.push({
+      severity: "med",
+      category: "Capacity",
+      title: `${laggingSlots} replication ${laggingSlots === 1 ? "slot" : "slots"} lagging >1GB WAL (slow consumer)`,
+      anchor: "#slots",
+    });
+  }
   const waiting = a.metrics.samples.find((s) => s.name === "pgbouncer_pools_cl_waiting");
   if (waiting && waiting.value > 0) {
     out.push({

@@ -47,10 +47,13 @@ function fixture(overrides: Partial<Analysis> = {}): Analysis {
         { name: "idle_in_transaction_session_timeout", setting: "0", unit: "ms" },
       ],
       topStatements: [{ total_ms: 50983.4, calls: 135, query: "SELECT ..." }],
+      topByCalls: [],
       biggestTables: [],
       unusedIndexes: [],
       seqScanHeavy: [],
       deadTuples: [],
+      txidWraparound: [],
+      replicationSlots: [],
       rlsPolicies: [
         { table: "public.pastes", policyname: "view own", cmd: "SELECT", unwrapped_auth: true },
       ],
