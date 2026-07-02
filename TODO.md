@@ -2,21 +2,25 @@
 
 ## Done
 - [x] PAT-only collector across Management API + read-only SQL + metrics
-- [x] direct + gatekeeper transports
 - [x] zod schemas at every boundary (advisors `lints` shape caught + fixed)
-- [x] self-contained HTML report (utilitarian) + Playwright PDF
-- [x] scrape-init: Prometheus+Grafana stack for going-forward 30-day history
-- [x] tests: prometheus parser, render, empty-states, tag balance
-- [x] full unit suite (config, schemas, transport, management, collect, scraper, sql) - 55 tests
-- [x] live `smoke.ts` (all planes) + gated Live smoke CI workflow
-
-- [x] `full --all` org iteration + index.html overview
-- [x] `--prometheus <url>` 30-day trend panels (inline SVG sparklines)
+- [x] self-contained HTML report (utilitarian) + Chromium PDF
+- [x] pyramid report: ranked findings summary + collapsible drill-downs
+- [x] RLS policy audit (unwrapped auth), pg_settings config, noise filtering
+- [x] degraded-state honesty for paused/unreachable projects
+- [x] scrape-init: Prometheus+Grafana stack (validated live; named-volume fix)
+- [x] full --all org iteration + index.html overview
+- [x] --prometheus 30-day SVG trend panels (incl. disk read/write IOPS)
+- [x] disk IOPS-headroom finding (latest rate vs provisioned)
 - [x] edge-function + storage bucket coverage
-- [x] scraper stack validated end-to-end (fixed host-uid crash with named volumes)
+- [x] full test suite + live smoke.ts + gated Live smoke workflow
 
-## Next
-- [ ] gatekeeper-transport live smoke once a narrow key is provisioned (parked)
-- [ ] richer disk/IO analysis (IOPS headroom vs node_disk_* rates from the scraper)
-- [ ] per-function invocation stats (needs function_id + analytics endpoint)
-- [ ] push to a remote so CI/release workflows actually run
+## Deliberately not doing
+- Gatekeeper transport - removed; direct (PAT) only.
+- Remote push / running CI - staying local by choice; workflows remain for
+  if that ever changes.
+
+## Deferred (needs a precondition)
+- Per-function invocation stats - no edge functions exist in the account to
+  validate against; revisit when one does.
+- Richer disk/IO beyond IOPS (latency, queue depth) - needs sustained scraper
+  history to be meaningful.

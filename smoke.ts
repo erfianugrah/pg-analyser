@@ -5,7 +5,6 @@
  *
  *   SUPABASE_ACCESS_TOKEN=sbp_... bun run smoke --ref <project-ref>
  *   SBPERF_SMOKE_REF=<ref> bun run smoke            # ref from env
- *   GATEKEEPER_URL=... GATEKEEPER_KEY=... bun run smoke --ref <ref>
  *
  * Exits non-zero if a hard invariant fails. Per-plane failures are reported
  * as WARN (a project may legitimately lack metrics, advisors, etc.).
@@ -41,7 +40,7 @@ async function main(): Promise<void> {
   } catch (err) {
     if (err instanceof ConfigError) {
       console.error(`${RED}no credentials:${RESET} ${err.message}`);
-      console.error("set SUPABASE_ACCESS_TOKEN (or GATEKEEPER_URL + GATEKEEPER_KEY)");
+      console.error("set SUPABASE_ACCESS_TOKEN");
       process.exit(2);
     }
     throw err;
@@ -53,7 +52,7 @@ async function main(): Promise<void> {
     process.exit(2);
   }
 
-  console.log(`\nsbperf live smoke - ${config.kind} transport, project ${ref}\n`);
+  console.log(`\nsbperf live smoke - project ${ref}\n`);
 
   const t = makeTransport(config);
   const started = Date.now();
@@ -69,7 +68,6 @@ async function main(): Promise<void> {
   // hard invariants
   check("collect() completed", true, `${ms}ms`, true);
   check("project meta present", a.meta.name.length > 0, a.meta.name, true);
-  check("transport matches config", a.meta.transport === config.kind, a.meta.transport, true);
 
   // per-plane (soft)
   const errSources = new Set(a.errors.map((e) => e.source));

@@ -1,14 +1,13 @@
-import type { TransportConfig } from "./config.ts";
+import type { Config } from "./config.ts";
 
 /**
- * Transport abstracts WHERE requests go and HOW they authenticate, so the rest
- * of the tool speaks one logical API regardless of direct-vs-gatekeeper.
+ * Transport abstracts HTTP access to the two Supabase surfaces so the rest of
+ * the tool speaks one logical API (and tests can inject a fake).
  *
  *  - mgmt(path):   Management API. `path` starts with /v1 or /v0.
  *  - metrics(ref): per-project Prometheus text.
  */
 export interface Transport {
-  readonly kind: "direct" | "gatekeeper";
   mgmt(path: string, init?: RequestInit): Promise<Response>;
   metrics(ref: string): Promise<Response>;
 }
@@ -44,7 +43,6 @@ async function fetchRetry(url: string, init: RequestInit, retries = 2): Promise<
 }
 
 class DirectTransport implements Transport {
-  readonly kind = "direct" as const;
   #serviceRoleCache = new Map<string, string>();
 
   constructor(private readonly accessToken: string) {}
@@ -81,36 +79,6 @@ class DirectTransport implements Transport {
   }
 }
 
-class GatekeeperTransport implements Transport {
-  readonly kind = "gatekeeper" as const;
-
-  constructor(
-    private readonly baseUrl: string,
-    private readonly key: string,
-  ) {}
-
-  mgmt(path: string, init: RequestInit = {}): Promise<Response> {
-    // Gatekeeper mounts the Management API under /supabase and swaps in the PAT.
-    return fetchRetry(`${this.baseUrl}/supabase${path}`, {
-      ...init,
-      headers: {
-        Authorization: `Bearer ${this.key}`,
-        ...(init.body ? { "content-type": "application/json" } : {}),
-        ...init.headers,
-      },
-    });
-  }
-
-  metrics(ref: string): Promise<Response> {
-    // Gatekeeper swaps in the per-project Basic secret upstream.
-    return fetchRetry(`${this.baseUrl}/supabase/metrics/${ref}`, {
-      headers: { Authorization: `Bearer ${this.key}` },
-    });
-  }
-}
-
-export function makeTransport(config: TransportConfig): Transport {
-  return config.kind === "gatekeeper"
-    ? new GatekeeperTransport(config.baseUrl, config.key)
-    : new DirectTransport(config.accessToken);
+export function makeTransport(config: Config): Transport {
+  return new DirectTransport(config.accessToken);
 }

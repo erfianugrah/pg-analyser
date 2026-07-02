@@ -51,7 +51,6 @@ describe("collect", () => {
     const a = await collect("ref", t, "0.0.0-test");
 
     expect(a.meta.name).toBe("example-project");
-    expect(a.meta.transport).toBe("direct");
     expect(a.advisors.performance).toHaveLength(2);
     expect(a.advisors.security).toHaveLength(0);
     expect(a.sql.cacheHitPct).toBe(99.5);

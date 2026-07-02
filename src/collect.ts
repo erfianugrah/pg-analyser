@@ -114,7 +114,6 @@ export async function collect(
       pgVersion: project.database?.version ?? null,
       createdAt: project.created_at,
       collectedAt: new Date().toISOString(),
-      transport: transport.kind,
       sbperfVersion: version,
     },
     health,

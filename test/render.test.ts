@@ -12,7 +12,6 @@ function fixture(overrides: Partial<Analysis> = {}): Analysis {
       pgVersion: "17.6.1.104",
       createdAt: "2026-01-01T00:00:00Z",
       collectedAt: "2026-07-02T00:00:00Z",
-      transport: "direct",
       sbperfVersion: "0.1.0",
     },
     health: [

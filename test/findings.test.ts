@@ -12,7 +12,6 @@ function base(): Analysis {
       pgVersion: "17",
       createdAt: "x",
       collectedAt: "x",
-      transport: "direct",
       sbperfVersion: "t",
     },
     health: [],
@@ -95,6 +94,39 @@ describe("deriveFindings", () => {
     const f = deriveFindings(a).find((x) => x.anchor === "#connections");
     expect(f?.category).toBe("Capacity");
     expect(f?.title).toContain("83%");
+  });
+
+  test("disk IOPS headroom flagged from trend rates", () => {
+    const a = base();
+    a.disk = {
+      sizeGb: 8,
+      iops: 3000,
+      type: "gp3",
+      throughputMibps: 125,
+      usedBytes: 1,
+      availBytes: 9,
+    };
+    a.trends = [
+      { title: "Disk read IOPS", unit: "", points: [{ t: 1, v: 1800 }] },
+      { title: "Disk write IOPS", unit: "", points: [{ t: 1, v: 900 }] },
+    ];
+    const f = deriveFindings(a).find((x) => x.title.includes("Disk IOPS"));
+    expect(f?.category).toBe("Capacity");
+    expect(f?.title).toContain("90% of provisioned (2700/3000)");
+  });
+
+  test("disk IOPS not flagged when well under provisioned", () => {
+    const a = base();
+    a.disk = {
+      sizeGb: 8,
+      iops: 3000,
+      type: "gp3",
+      throughputMibps: 125,
+      usedBytes: 1,
+      availBytes: 9,
+    };
+    a.trends = [{ title: "Disk read IOPS", unit: "", points: [{ t: 1, v: 100 }] }];
+    expect(deriveFindings(a).some((x) => x.title.includes("Disk IOPS"))).toBe(false);
   });
 
   test("idle-in-transaction disabled flagged", () => {
