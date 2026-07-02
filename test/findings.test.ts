@@ -21,6 +21,7 @@ function base(): Analysis {
     backups: null,
     upgrade: null,
     functions: [],
+    functionStats: [],
     buckets: [],
     advisors: { performance: [], security: [] },
     apiCounts: [],
@@ -172,6 +173,60 @@ describe("deriveFindings", () => {
       { slot_name: "rep", slot_type: "physical", active: true, retained_wal_bytes: 1000 },
     ];
     expect(deriveFindings(a).some((x) => x.anchor === "#slots")).toBe(false);
+  });
+
+  test("edge function high 5xx rate -> Performance finding", () => {
+    const a = base();
+    a.functionStats = [
+      {
+        slug: "boom",
+        requests: 4,
+        success: 0,
+        clientErr: 0,
+        serverErr: 4,
+        avgExecMs: 500,
+        maxExecMs: 900,
+      },
+      {
+        slug: "hello",
+        requests: 18,
+        success: 10,
+        clientErr: 8,
+        serverErr: 0,
+        avgExecMs: 470,
+        maxExecMs: 2600,
+      },
+    ];
+    const fns = deriveFindings(a).filter((x) => x.anchor === "#functions");
+    expect(fns).toHaveLength(1);
+    expect(fns[0]?.severity).toBe("high");
+    expect(fns[0]?.title).toContain("boom");
+    expect(fns[0]?.title).toContain("100% 5xx");
+  });
+
+  test("edge function low sample or clean -> no finding", () => {
+    const a = base();
+    a.functionStats = [
+      {
+        slug: "rare",
+        requests: 2,
+        success: 0,
+        clientErr: 0,
+        serverErr: 2,
+        avgExecMs: 1,
+        maxExecMs: 1,
+      },
+      {
+        slug: "ok",
+        requests: 100,
+        success: 100,
+        clientErr: 0,
+        serverErr: 0,
+        avgExecMs: 1,
+        maxExecMs: 1,
+      },
+    ];
+    expect(deriveFindings(a).some((x) => x.anchor === "#functions")).toBe(false);
   });
 
   test("idle-in-transaction disabled flagged", () => {

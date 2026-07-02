@@ -191,6 +191,18 @@ export function deriveFindings(a: Analysis): Finding[] {
       anchor: "#slots",
     });
   }
+  // Edge-function server-error rate (from functions.combined-stats).
+  for (const fn of a.functionStats) {
+    if (fn.requests >= 3 && fn.serverErr / fn.requests >= 0.1) {
+      const pct = Math.round((fn.serverErr / fn.requests) * 100);
+      out.push({
+        severity: fn.serverErr / fn.requests >= 0.2 ? "high" : "med",
+        category: "Performance",
+        title: `Edge function ${fn.slug}: ${pct}% 5xx over ${fn.requests} requests`,
+        anchor: "#functions",
+      });
+    }
+  }
   const waiting = a.metrics.samples.find((s) => s.name === "pgbouncer_pools_cl_waiting");
   if (waiting && waiting.value > 0) {
     out.push({

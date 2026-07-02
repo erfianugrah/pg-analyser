@@ -17,12 +17,14 @@ HTML + PDF report. No superuser `--db-url`, no manual Grafana screenshots.
 | Command | Purpose |
 |---|---|
 | `bun run src/index.ts analyze --ref <ref>` | fetch all planes -> `analysis.json` |
-| `bun run src/index.ts report <dir>` | `analysis.json` -> `report.html` |
-| `bun run src/index.ts pdf <dir>` | `analysis.json` -> `report.pdf` |
-| `bun run src/index.ts full --ref <ref>` | analyze + report + pdf |
+| `bun run src/index.ts report <dir>` | `analysis.json` -> `report.html` + `summary.html` |
+| `bun run src/index.ts summary <dir>` | `analysis.json` -> `summary.html` (non-technical) |
+| `bun run src/index.ts pdf <dir>` | `analysis.json` -> `report.pdf` + `summary.pdf` |
+| `bun run src/index.ts full --ref <ref>` | analyze + report + summary + pdf |
 | `bun run src/index.ts scrape-init --ref <ref>` | write the Prometheus+Grafana stack |
 | `bun run check` | biome format + lint (write) |
 | `bun run typecheck` | `tsc --noEmit` |
+| `bun run check:api` | assert endpoints still exist in the upstream OpenAPI spec |
 | `bun test` | run tests |
 | `bun run build` | compile a standalone `sbperf` binary |
 
@@ -42,7 +44,8 @@ src/
   config.ts      zod env -> Config (access token)
   transport.ts   Transport interface + DirectTransport (auth + retry)
   management.ts  typed, zod-parsed Management API wrapper
-  sql.ts         the perf query set (pg_stat_statements, seq_scan, n_dead_tup, ...)
+  sql.ts         the perf query set (pg_stat_statements, seq_scan, n_dead_tup,
+                 txid wraparound, replication slots, ...)
   metrics.ts     Prometheus text parser + curated allowlist
   collect.ts     orchestrate all planes -> validated Analysis (per-source errors captured)
   report/render  Analysis -> self-contained HTML (utilitarian, print CSS)
@@ -70,6 +73,15 @@ src/
   catalogs. No DB password needed.
 - Metrics endpoint is point-in-time (scrape target), not a TSDB - 30-day trends
   need the `scrape-init` stack running over time.
+- Per-function invocation stats: `GET /v1/projects/:ref/analytics/endpoints/
+  functions.combined-stats?interval=<15min|1hr|3hr|1day>&function_id=<id>` returns
+  per-time-bucket `{ request_count, success_count, client_err_count,
+  server_err_count, avg/min/max_execution_time }`. Needs the function `id` from
+  the functions list, not the slug. collect.ts aggregates buckets per function.
+- The endpoints sbperf depends on are asserted against the upstream OpenAPI spec
+  (`api.supabase.com/api/v1-json`) by `scripts/check-api-drift.ts` in CI - this
+  is how we stay in sync without a CLI dependency or manual tracking. When you
+  add/rename a Management API call in `management.ts`, update the manifest there.
 
 ## See also
 

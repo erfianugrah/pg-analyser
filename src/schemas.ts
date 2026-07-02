@@ -64,12 +64,31 @@ export const Backups = z.object({
 });
 
 export const EdgeFunction = z.object({
+  id: z.string().optional(),
   slug: z.string(),
   name: z.string().optional(),
   status: z.string().optional(),
   version: z.number().optional(),
 });
 export const EdgeFunctions = z.array(EdgeFunction);
+
+/** Raw functions.combined-stats response (per-time-bucket rows). */
+export const FunctionStatsResponse = z.object({
+  result: z.array(z.record(z.string(), z.unknown())).nullable().optional(),
+  error: z.unknown().nullable().optional(),
+});
+
+/** Aggregated per-function invocation usage over the collected interval. */
+export const FunctionUsage = z.object({
+  slug: z.string(),
+  requests: z.number(),
+  success: z.number(),
+  clientErr: z.number(),
+  serverErr: z.number(),
+  avgExecMs: z.number(),
+  maxExecMs: z.number(),
+});
+export type FunctionUsage = z.infer<typeof FunctionUsage>;
 
 export const StorageBucket = z.object({
   id: z.string().optional(),
@@ -169,6 +188,7 @@ export const Analysis = z.object({
   backups: Backups.nullable(),
   upgrade: UpgradeEligibility.nullable(),
   functions: EdgeFunctions,
+  functionStats: z.array(FunctionUsage),
   buckets: StorageBuckets,
   advisors: z.object({
     performance: z.array(Advisor),

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { render, renderIndex } from "../src/report/render.ts";
+import { render, renderIndex, renderSummary } from "../src/report/render.ts";
 import type { Analysis } from "../src/schemas.ts";
 
 function fixture(overrides: Partial<Analysis> = {}): Analysis {
@@ -31,6 +31,7 @@ function fixture(overrides: Partial<Analysis> = {}): Analysis {
     backups: { pitr_enabled: false, walg_enabled: true, backups: [] },
     upgrade: { eligible: true, current_app_version: "v1", latest_app_version: "v2" },
     functions: [],
+    functionStats: [],
     buckets: [],
     advisors: {
       performance: [
@@ -203,6 +204,60 @@ describe("render", () => {
   test("is self-contained (no external asset refs)", () => {
     const html = render(fixture());
     expect(html).not.toMatch(/<(script|link)[^>]+(src|href)=["']https?:/);
+  });
+});
+
+describe("renderSummary", () => {
+  test("healthy project -> ok verdict, no issues", () => {
+    const clean = fixture({
+      advisors: { performance: [], security: [] },
+      upgrade: null,
+      sql: {
+        dbSize: "20 MB",
+        cacheHitPct: 100,
+        pgSettings: [],
+        topStatements: [],
+        topByCalls: [],
+        biggestTables: [],
+        unusedIndexes: [],
+        seqScanHeavy: [],
+        deadTuples: [],
+        txidWraparound: [],
+        replicationSlots: [],
+        rlsPolicies: [],
+        connections: [],
+        storageUsage: [],
+      },
+    });
+    const html = renderSummary(clean);
+    expect(html).toContain("Healthy - no issues found");
+    expect(html).not.toContain("needs attention");
+  });
+
+  test("high finding -> singular subject-verb agreement", () => {
+    const a = fixture();
+    a.functionStats = [
+      {
+        slug: "boom",
+        requests: 5,
+        success: 0,
+        clientErr: 0,
+        serverErr: 5,
+        avgExecMs: 1,
+        maxExecMs: 1,
+      },
+    ];
+    const html = renderSummary(a);
+    expect(html).toContain("1 issue needs attention now");
+    expect(html).toContain("boom");
+    expect(html).not.toContain("1 issue need attention");
+  });
+
+  test("is standalone: no SQL evidence tables or drill anchors", () => {
+    const html = renderSummary(fixture());
+    expect(html).not.toContain("pg_stat_statements");
+    expect(html).not.toContain("#txid");
+    expect(html).toContain("At a glance");
   });
 });
 

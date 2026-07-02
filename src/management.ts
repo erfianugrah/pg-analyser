@@ -52,6 +52,13 @@ export class Management {
     return this.#json(`/v1/projects/${ref}/functions`).then((d) => S.EdgeFunctions.parse(d));
   }
 
+  /** Per-function invocation stats (request/success/error counts, exec time). */
+  functionStats(ref: string, functionId: string, interval = "1day") {
+    return this.#json(
+      `/v1/projects/${ref}/analytics/endpoints/functions.combined-stats?interval=${interval}&function_id=${functionId}`,
+    ).then((d) => S.FunctionStatsResponse.parse(d));
+  }
+
   buckets(ref: string) {
     return this.#json(`/v1/projects/${ref}/storage/buckets`).then((d) => S.StorageBuckets.parse(d));
   }
