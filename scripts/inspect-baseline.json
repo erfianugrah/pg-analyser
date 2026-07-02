@@ -1,0 +1,58 @@
+{
+  "bloat": {
+    "sha256": "1122dff84ea5bdf0429af6c66001f112f5b25d5d86f0f0cd7c0afb134c65e7ca",
+    "reviewed": "2026-07-02"
+  },
+  "index_stats": {
+    "sha256": "26a8f598e06d532f1ea22f8e1d6f71e88a388fefbb658d31d83a6896bc06b853",
+    "reviewed": "2026-07-02"
+  },
+  "unused_indexes": {
+    "sha256": "fa8c35e4858bf7f43791df0af76e0d8a8ec012034bc11481e8a179ef3a111bb6",
+    "reviewed": "2026-07-02"
+  },
+  "table_stats": {
+    "sha256": "afa8491c7caedbe6a8f3cbbe6b70b2436973577e392191d271c6bf9f99302ce1",
+    "reviewed": "2026-07-02"
+  },
+  "vacuum_stats": {
+    "sha256": "c5f0e43c33d0d37815c1ddb56cc5dca54df78c404d41d9fa100ec6fabf7987de",
+    "reviewed": "2026-07-02"
+  },
+  "traffic_profile": {
+    "sha256": "a00e036a4ab90d3e8ab6c1f9c50af0aad2ce437c7956d6f88b1c12561840d814",
+    "reviewed": "2026-07-02"
+  },
+  "outliers": {
+    "sha256": "74f55fa5715e1f93e05da784393d7161718fb085d4fa85ed294a42f9cdaba52f",
+    "reviewed": "2026-07-02"
+  },
+  "calls": {
+    "sha256": "07a86e9624f6754075f9b41b3f6c17b75705a4943892fa35fc86d07e60f33647",
+    "reviewed": "2026-07-02"
+  },
+  "role_stats": {
+    "sha256": "87c99f8c5c3897656a52ea634e286f33176824befe9af830bfe365c9081a3588",
+    "reviewed": "2026-07-02"
+  },
+  "db_stats": {
+    "sha256": "e193e51792b8d7418f1032f57cde13e04f758d627a828a45a2b4faea07810eb8",
+    "reviewed": "2026-07-02"
+  },
+  "long_running_queries": {
+    "sha256": "ddfc90d8662fa37025e1a0080d61e79b1678243d15e0d009cff029eac8d0af03",
+    "reviewed": "2026-07-02"
+  },
+  "locks": {
+    "sha256": "47d175787c189b2e885e75df6de583af6b4f3b35029217e2dc91b4ee13cca422",
+    "reviewed": "2026-07-02"
+  },
+  "blocking": {
+    "sha256": "92086f07b095677c6444894275555cbec0dcaf730c7db4f79abe1f6db238d3cc",
+    "reviewed": "2026-07-02"
+  },
+  "replication_slots": {
+    "sha256": "2007fd5ee0d1db33caff894ceead787d39d9adb1627e8addd85139ad467e8181",
+    "reviewed": "2026-07-02"
+  }
+}

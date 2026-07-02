@@ -26,6 +26,7 @@ HTML + PDF report. No superuser `--db-url`, no manual Grafana screenshots.
 | `bun run check` | biome format + lint (write) |
 | `bun run typecheck` | `tsc --noEmit` |
 | `bun run check:api` | assert endpoints still exist in the upstream OpenAPI spec |
+| `bun run check:inspect` | warn when upstream CLI inspect SQL drifts from our derived baseline |
 | `bun test` | run tests |
 | `bun run build` | compile a standalone `sbperf` binary |
 
@@ -110,6 +111,13 @@ src/
   policies until it was aligned to how Postgres actually stores the expression.
   Only write ORIGINAL checks where upstream has a real gap AND the Postgres docs
   justify it (e.g. the txid-wraparound check the CLI's vacuum-stats lacks).
+  We do NOT vendor the inspect queries verbatim (they use `LIKE ANY($1)` bind
+  params the PAT read-only endpoint can't bind, and our findings need raw columns
+  the CLI wraps in `pg_size_pretty()`). Instead `scripts/check-inspect-drift.ts`
+  fingerprints each upstream inspect query in `scripts/inspect-baseline.json` and
+  WARNS (advisory) when upstream changes, so you re-review the derived query in
+  `sql.ts`. When you adapt a new inspect query, add it to that script's MANIFEST
+  and run `SBPERF_INSPECT_UPDATE=1 bun run check:inspect` to record the baseline.
 
 
 - Every API response has a zod schema in `schemas.ts`. **Never use `.default([])`

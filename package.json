@@ -16,6 +16,7 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "check:api": "bun run scripts/check-api-drift.ts",
+    "check:inspect": "bun run scripts/check-inspect-drift.ts",
     "smoke": "bun run smoke.ts",
     "build": "bun build ./src/index.ts --compile --outfile sbperf"
   },
