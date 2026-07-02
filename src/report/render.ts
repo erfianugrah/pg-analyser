@@ -92,6 +92,22 @@ function rlsTable(rows: SqlRow[]): string {
   return `<table><thead><tr><th>table</th><th>policy</th><th>cmd</th><th>auth eval</th></tr></thead><tbody>${body}</tbody></table>`;
 }
 
+function functionsSection(a: Analysis): string {
+  if (!a.functions.length) return "<p class=empty>none deployed</p>";
+  const list = sqlTable(a.functions as unknown as SqlRow[], { mono: ["slug"], hide: ["id"] });
+  if (!a.functionStats.length) return list;
+  const stats = a.functionStats.map((s) => ({
+    slug: s.slug,
+    requests: s.requests,
+    success: s.success,
+    "4xx": s.clientErr,
+    "5xx": s.serverErr,
+    avg_ms: s.avgExecMs,
+    max_ms: s.maxExecMs,
+  }));
+  return `${list}<p class=note>Invocation stats (last day)</p>${sqlTable(stats as unknown as SqlRow[], { mono: ["slug"] })}`;
+}
+
 function metricsTable(a: Analysis): string {
   if (!a.metrics.available)
     return `<p class=empty>metrics endpoint not reachable (see collection notes)</p>`;
@@ -304,7 +320,7 @@ ${drill("deadtuples", "Dead tuples / autovacuum", "significant bloat only (>=1k 
 ${drill("txid", "Transaction-ID wraparound", "age(relfrozenxid) vs 2B ceiling; non-system tables", sec(a.sql.txidWraparound, "sql:txidWraparound", { mono: ["table"], hide: ["schema"] }))}
 ${drill("slots", "Replication slots", "retained WAL; inactive slots pin disk", a.sql.replicationSlots.length ? sqlTable(a.sql.replicationSlots, { mono: ["slot_name"], hide: ["retained_wal_bytes"] }) : "<p class=empty>none</p>")}
 ${drill("connections", "Connections", "by state", sec(a.sql.connections, "sql:connections"))}
-${drill("functions", "Edge functions", "", a.functions.length ? sqlTable(a.functions as unknown as SqlRow[], { mono: ["slug"] }) : "<p class=empty>none deployed</p>")}
+${drill("functions", "Edge functions", "invocation stats over the last day", functionsSection(a))}
 ${drill("storage", "Storage", "buckets + object usage", storageSection(a))}
 ${drill("apivol", "API request volume", "per interval", errored.has("apiCounts") ? '<p class="empty warn-text">not collected</p>' : sqlTable(a.apiCounts as unknown as SqlRow[], { mono: ["timestamp"] }))}
 ${drill("metrics", "Infra metrics", "point-in-time snapshot", metricsTable(a))}
@@ -365,6 +381,92 @@ ${a.errors.length ? `<h2>Collection notes <span class=count>${a.errors.length}</
 ${banner}
 ${sections}
 <p class=meta style="margin-top:32px">Generated deterministically from the Supabase Management API, read-only SQL, and the project metrics endpoint. No values inferred.</p>
+</body></html>`;
+}
+
+/**
+ * Non-technical, one-page summary for a non-engineering audience. No SQL, no
+ * evidence tables - a plain verdict, the issues in priority order, and a few
+ * vitals in everyday terms. Companion to the full technical report.
+ */
+export function renderSummary(a: Analysis): string {
+  const m = a.meta;
+  const findings = deriveFindings(a);
+  const degraded = a.meta.status !== "ACTIVE_HEALTHY" || !a.metrics.available;
+  const counts = { high: 0, med: 0, low: 0 };
+  for (const f of findings) counts[f.severity]++;
+
+  const verdict = !findings.length
+    ? degraded
+      ? { cls: "warn", text: "No issues found, but some checks could not run" }
+      : { cls: "ok", text: "Healthy - no issues found" }
+    : counts.high > 0
+      ? {
+          cls: "bad",
+          text: `${counts.high} issue${counts.high === 1 ? " needs" : "s need"} attention now`,
+        }
+      : {
+          cls: "warn",
+          text: `${findings.length} issue${findings.length === 1 ? "" : "s"} worth reviewing`,
+        };
+
+  const label: Record<Severity, string> = {
+    high: "Needs attention now",
+    med: "Worth reviewing",
+    low: "Minor / housekeeping",
+  };
+  const groups = (["high", "med", "low"] as const)
+    .map((sev) => {
+      const items = findings.filter((f) => f.severity === sev);
+      if (!items.length) return "";
+      const li = items.map((f) => `<li><b>${esc(f.category)}:</b> ${esc(f.title)}</li>`).join("");
+      return `<h2 class="g ${SEV_CLASS[sev]}">${label[sev]}</h2><ul>${li}</ul>`;
+    })
+    .join("");
+
+  const cacheText =
+    a.sql.cacheHitPct == null
+      ? "not measured"
+      : a.sql.cacheHitPct >= 99
+        ? `${a.sql.cacheHitPct}% of reads served from memory (healthy)`
+        : `${a.sql.cacheHitPct}% of reads served from memory (below the 99% target)`;
+
+  const vitals = [
+    ["Database size", esc(a.sql.dbSize ?? "not measured")],
+    ["Read cache", cacheText],
+    ["Postgres version", esc(m.pgVersion ?? "unknown")],
+  ]
+    .map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`)
+    .join("");
+
+  const body = findings.length
+    ? groups
+    : `<p>All performance, security, and capacity checks passed${degraded ? ", though some data could not be collected (the project may be paused or unreachable)" : ""}.</p>`;
+
+  return `<!doctype html><html lang=en><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>${esc(m.name)} - performance summary</title>
+<style>
+  body{font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;color:#1a1a1a;background:#fff;margin:0 auto;padding:32px;max-width:760px}
+  h1{font-size:22px;margin:0 0 2px}
+  .meta{color:#666;font-size:13px;margin-bottom:16px}
+  .verdict{padding:14px 16px;border-radius:6px;font-size:17px;font-weight:600;margin:12px 0 20px}
+  .verdict.ok{background:#e3f4e3}.verdict.warn{background:#fff4d6}.verdict.bad{background:#fde2e2}
+  h2.g{font-size:14px;margin:20px 0 4px;padding:2px 8px;border-radius:3px;display:inline-block}
+  h2.g.ERROR{background:#fde2e2}h2.g.WARN{background:#fff4d6}h2.g.INFO{background:#e6f0ff}
+  ul{margin:4px 0 0;padding-left:22px}li{margin:3px 0}
+  table{border-collapse:collapse;width:100%;margin-top:8px;font-size:14px}
+  td{padding:6px 10px;border:1px solid #ddd}td:first-child{font-weight:600;width:180px}
+  .foot{color:#666;font-size:12px;margin-top:28px}
+  @page{size:A4;margin:16mm}
+</style></head><body>
+<h1>Performance summary</h1>
+<div class=meta>${esc(m.name)} &middot; ${esc(m.region)} &middot; ${esc(m.collectedAt.slice(0, 10))}</div>
+<div class="verdict ${verdict.cls}">${esc(verdict.text)}</div>
+${body}
+<h2 class=g>At a glance</h2>
+<table><tbody>${vitals}</tbody></table>
+<p class=foot>Plain-language summary. A detailed technical report (report.html) accompanies this for the engineering team. Generated by sbperf ${esc(m.sbperfVersion)}.</p>
 </body></html>`;
 }
 

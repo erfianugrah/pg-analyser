@@ -16,6 +16,12 @@
 - [x] txid-wraparound finding (age(relfrozenxid) vs 2B ceiling; from vacuum-stats)
 - [x] replication-slot lag/inactive finding (inactive slot pins WAL = disk risk)
 - [x] most-frequent-queries cut (pg_stat_statements by call count, noise-filtered)
+- [x] per-function invocation stats (functions.combined-stats: requests, 5xx rate,
+      exec time) + high-5xx finding (validated live against deployed functions)
+- [x] C-suite summary tier: non-technical summary.html/pdf (verdict + plain-
+      language findings + vitals), companion to the technical report
+- [x] CI API-drift check: asserts every endpoint sbperf uses still exists in the
+      upstream OpenAPI spec (api.supabase.com/api/v1-json); weekly cron + on push
 
 ## Deliberately not doing
 - Gatekeeper transport - removed; direct (PAT) only.
@@ -27,11 +33,10 @@
 - Wrapping `supabase inspect report` - it dumps CSV of every inspect command
   (future-proof against new commands) but requires a DB connection string
   (--db-url / --linked = a password). sbperf's thesis is PAT-only via the
-  read-only SQL runner, so we curate our own query set instead. Trade-off:
-  we must track upstream if they add a genuinely new perf command.
+  read-only SQL runner, so we curate our own query set instead. The drift risk
+  this creates is now covered by the CI API-drift check (scripts/check-api-
+  drift.ts) against the upstream OpenAPI spec - no manual tracking, no CLI dep.
 
 ## Deferred (needs a precondition)
-- Per-function invocation stats - no edge functions exist in the account to
-  validate against; revisit when one does.
 - Richer disk/IO beyond IOPS (latency, queue depth) - needs sustained scraper
   history to be meaningful.

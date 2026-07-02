@@ -107,6 +107,35 @@ export async function collect(
     ? await safe("trends", () => fetchTrends(opts.prometheusUrl as string), [])
     : [];
 
+  // Per-function invocation stats depend on the functions list (need each id),
+  // so they run after the parallel batch. Best-effort per function.
+  const functionStats: Analysis["functionStats"] = [];
+  for (const fn of functions) {
+    if (!fn.id) continue;
+    const id = fn.id;
+    const resp = await safe(`functionStats:${fn.slug}`, () => m.functionStats(ref, id), null);
+    const rows = resp?.result ?? [];
+    if (!rows?.length) continue;
+    const sum = (k: string) => rows.reduce((s, r) => s + Number(r[k] ?? 0), 0);
+    const requests = sum("request_count");
+    const weightedAvg =
+      requests > 0
+        ? rows.reduce(
+            (s, r) => s + Number(r.avg_execution_time ?? 0) * Number(r.request_count ?? 0),
+            0,
+          ) / requests
+        : 0;
+    functionStats.push({
+      slug: fn.slug,
+      requests,
+      success: sum("success_count"),
+      clientErr: sum("client_err_count"),
+      serverErr: sum("server_err_count"),
+      avgExecMs: Math.round(weightedAvg),
+      maxExecMs: rows.reduce((mx, r) => Math.max(mx, Number(r.max_execution_time ?? 0)), 0),
+    });
+  }
+
   const dbSize = (dbSizeRows[0]?.db_size as string | undefined) ?? null;
   const rawCacheHit = cacheHitRows[0]?.cache_hit_pct;
   const cacheHitPct = rawCacheHit == null ? null : Number(rawCacheHit);
@@ -138,6 +167,7 @@ export async function collect(
     backups,
     upgrade,
     functions,
+    functionStats,
     buckets,
     advisors: { performance: perfAdvisors, security: secAdvisors },
     apiCounts,

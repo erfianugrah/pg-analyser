@@ -7,7 +7,7 @@ import { ConfigError, loadConfig } from "./config.ts";
 import { deriveFindings } from "./findings.ts";
 import { Management } from "./management.ts";
 import { htmlToPdf } from "./report/pdf.ts";
-import { type IndexRow, render, renderIndex } from "./report/render.ts";
+import { type IndexRow, render, renderIndex, renderSummary } from "./report/render.ts";
 import { writeScraper } from "./scraper.ts";
 import { makeTransport } from "./transport.ts";
 
@@ -19,7 +19,8 @@ function usage(code = 1): never {
 Usage:
   sbperf analyze  --ref <ref> [--out <dir>]   fetch all planes -> analysis.json
   sbperf report   <dir>                       analysis.json -> report.html
-  sbperf pdf      <dir>                        analysis.json -> report.pdf
+  sbperf summary  <dir>                        analysis.json -> summary.html (non-technical)
+  sbperf pdf      <dir>                        analysis.json -> report.pdf + summary.pdf
   sbperf full     --ref <ref> [--out <dir>]    analyze + report + pdf
   sbperf full     --all [--org <slug>]         audit every project + index.html
   sbperf scrape-init --ref <ref> [--dir <d>]   write the Prometheus+Grafana stack
@@ -82,6 +83,7 @@ async function doAll(
       await Bun.write(join(dir, "analysis.json"), JSON.stringify(analysis, null, 2));
       const html = render(analysis);
       await Bun.write(join(dir, "report.html"), html);
+      await Bun.write(join(dir, "summary.html"), renderSummary(analysis));
       await htmlToPdf(html, join(dir, "report.pdf"));
       const f = deriveFindings(analysis);
       rows.push({
@@ -145,19 +147,31 @@ async function loadAnalysis(dir: string) {
 
 async function doReport(dir: string): Promise<string> {
   const analysis = await loadAnalysis(dir);
-  const html = render(analysis);
   const htmlPath = join(dir, "report.html");
-  await Bun.write(htmlPath, html);
+  await Bun.write(htmlPath, render(analysis));
+  const summaryPath = join(dir, "summary.html");
+  await Bun.write(summaryPath, renderSummary(analysis));
   console.error(`> ${htmlPath}`);
+  console.error(`> ${summaryPath}`);
   return htmlPath;
+}
+
+async function doSummary(dir: string): Promise<string> {
+  const analysis = await loadAnalysis(dir);
+  const path = join(dir, "summary.html");
+  await Bun.write(path, renderSummary(analysis));
+  console.error(`> ${path}`);
+  return path;
 }
 
 async function doPdf(dir: string): Promise<string> {
   const analysis = await loadAnalysis(dir);
-  const html = render(analysis);
   const pdfPath = join(dir, "report.pdf");
-  await htmlToPdf(html, pdfPath);
+  await htmlToPdf(render(analysis), pdfPath);
   console.error(`> ${pdfPath}`);
+  const summaryPdf = join(dir, "summary.pdf");
+  await htmlToPdf(renderSummary(analysis), summaryPdf);
+  console.error(`> ${summaryPdf}`);
   return pdfPath;
 }
 
@@ -182,6 +196,12 @@ async function main(): Promise<void> {
         const dir = flags._[0];
         if (!dir) usage();
         await doReport(dir);
+        break;
+      }
+      case "summary": {
+        const dir = flags._[0];
+        if (!dir) usage();
+        await doSummary(dir);
         break;
       }
       case "pdf": {

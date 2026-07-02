@@ -29,9 +29,14 @@ Or step by step:
 
 ```bash
 bun run src/index.ts analyze --ref <ref> --out ./reports/myproject
-bun run src/index.ts report ./reports/myproject     # HTML
-bun run src/index.ts pdf    ./reports/myproject     # PDF
+bun run src/index.ts report  ./reports/myproject    # report.html + summary.html
+bun run src/index.ts summary ./reports/myproject    # non-technical summary.html only
+bun run src/index.ts pdf     ./reports/myproject    # report.pdf + summary.pdf
 ```
+
+`report`/`pdf` emit two documents: the full technical **report** and a
+non-technical one-page **summary** (plain-language verdict for a non-engineering
+audience).
 
 Audit every project in the account (writes an `index.html` linking them all):
 
@@ -52,7 +57,8 @@ bun run src/index.ts full --ref <ref> --prometheus http://localhost:9090
   unused indexes, sequential-scan-heavy tables, dead-tuple bloat, connection state
 - **RLS policy audit** - flags policies re-evaluating `auth.*()` per row (should be wrapped in `(select ...)`; 94-99% latency win per Supabase's guide)
 - **Config** - Postgres version + upgrade drift, disk spec/util, pooler mode, PG tuning params (`pg_settings`)
-- **Inventory** - edge functions, storage buckets + object usage
+- **Inventory** - edge functions (with per-function invocation stats: request
+  volume, 5xx rate, execution time), storage buckets + object usage
 - **Infra metrics** - point-in-time snapshot; optional 30-day trends via `--prometheus`
 
 Reports are structured as a pyramid: a ranked **findings summary** (Performance / Security / Capacity) up top, then infrastructure, then collapsible evidence drill-downs. Paused/unreachable projects render an honest degraded state, not misleading empties.
@@ -84,12 +90,25 @@ History accumulates from when you start scraping - it is not retroactive.
 | `no analysis.json in <dir>` | Run `analyze` (or `full`) before `report`/`pdf`. |
 | Report shows a degraded/empty state | Project is paused or unreachable - empty sections mean "not collected", not "clean". The collection-notes section lists why. |
 
+## Staying in sync with the API
+
+sbperf curates its own set of Management API endpoints (PAT-only, no DB
+password, no CLI dependency). To avoid silently drifting when Supabase changes
+the API, `scripts/check-api-drift.ts` asserts every endpoint sbperf uses still
+exists - with the method we call - in the upstream OpenAPI spec
+(`api.supabase.com/api/v1-json`). CI runs it on every push and weekly.
+
+```bash
+bun run check:api   # fails loudly if an endpoint was renamed/removed upstream
+```
+
 ## Development
 
 ```bash
 bun run check       # biome format + lint
 bun run typecheck   # tsc --noEmit
 bun test            # unit tests
+bun run check:api   # upstream API drift check
 bun run build       # standalone binary
 ```
 
