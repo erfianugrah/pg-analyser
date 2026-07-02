@@ -317,13 +317,18 @@ ${drill("rls", "RLS policies", "auth.*() should be wrapped: (select auth.uid())"
 ${drill("outliers", "Query outliers", outliersNote, sec(a.sql.topStatements, "sql:topStatements", { mono: ["query"], limit: 20 }))}
 ${drill("calls", "Most-frequent queries", "by call count - chatty / hot-path (noise filtered)", sec(a.sql.topByCalls, "sql:topByCalls", { mono: ["query"], limit: 20 }))}
 ${drill("tables", "Biggest tables", "", sec(a.sql.biggestTables, "sql:biggestTables", { mono: ["table"], hide: ["schema"], limit: 20 }))}
-${drill("unused", "Unused indexes", "idx_scan = 0, non-constraint", sec(a.sql.unusedIndexes, "sql:unusedIndexes", { mono: ["table", "index"], hide: ["schema"] }))}
+${drill("unused", "Index usage", "all indexes by size; unused = never scanned, non-constraint", sec(a.sql.indexStats, "sql:indexStats", { mono: ["index", "table"], hide: ["schema"] }))}
 ${drill("seqscan", "Sequential-scan heavy", "seq_scan > idx_scan, >1k rows", sec(a.sql.seqScanHeavy, "sql:seqScanHeavy", { mono: ["table"], hide: ["schema"] }))}
+${drill("bloat", "Estimated bloat", "reclaimable wasted space (pg_stats estimate)", sec(a.sql.bloat, "sql:bloat", { mono: ["name"], hide: ["waste_bytes"] }))}
+${drill("traffic", "Read/write profile", "per-table read-heavy vs write-heavy", sec(a.sql.trafficProfile, "sql:trafficProfile", { mono: ["table"] }))}
 ${drill("deadtuples", "Dead tuples / autovacuum", "overdue = dead tuples past the table's autovacuum threshold", sec(a.sql.deadTuples, "sql:deadTuples", { mono: ["table"], hide: ["schema"] }))}
 ${drill("roles", "Role connection usage", "active connections vs each role's limit", sec(a.sql.roleStats, "sql:roleStats", { mono: ["role"] }))}
 ${drill("txid", "Transaction-ID wraparound", "age(relfrozenxid) vs 2B ceiling; non-system tables", sec(a.sql.txidWraparound, "sql:txidWraparound", { mono: ["table"], hide: ["schema"] }))}
 ${drill("slots", "Replication slots", "retained WAL; inactive slots pin disk", a.sql.replicationSlots.length ? sqlTable(a.sql.replicationSlots, { mono: ["slot_name"], hide: ["retained_wal_bytes"] }) : "<p class=empty>none</p>")}
 ${drill("connections", "Connections", "by state", sec(a.sql.connections, "sql:connections"))}
+${drill("longrunning", "Long-running queries", "point-in-time snapshot: running > 5 min at collection", a.sql.longRunning.length ? sqlTable(a.sql.longRunning, { mono: ["query"] }) : "<p class=empty>none at collection time</p>")}
+${drill("locks", "Exclusive locks", "point-in-time snapshot at collection", a.sql.locks.length ? sqlTable(a.sql.locks, { mono: ["query", "relation"] }) : "<p class=empty>none at collection time</p>")}
+${drill("blocking", "Blocking chains", "point-in-time snapshot at collection", a.sql.blocking.length ? sqlTable(a.sql.blocking, { mono: ["blocked_query", "blocking_query"] }) : "<p class=empty>none at collection time</p>")}
 ${drill("functions", "Edge functions", "invocation stats over the last day", functionsSection(a))}
 ${drill("storage", "Storage", "buckets + object usage", storageSection(a))}
 ${drill("apivol", "API request volume", "per interval", errored.has("apiCounts") ? '<p class="empty warn-text">not collected</p>' : sqlTable(a.apiCounts as unknown as SqlRow[], { mono: ["timestamp"] }))}

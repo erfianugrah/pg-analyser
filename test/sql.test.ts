@@ -14,7 +14,18 @@ describe("perf query set is read-only", () => {
 
   test("covers the monitor- best-practice diagnostics", () => {
     const keys = Object.keys(QUERIES);
-    for (const k of ["topStatements", "unusedIndexes", "seqScanHeavy", "deadTuples", "cacheHit"]) {
+    for (const k of [
+      "topStatements",
+      "indexStats",
+      "seqScanHeavy",
+      "deadTuples",
+      "cacheHit",
+      "bloat",
+      "trafficProfile",
+      "locks",
+      "blocking",
+      "longRunning",
+    ]) {
       expect(keys).toContain(k);
     }
   });

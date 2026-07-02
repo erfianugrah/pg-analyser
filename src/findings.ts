@@ -88,7 +88,7 @@ export function deriveFindings(a: Analysis): Finding[] {
       anchor: "#seqscan",
     });
   }
-  const unused = publicRows(a.sql.unusedIndexes).length;
+  const unused = publicRows(a.sql.indexStats).filter((r) => r.unused === true).length;
   if (unused > 0) {
     out.push({
       severity: "low",
@@ -202,6 +202,35 @@ export function deriveFindings(a: Analysis): Finding[] {
       category: "Capacity",
       title: `${laggingSlots} replication ${laggingSlots === 1 ? "slot" : "slots"} lagging >1GB WAL (slow consumer)`,
       anchor: "#slots",
+    });
+  }
+  // Estimated bloat: reclaimable space (>=50MB wasted or >=100MB with 2x+ bloat).
+  const worstBloat = a.sql.bloat.reduce((mx, r) => Math.max(mx, num(r.waste_bytes)), 0);
+  if (worstBloat >= 50 * 1024 * 1024) {
+    const top = a.sql.bloat.find((r) => num(r.waste_bytes) === worstBloat);
+    out.push({
+      severity: worstBloat >= 500 * 1024 * 1024 ? "med" : "low",
+      category: "Capacity",
+      title: `~${String(top?.waste ?? "")} reclaimable bloat on ${String(top?.name ?? "a table")} (VACUUM FULL / pg_repack)`,
+      anchor: "#bloat",
+    });
+  }
+  // Point-in-time: a blocking chain exists right now (real even as a snapshot).
+  if (a.sql.blocking.length > 0) {
+    out.push({
+      severity: "high",
+      category: "Performance",
+      title: `${a.sql.blocking.length} blocking lock ${a.sql.blocking.length === 1 ? "chain" : "chains"} at collection time`,
+      anchor: "#blocking",
+    });
+  }
+  // Point-in-time: queries running > 5 minutes at collection time.
+  if (a.sql.longRunning.length > 0) {
+    out.push({
+      severity: "med",
+      category: "Performance",
+      title: `${a.sql.longRunning.length} quer${a.sql.longRunning.length === 1 ? "y" : "ies"} running > 5 min at collection time`,
+      anchor: "#longrunning",
     });
   }
   // Edge-function server-error rate (from functions.combined-stats).

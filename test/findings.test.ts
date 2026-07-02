@@ -34,14 +34,19 @@ function base(): Analysis {
       topStatements: [],
       topByCalls: [],
       biggestTables: [],
-      unusedIndexes: [],
+      indexStats: [],
       seqScanHeavy: [],
+      bloat: [],
+      trafficProfile: [],
       deadTuples: [],
       txidWraparound: [],
       replicationSlots: [],
       rlsPolicies: [],
       connections: [],
       roleStats: [],
+      longRunning: [],
+      locks: [],
+      blocking: [],
       storageUsage: [],
     },
     metrics: { available: false, samples: [] },
@@ -86,9 +91,10 @@ describe("deriveFindings", () => {
 
   test("only public-schema unused indexes counted", () => {
     const a = base();
-    a.sql.unusedIndexes = [
-      { schema: "auth", table: "auth.users", index: "i1" },
-      { schema: "public", table: "public.x", index: "i2" },
+    a.sql.indexStats = [
+      { schema: "auth", table: "auth.users", index: "auth.i1", unused: true },
+      { schema: "public", table: "public.x", index: "public.i2", unused: true },
+      { schema: "public", table: "public.x", index: "public.i3", unused: false },
     ];
     const f = deriveFindings(a).find((x) => x.anchor === "#unused");
     expect(f?.title).toContain("1 unused index in public");
@@ -257,6 +263,30 @@ describe("deriveFindings", () => {
     expect(deriveFindings(a).filter((x) => x.anchor === "#roles")).toHaveLength(1);
   });
 
+  test("estimated bloat flagged over 50MB, med over 500MB", () => {
+    const a = base();
+    a.sql.bloat = [{ name: "public.big", bloat_x: 3.1, waste: "120 MB", waste_bytes: 125829120 }];
+    const f = deriveFindings(a).find((x) => x.anchor === "#bloat");
+    expect(f?.severity).toBe("low");
+    expect(f?.title).toContain("public.big");
+    a.sql.bloat = [{ name: "public.huge", bloat_x: 5, waste: "800 MB", waste_bytes: 838860800 }];
+    expect(deriveFindings(a).find((x) => x.anchor === "#bloat")?.severity).toBe("med");
+    a.sql.bloat = [{ name: "public.tiny", bloat_x: 2, waste: "1 MB", waste_bytes: 1048576 }];
+    expect(deriveFindings(a).some((x) => x.anchor === "#bloat")).toBe(false);
+  });
+
+  test("point-in-time blocking + long-running fire when non-empty", () => {
+    const a = base();
+    a.sql.blocking = [{ blocked_pid: 1, blocking_pid: 2 }];
+    a.sql.longRunning = [{ pid: 3, duration: "00:06:00" }];
+    const f = deriveFindings(a);
+    const blk = f.find((x) => x.anchor === "#blocking");
+    const lr = f.find((x) => x.anchor === "#longrunning");
+    expect(blk?.severity).toBe("high");
+    expect(lr?.severity).toBe("med");
+    expect(lr?.title).toContain("1 query running > 5 min");
+  });
+
   test("pooler clients-waiting finding uses the current metric name", () => {
     const a = base();
     a.metrics.samples = [
@@ -278,7 +308,7 @@ describe("deriveFindings", () => {
     const a = base();
     a.advisors.security = [{ name: "x", title: "Critical thing", level: "ERROR" }];
     a.sql.cacheHitPct = 95; // med
-    a.sql.unusedIndexes = [{ schema: "public", table: "public.x", index: "i" }]; // low
+    a.sql.indexStats = [{ schema: "public", table: "public.x", index: "public.i", unused: true }]; // low
     const sev = deriveFindings(a).map((f) => f.severity);
     expect(sev).toEqual(
       [...sev].sort((x, y) => ({ high: 0, med: 1, low: 2 })[x] - { high: 0, med: 1, low: 2 }[y]),

@@ -98,17 +98,27 @@ export const QUERIES = {
     order by pg_total_relation_size(relid) desc
     limit 20`,
 
-  unusedIndexes: /* sql */ `
+  // All indexes ranked by size, with scan counts and an unused flag. A large,
+  // rarely-scanned index is as interesting as a never-scanned one - so this
+  // supersedes a bare unused-only list. unused excludes PK/unique constraints.
+  indexStats: /* sql */ `
     select
-      schemaname as schema,
-      schemaname || '.' || relname as table,
-      indexrelname as index,
-      pg_size_pretty(pg_relation_size(indexrelid)) as index_size,
-      idx_scan as scans
-    from pg_stat_user_indexes
-    where idx_scan = 0
-      and indexrelid not in (select conindid from pg_constraint where contype in ('p', 'u'))
-    order by pg_relation_size(indexrelid) desc
+      n.nspname as schema,
+      n.nspname || '.' || c.relname as index,
+      tn.nspname || '.' || tc.relname as table,
+      pg_size_pretty(pg_relation_size(i.indexrelid)) as index_size,
+      ui.idx_scan as scans,
+      case when ui.idx_scan = 0
+        and i.indexrelid not in (select conindid from pg_constraint where contype in ('p', 'u'))
+        then true else false end as unused
+    from pg_stat_user_indexes ui
+    join pg_index i on ui.indexrelid = i.indexrelid
+    join pg_class c on ui.indexrelid = c.oid
+    join pg_namespace n on c.relnamespace = n.oid
+    join pg_class tc on tc.oid = i.indrelid
+    join pg_namespace tn on tn.oid = tc.relnamespace
+    where n.nspname not in ('pg_catalog', 'information_schema')
+    order by pg_relation_size(i.indexrelid) desc
     limit 30`,
 
   seqScanHeavy: /* sql */ `
@@ -125,6 +135,75 @@ export const QUERIES = {
     where seq_scan > coalesce(idx_scan, 0)
       and n_live_tup > 1000
     order by seq_scan desc
+    limit 20`,
+
+  // Estimated table bloat (wasted bytes) via the classic pg_stats-based
+  // estimation. Rough (statistics-driven) but the standard first-pass signal
+  // for reclaimable space. Adapted from the Supabase CLI's bloat inspect query.
+  bloat: /* sql */ `
+    with constants as (select current_setting('block_size')::numeric as bs, 23 as hdr, 4 as ma),
+    bloat_info as (
+      select ma, bs, schemaname, tablename,
+        (datawidth + (hdr + ma - (case when hdr % ma = 0 then ma else hdr % ma end)))::numeric as datahdr,
+        (maxfracsum * (nullhdr + ma - (case when nullhdr % ma = 0 then ma else nullhdr % ma end))) as nullhdr2
+      from (
+        select schemaname, tablename, hdr, ma, bs,
+          sum((1 - null_frac) * avg_width) as datawidth,
+          max(null_frac) as maxfracsum,
+          hdr + (select 1 + count(*) / 8 from pg_stats s2
+                 where null_frac <> 0 and s2.schemaname = s.schemaname and s2.tablename = s.tablename) as nullhdr
+        from pg_stats s, constants
+        where schemaname not in ('pg_catalog', 'information_schema')
+        group by 1, 2, 3, 4, 5
+      ) as foo
+    ),
+    table_bloat as (
+      select schemaname, tablename, cc.relpages, bs,
+        ceil((cc.reltuples * ((datahdr + ma - (case when datahdr % ma = 0 then ma else datahdr % ma end)) + nullhdr2 + 4)) / (bs - 20::float)) as otta
+      from bloat_info
+      join pg_class cc on cc.relname = bloat_info.tablename
+      join pg_namespace nn on cc.relnamespace = nn.oid and nn.nspname = bloat_info.schemaname
+    )
+    select
+      schemaname || '.' || tablename as name,
+      round(case when otta = 0 then 0.0 else relpages / otta::numeric end, 1) as bloat_x,
+      pg_size_pretty(case when relpages < otta then 0 else (bs * (relpages - otta)::bigint)::bigint end) as waste,
+      (case when relpages < otta then 0 else (bs * (relpages - otta)::bigint)::bigint end) as waste_bytes
+    from table_bloat
+    where relpages > otta
+    order by waste_bytes desc
+    limit 20`,
+
+  // Read-heavy vs write-heavy profile per table (blocks read vs write tuples).
+  // Informs index/partitioning strategy. Adapted from the CLI's traffic-profile
+  // (itself from Crunchy Data's read-vs-write analysis).
+  trafficProfile: /* sql */ `
+    with tl as (
+      select s.schemaname, s.relname,
+        si.heap_blks_read + si.idx_blks_read as blocks_read,
+        s.n_tup_ins + s.n_tup_upd + s.n_tup_del as write_tuples,
+        c.relpages * (s.n_tup_ins + s.n_tup_upd + s.n_tup_del)
+          / (case when c.reltuples = 0 then 1 else c.reltuples end) as blocks_write
+      from pg_stat_user_tables s
+      join pg_statio_user_tables si on s.relid = si.relid
+      join pg_class c on c.oid = s.relid
+      where (s.n_tup_ins + s.n_tup_upd + s.n_tup_del) > 0
+        and (si.heap_blks_read + si.idx_blks_read) > 0
+    )
+    select
+      schemaname || '.' || relname as table,
+      blocks_read,
+      write_tuples,
+      round(blocks_write::numeric) as blocks_write,
+      case when blocks_write * 5 > blocks_read
+        then (case when blocks_read = 0 then 'write-only'
+          else round(blocks_write::numeric / nullif(blocks_read, 0)::numeric, 1)::text || ':1 write-heavy' end)
+      when blocks_read > blocks_write * 5
+        then (case when blocks_write = 0 then 'read-only'
+          else '1:' || round(blocks_read::numeric / nullif(blocks_write::numeric, 0), 1)::text || ' read-heavy' end)
+      else '1:1 balanced' end as profile
+    from tl
+    order by (blocks_read + blocks_write) desc
     limit 20`,
 
   // Autovacuum-behind, threshold-aware. Rather than a fixed dead-tuple cutoff,
@@ -245,6 +324,55 @@ export const QUERIES = {
     where pid <> pg_backend_pid()
     group by state
     order by connections desc`,
+
+  // POINT-IN-TIME snapshots (state at collection, not a trend). Usually empty;
+  // findings only fire when they catch something real.
+  // Queries running > 5 minutes right now.
+  longRunning: /* sql */ `
+    select
+      pid,
+      age(now(), query_start)::text as duration,
+      state,
+      left(regexp_replace(query, '\\s+', ' ', 'g'), 120) as query
+    from pg_stat_activity
+    where query <> '' and state <> 'idle'
+      and pid <> pg_backend_pid()
+      and age(now(), query_start) > interval '5 minutes'
+    order by age(now(), query_start) desc
+    limit 20`,
+
+  // Sessions currently holding an exclusive lock (self excluded).
+  locks: /* sql */ `
+    select
+      a.pid,
+      coalesce(c.relname, '-') as relation,
+      l.mode,
+      l.granted,
+      age(now(), a.query_start)::text as age,
+      left(regexp_replace(a.query, '\\s+', ' ', 'g'), 100) as query
+    from pg_stat_activity a
+    join pg_locks l on l.pid = a.pid
+    left join pg_class c on l.relation = c.oid
+    where l.mode = 'ExclusiveLock'
+      and a.pid <> pg_backend_pid()
+      and a.query <> '<insufficient privilege>'
+    order by a.query_start
+    limit 20`,
+
+  // Blocking chains: which session is blocked by which (both statements shown).
+  blocking: /* sql */ `
+    select
+      bl.pid as blocked_pid,
+      left(regexp_replace(a.query, '\\s+', ' ', 'g'), 80) as blocked_query,
+      kl.pid as blocking_pid,
+      left(regexp_replace(ka.query, '\\s+', ' ', 'g'), 80) as blocking_query,
+      age(now(), ka.query_start)::text as blocking_age
+    from pg_locks bl
+    join pg_stat_activity a on bl.pid = a.pid
+    join pg_locks kl on bl.transactionid = kl.transactionid and bl.pid <> kl.pid
+    join pg_stat_activity ka on kl.pid = ka.pid
+    where not bl.granted
+    limit 20`,
 } as const;
 
 export type QueryKey = keyof typeof QUERIES;
