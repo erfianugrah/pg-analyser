@@ -1,6 +1,7 @@
 import { Management } from "./management.ts";
 import { parsePrometheus } from "./metrics.ts";
 import { fetchTrends } from "./prometheus.ts";
+import { isUnwrappedAuth } from "./rls.ts";
 import { type Analysis, MetricSample } from "./schemas.ts";
 import { collectSplinterPerfLints } from "./splinter.ts";
 import { QUERIES } from "./sql.ts";
@@ -176,6 +177,13 @@ export async function collect(
   // The hosted advisors/performance endpoint currently 400s on the splinter
   // storage-buckets lint (42601, prepared-statement path). With a superuser
   // --db-url we run splinter ourselves over the simple-query protocol.
+  // Classify RLS policies in JS from the captured qual/with_check (unit-tested,
+  // case-correct) rather than an embedded regex.
+  const rlsClassified = rlsPolicies.map((r) => ({
+    ...r,
+    unwrapped_auth: isUnwrappedAuth(r.qual as string | null, r.with_check as string | null),
+  }));
+
   let performanceAdvisors = perfAdvisors;
   if (performanceAdvisors.length === 0 && runner.runMulti) {
     const lints = await safe("advisors:splinter", () => collectSplinterPerfLints(runner), []);
@@ -230,7 +238,7 @@ export async function collect(
       deadTuples,
       txidWraparound,
       replicationSlots,
-      rlsPolicies,
+      rlsPolicies: rlsClassified,
       connections,
       roleStats,
       longRunning,

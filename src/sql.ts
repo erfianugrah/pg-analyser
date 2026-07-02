@@ -259,19 +259,20 @@ export const QUERIES = {
 
   // RLS policies re-evaluating auth.* per row (should be wrapped: (select auth.uid())).
   // Supabase benchmarks: 94-99% latency improvement when wrapped.
+  // Raw policy expressions; the unwrapped-auth classification is done in JS
+  // (see rls.ts / collect.ts) so it is unit-tested and case-correct. Capturing
+  // qual/with_check/roles also lets the report emit exact ALTER POLICY fixes.
   rlsPolicies: /* sql */ `
     select
       schemaname || '.' || tablename as table,
       policyname,
       cmd,
-      (chk ~ 'auth\\.(uid|jwt|role)\\(\\)' and chk !~ '\\(\\s*select\\s+auth\\.') as unwrapped_auth
-    from (
-      select schemaname, tablename, policyname, cmd,
-        coalesce(qual, '') || ' ' || coalesce(with_check, '') as chk
-      from pg_policies
-      where schemaname not in ('pg_catalog', 'information_schema')
-    ) p
-    order by 4 desc, 1`,
+      array_to_string(roles, ',') as roles,
+      qual,
+      with_check
+    from pg_policies
+    where schemaname not in ('pg_catalog', 'information_schema')
+    order by 1, 2`,
 
   storageUsage: /* sql */ `
     select
