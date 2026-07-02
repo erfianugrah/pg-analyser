@@ -31,6 +31,7 @@ Usage:
 Flags:
   --store <db>         history SQLite file (default ~/.sbperf/history.db)
   --retention-days <n> snapshot: prune snapshots older than n days (default 90, 0=keep)
+  --interval <window>  analytics timeframe: 15min|30min|1hr|3hr|1day|3day|7day (default 1day)
   --prometheus <url>   trends from a scraper's Prometheus instead of the history store
   -h, --help           show this help
   -v, --version        print version
@@ -54,7 +55,11 @@ type Flags = {
   prometheus?: string;
   store?: string;
   retentionDays?: number;
+  interval?: string;
 };
+
+/** Analytics-endpoint timeframe enum (verified live 2026-07; iso ranges are clamped). */
+const INTERVALS = ["15min", "30min", "1hr", "3hr", "1day", "3day", "7day"] as const;
 function parseFlags(argv: string[]): Flags {
   const out: Flags = { _: [] };
   for (let i = 0; i < argv.length; i++) {
@@ -67,6 +72,7 @@ function parseFlags(argv: string[]): Flags {
     else if (a === "--prometheus") out.prometheus = argv[++i];
     else if (a === "--store") out.store = argv[++i];
     else if (a === "--retention-days") out.retentionDays = Number(argv[++i]);
+    else if (a === "--interval") out.interval = argv[++i];
     else if (a === "--all") out.all = true;
     else if (a?.startsWith("--")) usage();
     else if (a) out._.push(a);
@@ -78,6 +84,7 @@ async function doAll(
   orgFilter: string | undefined,
   outBase: string,
   prometheusUrl?: string,
+  interval?: string,
 ): Promise<void> {
   const transport = makeTransport(loadCfg());
   const m = new Management(transport);
@@ -91,7 +98,7 @@ async function doAll(
     const dir = join(outBase, p.id);
     process.stderr.write(`  - ${p.name} (${p.id}) `);
     try {
-      const analysis = await collect(p.id, transport, VERSION, { prometheusUrl });
+      const analysis = await collect(p.id, transport, VERSION, { prometheusUrl, interval });
       await mkdir(dir, { recursive: true });
       await Bun.write(join(dir, "analysis.json"), JSON.stringify(analysis, null, 2));
       const html = render(analysis);
@@ -144,10 +151,15 @@ function defaultOut(ref: string): string {
   return join("reports", `${ref}-${ts}`);
 }
 
-async function doAnalyze(ref: string, outDir: string, prometheusUrl?: string): Promise<string> {
+async function doAnalyze(
+  ref: string,
+  outDir: string,
+  prometheusUrl?: string,
+  interval?: string,
+): Promise<string> {
   const transport = makeTransport(loadCfg());
   console.error(`> analyzing ${ref} via the Management API`);
-  const analysis = await collect(ref, transport, VERSION, { prometheusUrl });
+  const analysis = await collect(ref, transport, VERSION, { prometheusUrl, interval });
   await mkdir(outDir, { recursive: true });
   const jsonPath = join(outDir, "analysis.json");
   await Bun.write(jsonPath, JSON.stringify(analysis, null, 2));
@@ -178,10 +190,11 @@ async function doSnapshot(
   outDir: string,
   storePath: string,
   retentionDays: number,
+  interval?: string,
 ): Promise<void> {
   const transport = makeTransport(loadCfg());
   console.error(`> snapshot ${ref} via the Management API`);
-  const analysis = await collect(ref, transport, VERSION);
+  const analysis = await collect(ref, transport, VERSION, { interval });
   await mkdir(outDir, { recursive: true });
   await Bun.write(join(outDir, "analysis.json"), JSON.stringify(analysis, null, 2));
 
@@ -263,12 +276,21 @@ async function main(): Promise<void> {
   }
   if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") usage(0);
   const flags = parseFlags(argv.slice(1));
+  if (flags.interval && !INTERVALS.includes(flags.interval as (typeof INTERVALS)[number])) {
+    console.error(`error: --interval must be one of ${INTERVALS.join(" | ")}`);
+    process.exit(1);
+  }
 
   try {
     switch (cmd) {
       case "analyze": {
         if (!flags.ref) usage();
-        await doAnalyze(flags.ref, flags.out ?? defaultOut(flags.ref), flags.prometheus);
+        await doAnalyze(
+          flags.ref,
+          flags.out ?? defaultOut(flags.ref),
+          flags.prometheus,
+          flags.interval,
+        );
         break;
       }
       case "report": {
@@ -284,6 +306,7 @@ async function main(): Promise<void> {
           flags.out ?? defaultOut(flags.ref),
           flags.store ?? DEFAULT_STORE,
           flags.retentionDays ?? 90,
+          flags.interval,
         );
         break;
       }
@@ -302,12 +325,17 @@ async function main(): Promise<void> {
       case "full": {
         if (flags.all) {
           const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-          await doAll(flags.org, flags.out ?? join("reports", `all-${ts}`), flags.prometheus);
+          await doAll(
+            flags.org,
+            flags.out ?? join("reports", `all-${ts}`),
+            flags.prometheus,
+            flags.interval,
+          );
           break;
         }
         if (!flags.ref) usage();
         const dir = flags.out ?? defaultOut(flags.ref);
-        await doAnalyze(flags.ref, dir, flags.prometheus);
+        await doAnalyze(flags.ref, dir, flags.prometheus, flags.interval);
         await doReport(dir);
         await doPdf(dir);
         console.error(`> done: ${dir}`);

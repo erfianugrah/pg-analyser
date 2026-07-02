@@ -70,6 +70,25 @@ bun run src/index.ts report <dir>            # draws trends from accumulated sna
 
 Reports are structured as a pyramid: a ranked **findings summary** (Performance / Security / Capacity) up top, then infrastructure, then collapsible evidence drill-downs. Paused/unreachable projects render an honest degraded state, not misleading empties.
 
+## Choosing a timeframe
+
+Supabase only lets you pick a window for the **analytics** endpoints (API
+request volume + edge-function stats). Use `--interval`:
+
+```bash
+bun run src/index.ts analyze --ref <ref> --interval 7day
+```
+
+Enum: `15min | 30min | 1hr | 3hr | 1day | 3day | 7day` (default `1day`). It sets
+both window and granularity - `7day` gives ~daily buckets, `3day`/`1day` hourly,
+`<=1hr` fine-grained recent. **Max reach is ~7 days**; arbitrary ISO ranges are
+clamped by the API and don't extend history.
+
+Everything else has no query window: infra **metrics** are a point-in-time
+scrape, and **pg_stat_statements** / SQL diagnostics are cumulative since the
+last stats reset (the report shows the reset age). For longer horizons, use the
+history store (`snapshot` -> trends) - that's the only way to see beyond ~7 days.
+
 ## Auth
 
 Either:

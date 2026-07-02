@@ -102,10 +102,20 @@ src/
   scrape of a counter is meaningless, which is why the point-in-time report
   curates gauges only but the trend path needs the counters.
 - Per-function invocation stats: `GET /v1/projects/:ref/analytics/endpoints/
-  functions.combined-stats?interval=<15min|1hr|3hr|1day>&function_id=<id>` returns
+  functions.combined-stats?interval=<window>&function_id=<id>` returns
   per-time-bucket `{ request_count, success_count, client_err_count,
   server_err_count, avg/min/max_execution_time }`. Needs the function `id` from
   the functions list, not the slug. collect.ts aggregates buckets per function.
+- Analytics timeframe (verified live 2026-07): the `interval` enum is
+  `15min | 30min | 1hr | 3hr | 1day | 3day | 7day` (an invalid value 400s with
+  the full list in the message). It sets BOTH window and granularity: `7day` ->
+  ~8 daily buckets, `3day`/`1day` -> hourly, `<=1hr` -> fine-grained recent.
+  Max reach is ~7 days. `iso_timestamp_start`/`iso_timestamp_end` are accepted
+  but CLAMPED - a 14/30/90-day range returns only the last few minutes, so they
+  do NOT extend history. Applies to both `usage.api-counts` and
+  `functions.combined-stats`. Exposed as `--interval` (default 1day); threaded
+  through collect.ts. This is the ONLY query window Supabase offers - metrics
+  are point-in-time and pg_stat_statements is cumulative-since-reset.
 - `supabase inspect report` (the CLI's all-in-one) requires a DB connection
   string (`--db-url`/`--linked` = a password) and emits raw CSV - no findings.
   sbperf is PAT-only + ranked findings, and additionally has advisors, metrics,
