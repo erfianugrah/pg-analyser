@@ -127,35 +127,11 @@ the plan with near-zero churn; still guards the RLS-class silent-drift bug.
       unfetchable). check:inspect wired into package.json + the CI api-drift job.
 - [x] biome.json migrated (linter.rules.recommended -> preset, biome 2.5 dep).
 
-### Superseded plan (kept for context): full vendor-with-delta
+### Abandoned: full vendor-with-delta (replaced by the drift check above)
 
-Shape:
-```
-src/inspect/*.sql   vendored verbatim (header: source path + upstream commit + date)
-src/inspect/index.ts  name -> embedded SQL registry (Bun `with { type: text }`)
-src/sql.ts            ONLY sbperf-original queries (txid, RLS audit, point-in-time
-                      locks/blocking/long-running, threshold-aware vacuum, traffic)
-scripts/check-inspect-drift.ts  diff vendored copies vs upstream, warn (like check:api)
-```
-
-Tasks (ordered; port opportunistically, do NOT big-bang overwrite working queries):
-- [ ] SPIKE: fetch the CLI inspect dir, confirm the .sql format (Go-templated?
-      param placeholders? multi-statement?). One query (bloat) end-to-end proves
-      the vendoring + embed + column-map pattern before committing to all.
-- [ ] vendor src/inspect/*.sql + registry; embed via text import (confirmed
-      embeds in the compiled binary, like splinter.sql)
-- [ ] MIGRATION per query: replace a hand-rolled sql.ts query with the vendored
-      one; reconcile column names (alias in the vendored SQL OR remap
-      render.ts/findings.ts + fixtures). FRICTION #1 = this remap churn.
-- [ ] FRICTION #2: keep sbperf-original queries that beat the CLI's
-      (threshold-aware vacuum, traffic-profile, point-in-time set). "Baseline
-      from CLI" means where the CLI is canonical - don't regress improvements.
-- [ ] scripts/check-inspect-drift.ts: fetch upstream inspect .sql, diff against
-      vendored copies (ignore leading attribution comment), warn on drift. Wire
-      into CI alongside check:api. Guards the sync.
-- [ ] tests: each migrated query keeps/gets a fixture test; drift-check has a
-      unit test (matching vs drifted).
-
-Acceptance: sql.ts contains only original checks; every inspect-parity query is
-vendored + drift-checked; report/findings unchanged in output (or improved);
-full suite green. Effort ~1 focused day (mostly the column-remap churn).
+The original plan was to vendor `src/inspect/*.sql` verbatim + a registry and
+strip sql.ts down to sbperf-original checks only. Abandoned after the spike
+proved verbatim vendoring impossible (bind params can't pass the PAT read-only
+endpoint; findings need raw columns the CLI wraps in pg_size_pretty). The
+drift-check-only approach above delivers the same stay-synced guarantee without
+the per-query column-remap churn, so this is not planned work.
