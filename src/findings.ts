@@ -216,12 +216,14 @@ export function deriveFindings(a: Analysis): Finding[] {
       });
     }
   }
-  const waiting = a.metrics.samples.find((s) => s.name === "pgbouncer_pools_cl_waiting");
-  if (waiting && waiting.value > 0) {
+  const waiting = a.metrics.samples
+    .filter((s) => s.name === "pgbouncer_pools_client_waiting_connections")
+    .reduce((mx, s) => Math.max(mx, s.value), 0);
+  if (waiting > 0) {
     out.push({
       severity: "med",
       category: "Capacity",
-      title: `${waiting.value} clients waiting on the pooler`,
+      title: `${waiting} client${waiting === 1 ? "" : "s"} waiting on the pooler`,
       anchor: "#metrics",
     });
   }

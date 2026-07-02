@@ -257,6 +257,17 @@ describe("deriveFindings", () => {
     expect(deriveFindings(a).filter((x) => x.anchor === "#roles")).toHaveLength(1);
   });
 
+  test("pooler clients-waiting finding uses the current metric name", () => {
+    const a = base();
+    a.metrics.samples = [
+      { name: "pgbouncer_pools_client_waiting_connections", labels: { db: "a" }, value: 4 },
+      { name: "pgbouncer_pools_client_waiting_connections", labels: { db: "b" }, value: 1 },
+    ];
+    const f = deriveFindings(a).find((x) => x.title.includes("waiting on the pooler"));
+    expect(f?.category).toBe("Capacity");
+    expect(f?.title).toContain("4 clients");
+  });
+
   test("idle-in-transaction disabled flagged", () => {
     const a = base();
     a.sql.pgSettings = [{ name: "idle_in_transaction_session_timeout", setting: "0", unit: "ms" }];
