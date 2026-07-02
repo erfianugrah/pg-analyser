@@ -171,6 +171,9 @@ export const Analysis = z.object({
     createdAt: z.string(),
     collectedAt: z.string(),
     sbperfVersion: z.string(),
+    // Which SQL tier produced the diagnostics. Defaulted for back-compat with
+    // analysis.json written before the superuser tier existed.
+    sqlSource: z.enum(["read-only", "superuser"]).default("read-only"),
   }),
   health: HealthList,
   disk: z

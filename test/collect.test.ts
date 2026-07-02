@@ -87,6 +87,30 @@ describe("collect", () => {
     expect(a.metrics.samples).toHaveLength(0);
   });
 
+  test("defaults sqlSource to read-only (PAT runner)", async () => {
+    const t = fakeTransport({ onMgmt: fullRoutes(), onMetrics: okMetrics });
+    const a = await collect("ref", t, "0.0.0-test");
+    expect(a.meta.sqlSource).toBe("read-only");
+  });
+
+  test("an injected SqlRunner runs the query set and sets sqlSource", async () => {
+    const seen: string[] = [];
+    const runner = {
+      source: "superuser" as const,
+      run: async (q: string) => {
+        seen.push(q);
+        return [];
+      },
+    };
+    const t = fakeTransport({ onMgmt: fullRoutes(), onMetrics: okMetrics });
+    const a = await collect("ref", t, "0.0.0-test", { sqlRunner: runner });
+    expect(a.meta.sqlSource).toBe("superuser");
+    // the diagnostic queries went through the injected runner, not the API
+    expect(seen.some((q) => q.includes("pg_stat_statements"))).toBe(true);
+    // and the read-only SQL endpoint was NOT hit
+    expect(t.calls.mgmt.some((p) => p.includes("query/read-only"))).toBe(false);
+  });
+
   test("threads --interval through to the analytics endpoints", async () => {
     const t = fakeTransport({ onMgmt: fullRoutes(), onMetrics: okMetrics });
     await collect("ref", t, "0.0.0-test", { interval: "3day" });
