@@ -82,3 +82,62 @@ be accumulated going forward - so sbperf accumulates it, no Prom/Grafana needed.
 With these, sbperf collects a superset of the `supabase inspect` command set
 (minus point-in-time semantics it can't have offline) plus advisors, metrics,
 RLS audit, txid, and edge-function stats the CLI lacks.
+
+## Shipped 2026-07-02 (superuser tier + advisor fallback + corpus)
+- [x] complete metrics corpus at collection (all ~321 families, no curation);
+      curate() is now DISPLAY-only. analysis.json + store hold everything.
+- [x] render-time trend downsampling (~300 pts/panel, Grafana-style bucketing)
+- [x] --interval analytics timeframe (15min|30min|1hr|3hr|1day|3day|7day)
+- [x] --db-url superuser SQL tier (DirectSqlRunner/Bun.SQL), PAT stays default;
+      connstring never written to analysis.json (only meta.sqlSource)
+- [x] multiple DBs: repeatable --db-url + --db-config (gitignored), ref
+      auto-derived from the connstring; `full` sweeps -> per-DB reports + index
+- [x] export-prometheus: store -> OpenMetrics -> promtool backfill -> retroactive
+      Grafana (verified vs prom/prometheus:v3.1.0)
+- [x] self-hosted Performance Advisor: vendored splinter.sql run over --db-url
+      (simple-query, multi-statement) as a fallback for the hosted
+      advisors/performance 42601 bug (supabase/cli#4965). Recovered 10 lints on
+      a project the hosted API returned 0 for.
+- [x] RLS unwrapped-auth: capture qual/with_check, classify in tested JS
+      (rls.ts) - fixed a case-sensitivity false-positive that flagged every
+      correctly-wrapped policy.
+- [x] convention: port checks from CLI/splinter source, stay API-first at runtime
+
+## PLANNED (next): vendor the CLI inspect SQL as a synced baseline
+
+Goal: stop hand-owning the diagnostic queries. Adopt `supabase/cli`
+`apps/cli-go/internal/inspect/*/*.sql` as a VENDORED, drift-checked baseline
+(the splinter pattern we already proved), and keep ONLY sbperf-original checks
+in our own code. Flips the maintenance burden: baseline syncs with upstream, we
+manage only our deltas. Structurally prevents the RLS-class drift bug.
+
+Shape:
+```
+src/inspect/*.sql   vendored verbatim (header: source path + upstream commit + date)
+src/inspect/index.ts  name -> embedded SQL registry (Bun `with { type: text }`)
+src/sql.ts            ONLY sbperf-original queries (txid, RLS audit, point-in-time
+                      locks/blocking/long-running, threshold-aware vacuum, traffic)
+scripts/check-inspect-drift.ts  diff vendored copies vs upstream, warn (like check:api)
+```
+
+Tasks (ordered; port opportunistically, do NOT big-bang overwrite working queries):
+- [ ] SPIKE: fetch the CLI inspect dir, confirm the .sql format (Go-templated?
+      param placeholders? multi-statement?). One query (bloat) end-to-end proves
+      the vendoring + embed + column-map pattern before committing to all.
+- [ ] vendor src/inspect/*.sql + registry; embed via text import (confirmed
+      embeds in the compiled binary, like splinter.sql)
+- [ ] MIGRATION per query: replace a hand-rolled sql.ts query with the vendored
+      one; reconcile column names (alias in the vendored SQL OR remap
+      render.ts/findings.ts + fixtures). FRICTION #1 = this remap churn.
+- [ ] FRICTION #2: keep sbperf-original queries that beat the CLI's
+      (threshold-aware vacuum, traffic-profile, point-in-time set). "Baseline
+      from CLI" means where the CLI is canonical - don't regress improvements.
+- [ ] scripts/check-inspect-drift.ts: fetch upstream inspect .sql, diff against
+      vendored copies (ignore leading attribution comment), warn on drift. Wire
+      into CI alongside check:api. Guards the sync.
+- [ ] tests: each migrated query keeps/gets a fixture test; drift-check has a
+      unit test (matching vs drifted).
+
+Acceptance: sql.ts contains only original checks; every inspect-parity query is
+vendored + drift-checked; report/findings unchanged in output (or improved);
+full suite green. Effort ~1 focused day (mostly the column-remap churn).
