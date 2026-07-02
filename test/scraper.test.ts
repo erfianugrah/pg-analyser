@@ -32,7 +32,7 @@ describe("writeScraper", () => {
       )) as unknown as typeof fetch;
 
     const dir = await tmp();
-    await writeScraper("myref", { accessToken: "sbp_x" }, dir);
+    await writeScraper("myref", { accessToken: "sbp_x", tokenSource: "env" }, dir);
 
     const prom = await readFile(join(dir, "prometheus.yml"), "utf8");
     expect(prom).toContain("metrics_path: /customer/v1/privileged/metrics");

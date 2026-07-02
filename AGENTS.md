@@ -32,7 +32,8 @@ PDF needs a system Chrome/Chromium on PATH (`chromium`, `google-chrome`, ...) or
 
 ## Auth
 
-Set `SUPABASE_ACCESS_TOKEN` (Personal Access Token). Hits `api.supabase.com`
+Set `SUPABASE_ACCESS_TOKEN` (Personal Access Token), or run `supabase login` and
+sbperf reads `~/.supabase/access-token` automatically. Hits `api.supabase.com`
 and the `<ref>.supabase.co` metrics endpoint (service_role auto-fetched per run
 via the Management API, never stored). The `Transport` interface exists mainly
 so tests can inject a fake; there is one impl (`DirectTransport`).
