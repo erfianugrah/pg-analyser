@@ -1,0 +1,16 @@
+[
+  {
+    "total_ms": 50983.4,
+    "calls": 135,
+    "mean_ms": 377.65,
+    "pct": 71.4,
+    "query": "SELECT * FROM public.orders WHERE customer_id = $1"
+  },
+  {
+    "total_ms": 16056.7,
+    "calls": 28154,
+    "mean_ms": 0.57,
+    "pct": 22.5,
+    "query": "insert into audit.events (kind, payload) values ($1, $2)"
+  }
+]

@@ -1,0 +1,19 @@
+{
+  "result": [
+    {
+      "timestamp": "2026-07-01T06:00:00",
+      "total_auth_requests": 0,
+      "total_realtime_requests": 0,
+      "total_rest_requests": 2,
+      "total_storage_requests": 0
+    },
+    {
+      "timestamp": "2026-07-02T02:00:00",
+      "total_auth_requests": 3,
+      "total_realtime_requests": 0,
+      "total_rest_requests": 4,
+      "total_storage_requests": 3
+    }
+  ],
+  "error": null
+}

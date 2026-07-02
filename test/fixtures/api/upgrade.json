@@ -1,0 +1,6 @@
+{
+  "eligible": true,
+  "current_app_version": "supabase-postgres-17.6.1.104",
+  "latest_app_version": "supabase-postgres-17.6.1.141",
+  "target_upgrade_versions": []
+}

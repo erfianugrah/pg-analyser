@@ -1,0 +1,14 @@
+{
+  "message": "db advisors",
+  "results": [
+    {
+      "name": "multiple_permissive_policies",
+      "title": "Multiple Permissive Policies",
+      "level": "WARN",
+      "facing": "EXTERNAL",
+      "categories": ["PERFORMANCE"],
+      "detail": "Table `public.orders` has multiple permissive policies.",
+      "remediation": "https://supabase.com/docs/guides/database/database-linter?lint=0006"
+    }
+  ]
+}
