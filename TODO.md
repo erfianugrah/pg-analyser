@@ -103,13 +103,31 @@ RLS audit, txid, and edge-function stats the CLI lacks.
       correctly-wrapped policy.
 - [x] convention: port checks from CLI/splinter source, stay API-first at runtime
 
-## PLANNED (next): vendor the CLI inspect SQL as a synced baseline
+## DONE 2026-07-03: inspect-SQL drift check (NOT verbatim vendoring)
 
-Goal: stop hand-owning the diagnostic queries. Adopt `supabase/cli`
-`apps/cli-go/internal/inspect/*/*.sql` as a VENDORED, drift-checked baseline
-(the splinter pattern we already proved), and keep ONLY sbperf-original checks
-in our own code. Flips the maintenance burden: baseline syncs with upstream, we
-manage only our deltas. Structurally prevents the RLS-class drift bug.
+Spike outcome: verbatim vendoring of the CLI inspect SQL is NOT achievable.
+  1. The inspect queries use bind params (`WHERE nspname LIKE ANY($1)`, passed
+     `LikeEscapeSchema(InternalSchemas)`). Our runners take a raw query string;
+     the PAT read-only endpoint has no param binding at all -> the array must be
+     inlined -> not verbatim.
+  2. Our findings consume raw columns the CLI SQL wraps away, e.g. bloat needs
+     `waste_bytes` (raw int) but the CLI returns only `pg_size_pretty(raw_waste)`
+     -> we'd have to edit the vendored SQL -> not verbatim.
+Every vendored query would carry a local delta, making a byte-diff drift check
+fragile. So instead of re-vendoring, we KEEP our working/tested queries and add
+an advisory drift check that warns when the UPSTREAM query changes (a re-review
+nudge, not a runtime dependency). Gets the stay-synced benefit that motivated
+the plan with near-zero churn; still guards the RLS-class silent-drift bug.
+
+- [x] scripts/check-inspect-drift.ts: fetch upstream inspect *.sql (cli@develop),
+      SHA-256 each, compare to scripts/inspect-baseline.json (14 queries mapped
+      to their src/sql.ts key). Advisory (exit 0 + ::warning::); SBPERF_INSPECT_
+      STRICT=1 to fail; SBPERF_INSPECT_UPDATE=1 to accept upstream after review.
+- [x] pure classifyDrift() extracted + unit-tested (matching / drifted / missing /
+      unfetchable). check:inspect wired into package.json + the CI api-drift job.
+- [x] biome.json migrated (linter.rules.recommended -> preset, biome 2.5 dep).
+
+### Superseded plan (kept for context): full vendor-with-delta
 
 Shape:
 ```

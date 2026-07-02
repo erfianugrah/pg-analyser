@@ -29,3 +29,5 @@ jobs:
           bun-version: latest
       - name: Check endpoints against upstream Management API spec
         run: bun run scripts/check-api-drift.ts
+      - name: Check derived inspect SQL against upstream CLI (advisory)
+        run: bun run scripts/check-inspect-drift.ts
