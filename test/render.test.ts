@@ -41,11 +41,18 @@ function fixture(overrides: Partial<Analysis> = {}): Analysis {
     sql: {
       dbSize: "20 MB",
       cacheHitPct: 100,
+      pgSettings: [
+        { name: "max_connections", setting: "60", unit: null },
+        { name: "idle_in_transaction_session_timeout", setting: "0", unit: "ms" },
+      ],
       topStatements: [{ total_ms: 50983.4, calls: 135, query: "SELECT ..." }],
       biggestTables: [],
       unusedIndexes: [],
       seqScanHeavy: [],
       deadTuples: [],
+      rlsPolicies: [
+        { table: "public.pastes", policyname: "view own", cmd: "SELECT", unwrapped_auth: true },
+      ],
       connections: [{ state: "idle", connections: 3 }],
     },
     metrics: {
@@ -101,9 +108,36 @@ describe("render", () => {
     expect(html).toContain('class="lvl WARN"');
   });
 
-  test("empty SQL sections show 'none' not a broken table", () => {
+  test("empty SQL sections show 'none found' not a broken table", () => {
     const html = render(fixture());
-    expect(html).toContain("<p class=empty>none</p>");
+    expect(html).toContain("none found");
+  });
+
+  test("leads with a findings summary (pyramid apex)", () => {
+    const html = render(fixture());
+    const findIdx = html.indexOf("<h2>Findings</h2>");
+    const outlierIdx = html.indexOf("Query outliers");
+    expect(findIdx).toBeGreaterThan(-1);
+    expect(findIdx).toBeLessThan(outlierIdx); // findings before detail
+    expect(html).toContain("RLS"); // the unwrapped-auth finding surfaces
+  });
+
+  test("degraded banner shows for non-healthy status", () => {
+    const html = render(fixture({ meta: { ...fixture().meta, status: "INACTIVE" } }));
+    expect(html).toContain("banner bad");
+    expect(html).toContain('not "clean"');
+  });
+
+  test("deduped collection notes collapse repeats", () => {
+    const html = render(
+      fixture({
+        errors: [
+          { source: "sql:dbSize", message: "connection timeout" },
+          { source: "sql:cacheHit", message: "connection timeout" },
+        ],
+      }),
+    );
+    expect(html).toContain("2x");
   });
 
   test("empty advisors show 'no findings'", () => {

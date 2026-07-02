@@ -153,11 +153,13 @@ export const Analysis = z.object({
   sql: z.object({
     dbSize: z.string().nullable(),
     cacheHitPct: z.number().nullable(),
+    pgSettings: SqlRows,
     topStatements: SqlRows,
     biggestTables: SqlRows,
     unusedIndexes: SqlRows,
     seqScanHeavy: SqlRows,
     deadTuples: SqlRows,
+    rlsPolicies: SqlRows,
     connections: SqlRows,
   }),
   metrics: z.object({
