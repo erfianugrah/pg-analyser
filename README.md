@@ -4,9 +4,9 @@ Supabase performance analysis, PAT-only. Pulls advisors, read-only SQL
 diagnostics, project config, and infra metrics, and renders a self-contained
 **HTML + PDF** report you can drag straight into an email or Slack.
 
-Replaces the manual "run the CLI, screenshot Grafana six times, upload to a
-Claude project" workflow with one reproducible command - no superuser
-connection string, no screenshots.
+One reproducible command produces the whole report from the Management API,
+read-only SQL, and the project metrics endpoint - no superuser connection
+string and no manual dashboard screenshots to assemble.
 
 ## Quick start
 
