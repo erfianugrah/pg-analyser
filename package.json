@@ -1,0 +1,26 @@
+{
+  "name": "sbperf",
+  "version": "0.1.0",
+  "description": "Supabase performance analysis tool - PAT-only, generates self-contained HTML + PDF reports",
+  "type": "module",
+  "module": "src/index.ts",
+  "bin": {
+    "sbperf": "src/index.ts"
+  },
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "check": "biome check --write .",
+    "lint": "biome check .",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "build": "bun build ./src/index.ts --compile --outfile sbperf"
+  },
+  "dependencies": {
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.2",
+    "@types/bun": "latest",
+    "typescript": "^5"
+  }
+}
