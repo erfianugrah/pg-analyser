@@ -58,7 +58,7 @@ src/
   `.refine()` to fail loud, then let `collect.ts`'s per-source `safe()` wrapper
   record it as a collection note. (Learned the hard way: the advisors REST
   endpoint wraps findings under `lints`, not `results`.)
-- Generated reports contain customer query text - `reports/` is gitignored.
+- Generated reports contain live query text - `reports/` is gitignored.
 - Scraper dirs contain a live credential in `prometheus.yml` - gitignored.
 
 ## Verified upstream facts (Supabase, 2026-07)
