@@ -98,6 +98,11 @@ bun run src/index.ts snapshot --ref <ref>
 bun run src/index.ts report <dir>
 ```
 
+Trend series are downsampled at render time to ~300 points per panel (bucketed
+average, the way Grafana renders a wide range), so a long history still draws a
+clean sparkline. Snapshot resolution is your cron cadence; retention is a flat
+prune at `--retention-days`.
+
 Trends need >=2 snapshots to compute rates. Gauges (load, free memory/disk, DB
 size) plot directly; **counters** (`node_cpu_*`, `node_disk_*`, `node_network_*`)
 become CPU utilization %, disk IOPS, and throughput once two snapshots exist -

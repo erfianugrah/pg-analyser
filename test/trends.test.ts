@@ -129,6 +129,41 @@ describe("computeTrends", () => {
     expect(find(out, "Disk read IOPS")).toBeUndefined();
   });
 
+  test("read-time downsampling caps points to maxPoints (Grafana-style)", () => {
+    const snaps = [];
+    for (let i = 0; i < 1000; i++) snaps.push(snap(1000 + i * 60, [s("node_load1", i)]));
+    const out = computeTrends(snaps, { maxPoints: 100 });
+    const load = find(out, "CPU load (1m)");
+    expect(load?.points.length).toBeLessThanOrEqual(100);
+    expect(load?.points.length).toBeGreaterThan(1);
+  });
+
+  test("no downsampling when points are under the cap", () => {
+    const out = computeTrends(
+      [snap(1000, [s("node_load1", 0.5)]), snap(2000, [s("node_load1", 0.7)])],
+      { maxPoints: 100 },
+    );
+    expect(find(out, "CPU load (1m)")?.points).toEqual([
+      { t: 1000, v: 0.5 },
+      { t: 2000, v: 0.7 },
+    ]);
+  });
+
+  test("downsampling averages value and time within each bucket", () => {
+    const snaps = [
+      snap(0, [s("node_load1", 0)]),
+      snap(10, [s("node_load1", 2)]),
+      snap(20, [s("node_load1", 10)]),
+      snap(30, [s("node_load1", 20)]),
+    ];
+    const pts = find(computeTrends(snaps, { maxPoints: 2 }), "CPU load (1m)")?.points;
+    // span 30, bucket width 15: [t0,t10]->avg (t5,v1); [t20,t30]->avg (t25,v15)
+    expect(pts).toEqual([
+      { t: 5, v: 1 },
+      { t: 25, v: 15 },
+    ]);
+  });
+
   test("sorts snapshots by ts defensively", () => {
     const out = computeTrends([
       snap(3000, [s("node_load1", 0.9)]),

@@ -13,6 +13,35 @@ export type SnapshotForTrends = {
 
 type TrendPoint = { t: number; v: number };
 
+/** Default render cap - a sparkline is ~340px wide, so more points is wasted. */
+const DEFAULT_MAX_POINTS = 300;
+
+/**
+ * Read-time downsampling, the way Grafana renders a wide time range: bucket the
+ * points into <=maxPoints equal-time buckets and average value + time within
+ * each. A single scrape resolution is preserved in the store; this only affects
+ * what a trend series draws. No-op when already under the cap. Points are
+ * assumed sorted by t ascending (computeTrends guarantees it).
+ */
+function downsample(points: TrendPoint[], maxPoints: number): TrendPoint[] {
+  if (maxPoints < 1 || points.length <= maxPoints) return points;
+  const tMin = points[0]!.t;
+  const tMax = points[points.length - 1]!.t;
+  const width = (tMax - tMin) / maxPoints || 1;
+  const buckets = new Map<number, { tSum: number; vSum: number; n: number }>();
+  for (const p of points) {
+    const idx = Math.min(maxPoints - 1, Math.floor((p.t - tMin) / width));
+    const b = buckets.get(idx) ?? { tSum: 0, vSum: 0, n: 0 };
+    b.tSum += p.t;
+    b.vSum += p.v;
+    b.n += 1;
+    buckets.set(idx, b);
+  }
+  return [...buckets.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([, b]) => ({ t: Math.round(b.tSum / b.n), v: b.vSum / b.n }));
+}
+
 function matches(sample: MetricSample, filter?: Record<string, string>): boolean {
   if (!filter) return true;
   for (const k in filter) if (sample.labels[k] !== filter[k]) return false;
@@ -146,24 +175,22 @@ function cpuUtilSeries(snaps: SnapshotForTrends[]): TrendSeries | null {
  * point per snapshot; counter-derived rates (IOPS, throughput, CPU%) emit one
  * point per consecutive interval. Series with no data are omitted entirely.
  */
-export function computeTrends(input: SnapshotForTrends[]): TrendSeries[] {
+export function computeTrends(
+  input: SnapshotForTrends[],
+  opts: { maxPoints?: number } = {},
+): TrendSeries[] {
   const snaps = [...input].sort((a, b) => a.ts - b.ts);
   if (!snaps.length) return [];
+  const maxPoints = opts.maxPoints ?? DEFAULT_MAX_POINTS;
 
   const out: TrendSeries[] = [];
-  const cpu = cpuUtilSeries(snaps);
-  if (cpu) out.push(cpu);
-  for (const g of GAUGES) {
-    const series = gaugeSeries(snaps, g);
-    if (series) out.push(series);
-  }
-  for (const r of RATES) {
-    const series = rateSeries(snaps, r);
-    if (series) out.push(series);
-  }
-  for (const sc of SCALARS) {
-    const series = scalarSeries(snaps, sc);
-    if (series) out.push(series);
-  }
+  const push = (s: TrendSeries | null) => {
+    if (s) out.push({ ...s, points: downsample(s.points, maxPoints) });
+  };
+
+  push(cpuUtilSeries(snaps));
+  for (const g of GAUGES) push(gaugeSeries(snaps, g));
+  for (const r of RATES) push(rateSeries(snaps, r));
+  for (const sc of SCALARS) push(scalarSeries(snaps, sc));
   return out;
 }
