@@ -44,10 +44,11 @@ Audit every project in the account (writes an `index.html` linking them all):
 bun run src/index.ts full --all [--org <slug>]
 ```
 
-Embed real 30-day trend charts (needs a running scraper, see below):
+Accumulate 30-day trends with no external infra (see below):
 
 ```bash
-bun run src/index.ts full --ref <ref> --prometheus http://localhost:9090
+bun run src/index.ts snapshot --ref <ref>   # schedule hourly; appends to ~/.sbperf/history.db
+bun run src/index.ts report <dir>            # draws trends from accumulated snapshots
 ```
 
 ## What it collects
@@ -61,7 +62,8 @@ bun run src/index.ts full --ref <ref> --prometheus http://localhost:9090
 - **Config** - Postgres version + upgrade drift, disk spec/util, pooler mode, PG tuning params (`pg_settings`)
 - **Inventory** - edge functions (with per-function invocation stats: request
   volume, 5xx rate, execution time), storage buckets + object usage
-- **Infra metrics** - point-in-time snapshot; optional 30-day trends via `--prometheus`
+- **Infra metrics** - full node_exporter family set (CPU/disk/network counters
+  included) point-in-time; 30-day trends accumulate via `snapshot` (see below)
 
 Reports are structured as a pyramid: a ranked **findings summary** (Performance / Security / Capacity) up top, then infrastructure, then collapsible evidence drill-downs. Paused/unreachable projects render an honest degraded state, not misleading empties.
 
@@ -78,14 +80,42 @@ Management API per run and never written to disk.
 
 ## 30-day trends
 
-The metrics endpoint is point-in-time only. For real time-series history:
+No Supabase API returns 30 days of infra history - the metrics endpoint is a
+point-in-time scrape, and the analytics endpoints cap around 24h. Time series
+**must** be accumulated going forward. sbperf is its own collector: no
+Prometheus, no Grafana.
 
 ```bash
-bun run src/index.ts scrape-init --ref <ref>   # writes scraper-live/
-cd scraper-live && docker compose up -d         # Prometheus + Grafana, 90d retention
+# schedule this (e.g. hourly cron / systemd timer):
+bun run src/index.ts snapshot --ref <ref>
+#   -> collects a full snapshot, appends to ~/.sbperf/history.db (SQLite),
+#      prunes snapshots older than 90 days (--retention-days N, 0 = keep all)
+
+# then any report draws trends from whatever history has accumulated:
+bun run src/index.ts report <dir>
 ```
 
-History accumulates from when you start scraping - it is not retroactive.
+Trends need >=2 snapshots to compute rates. Gauges (load, free memory/disk, DB
+size) plot directly; **counters** (`node_cpu_*`, `node_disk_*`, `node_network_*`)
+become CPU utilization %, disk IOPS, and throughput once two snapshots exist -
+exactly the panels a Grafana node_exporter dashboard shows. History is not
+retroactive; it accrues from your first `snapshot`.
+
+Flags: `--store <db>` (default `~/.sbperf/history.db`, keyed by ref so one
+store holds every project), `--retention-days <n>`.
+
+### Alternate source: an existing Prometheus
+
+If you already run Prometheus scraping the metrics endpoint, skip the store and
+pull trends from it instead:
+
+```bash
+bun run src/index.ts scrape-init --ref <ref>   # writes scraper-live/ (Prometheus + Grafana)
+cd scraper-live && docker compose up -d
+bun run src/index.ts full --ref <ref> --prometheus http://localhost:9090
+```
+
+`--prometheus` trends take precedence over the history store when both exist.
 
 ## Troubleshooting
 

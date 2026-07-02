@@ -43,8 +43,30 @@
   this creates is now covered by the CI API-drift check (scripts/check-api-
   drift.ts) against the upstream OpenAPI spec - no manual tracking, no CLI dep.
 
+## SQLite-backed trends (done) - sbperf is its own collector
+- [x] `snapshot` command: full collect -> append to a SQLite history store
+      (`~/.sbperf/history.db`, keyed by ref), prune to --retention-days (default 90)
+- [x] store.ts: HistoryStore (record/loadForTrends/snapshotCount/prune/latestAnalysis),
+      full Analysis JSON retained + metric_samples/sql_scalars denormalized for cheap
+      trend queries; ON DELETE CASCADE
+- [x] trends.ts: pure computeTrends - gauges (one point/snapshot) + counter-derived
+      rates (CPU util %, disk IOPS, disk/network throughput) across >=2 snapshots,
+      counter-reset-safe
+- [x] widened metrics allowlist to keep the counter families (node_cpu/disk/network)
+      so rates are computable - a single scrape of a counter is meaningless
+- [x] `report` fills trends from the store when no --prometheus trends are baked in;
+      --prometheus stays as the alternate source and takes precedence
+- [x] verified live end-to-end (example-project): 2 snapshots -> store (140 samples, both
+      scalars) -> report renders all 13 trend series. Rapid back-to-back snapshots
+      show 0 rates because Supabase's scrape interval is coarser than the gap
+      (identical counters -> zero delta); hourly cron produces real rates.
+
+WHY no API-only 30-day path: verified the metrics endpoint takes no time param
+(point-in-time scrape) and the analytics endpoints cap ~24h. 30-day series MUST
+be accumulated going forward - so sbperf accumulates it, no Prom/Grafana needed.
+
 ## Deferred (needs a precondition)
-- Richer disk/IO beyond IOPS (latency, queue depth) - needs sustained scraper
+- Richer disk/IO beyond IOPS (latency, queue depth) - needs sustained snapshot
   history to be meaningful.
 
 ## Comprehensive inspect-parity (done)

@@ -9,7 +9,9 @@ import { Management } from "./management.ts";
 import { htmlToPdf } from "./report/pdf.ts";
 import { type IndexRow, render, renderIndex, renderSummary } from "./report/render.ts";
 import { writeScraper } from "./scraper.ts";
+import { DEFAULT_STORE, HistoryStore } from "./store.ts";
 import { makeTransport } from "./transport.ts";
+import { computeTrends } from "./trends.ts";
 
 const VERSION = pkg.version;
 
@@ -23,12 +25,19 @@ Usage:
   sbperf pdf      <dir>                        analysis.json -> report.pdf + summary.pdf
   sbperf full     --ref <ref> [--out <dir>]    analyze + report + pdf
   sbperf full     --all [--org <slug>]         audit every project + index.html
+  sbperf snapshot --ref <ref> [--store <db>]   collect + append to the history store
   sbperf scrape-init --ref <ref> [--dir <d>]   write the Prometheus+Grafana stack
 
 Flags:
-  --prometheus <url>   embed 30-day trend charts from a scraper's Prometheus
+  --store <db>         history SQLite file (default ~/.sbperf/history.db)
+  --retention-days <n> snapshot: prune snapshots older than n days (default 90, 0=keep)
+  --prometheus <url>   trends from a scraper's Prometheus instead of the history store
   -h, --help           show this help
   -v, --version        print version
+
+30-day trends: run 'sbperf snapshot' on a schedule (e.g. hourly cron) to
+accumulate history, then 'sbperf report <dir>' draws trends from the store.
+No Prometheus/Grafana needed - sbperf is the collector, SQLite is the store.
 
 <ref> is your project ref (dashboard URL, or 'supabase projects list').
 Auth: set SUPABASE_ACCESS_TOKEN (see .env.example).`);
@@ -43,6 +52,8 @@ type Flags = {
   org?: string;
   all?: boolean;
   prometheus?: string;
+  store?: string;
+  retentionDays?: number;
 };
 function parseFlags(argv: string[]): Flags {
   const out: Flags = { _: [] };
@@ -54,6 +65,8 @@ function parseFlags(argv: string[]): Flags {
     else if (a === "--dir") out.dir = argv[++i];
     else if (a === "--org") out.org = argv[++i];
     else if (a === "--prometheus") out.prometheus = argv[++i];
+    else if (a === "--store") out.store = argv[++i];
+    else if (a === "--retention-days") out.retentionDays = Number(argv[++i]);
     else if (a === "--all") out.all = true;
     else if (a?.startsWith("--")) usage();
     else if (a) out._.push(a);
@@ -155,8 +168,64 @@ async function loadAnalysis(dir: string) {
   return Analysis.parse(await Bun.file(path).json());
 }
 
-async function doReport(dir: string): Promise<string> {
+/**
+ * Collect a fresh snapshot and append it to the history store. Meant for a
+ * schedule (hourly cron); trends accrue as snapshots accumulate. Also writes
+ * analysis.json so the run doubles as a one-shot analyze.
+ */
+async function doSnapshot(
+  ref: string,
+  outDir: string,
+  storePath: string,
+  retentionDays: number,
+): Promise<void> {
+  const transport = makeTransport(loadCfg());
+  console.error(`> snapshot ${ref} via the Management API`);
+  const analysis = await collect(ref, transport, VERSION);
+  await mkdir(outDir, { recursive: true });
+  await Bun.write(join(outDir, "analysis.json"), JSON.stringify(analysis, null, 2));
+
+  const store = HistoryStore.open(storePath);
+  try {
+    store.record(analysis);
+    const pruned = retentionDays > 0 ? store.prune(ref, retentionDays) : 0;
+    const n = store.snapshotCount(ref);
+    console.error(
+      `> stored -> ${storePath} (${n} snapshot${n === 1 ? "" : "s"} for ${ref}${pruned ? `, pruned ${pruned}` : ""})`,
+    );
+    console.error(
+      n >= 2
+        ? "> run 'sbperf report' to render trends from accumulated history"
+        : "> trends need >=2 snapshots; schedule this command to accumulate history",
+    );
+  } finally {
+    store.close();
+  }
+}
+
+/**
+ * Fill analysis.trends from the history store when no scraper-sourced trends
+ * are already baked in (i.e. analyze wasn't run with --prometheus). Reads the
+ * store read-only; needs >=2 snapshots for the ref to compute any rate series.
+ */
+function fillTrendsFromStore(
+  analysis: Awaited<ReturnType<typeof loadAnalysis>>,
+  storePath: string,
+) {
+  if (analysis.trends.length) return; // scraper trends win if present
+  const store = HistoryStore.open(storePath);
+  try {
+    const snaps = store.loadForTrends(analysis.meta.ref);
+    if (snaps.length >= 2) analysis.trends = computeTrends(snaps);
+  } finally {
+    store.close();
+  }
+}
+
+async function doReport(dir: string, storePath?: string): Promise<string> {
   const analysis = await loadAnalysis(dir);
+  const path = storePath ?? DEFAULT_STORE;
+  if (await Bun.file(path).exists()) fillTrendsFromStore(analysis, path);
   const htmlPath = join(dir, "report.html");
   await Bun.write(htmlPath, render(analysis));
   const summaryPath = join(dir, "summary.html");
@@ -205,7 +274,17 @@ async function main(): Promise<void> {
       case "report": {
         const dir = flags._[0];
         if (!dir) usage();
-        await doReport(dir);
+        await doReport(dir, flags.store);
+        break;
+      }
+      case "snapshot": {
+        if (!flags.ref) usage();
+        await doSnapshot(
+          flags.ref,
+          flags.out ?? defaultOut(flags.ref),
+          flags.store ?? DEFAULT_STORE,
+          flags.retentionDays ?? 90,
+        );
         break;
       }
       case "summary": {

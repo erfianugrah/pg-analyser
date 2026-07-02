@@ -51,6 +51,33 @@ describe("curate", () => {
     expect(names.has("node_vmstat_pgmajfault")).toBe(false); // long tail dropped
   });
 
+  // Counter families are kept for the SQLite trend path (rate-able across >=2
+  // snapshots). A single scrape value is meaningless, but curate must not drop
+  // them or CPU%/IOPS/throughput trends become uncomputable.
+  test("keeps rate-able counter families", () => {
+    const counters = `node_cpu_seconds_total{cpu="0",mode="idle"} 7.2e+06
+node_disk_reads_completed_total{device="nvme0n1"} 3.8e+06
+node_disk_writes_completed_total{device="nvme0n1"} 1.2e+06
+node_disk_read_bytes_total{device="nvme0n1"} 9.9e+09
+node_disk_written_bytes_total{device="nvme0n1"} 8.8e+09
+node_disk_io_time_seconds_total{device="nvme0n1"} 12345
+node_network_receive_bytes_total{device="ens5"} 4.8e+09
+node_network_transmit_bytes_total{device="ens5"} 3.2e+09`;
+    const names = new Set(curate(parsePrometheus(counters)).map((x) => x.name));
+    for (const n of [
+      "node_cpu_seconds_total",
+      "node_disk_reads_completed_total",
+      "node_disk_writes_completed_total",
+      "node_disk_read_bytes_total",
+      "node_disk_written_bytes_total",
+      "node_disk_io_time_seconds_total",
+      "node_network_receive_bytes_total",
+      "node_network_transmit_bytes_total",
+    ]) {
+      expect(names.has(n)).toBe(true);
+    }
+  });
+
   // Guard against allowlist rot: these are the CURRENT (2026-07) exporter names
   // after Supabase renames. If Supabase renames again, this fails loudly rather
   // than silently dropping the metric (as pgbouncer_pools_cl_* did before).
