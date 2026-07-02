@@ -104,10 +104,10 @@ async function main(): Promise<void> {
     for (const e of a.errors) console.log(`  ${DIM}${e.source}:${RESET} ${e.message}`);
   }
 
+  const banner = hardFail ? `${RED}SMOKE FAILED` : `${GREEN}SMOKE OK`;
+  const advisors = a.advisors.performance.length + a.advisors.security.length;
   console.log(
-    `\n${hardFail ? RED + "SMOKE FAILED" : GREEN + "SMOKE OK"}${RESET} - ` +
-      `${a.advisors.performance.length + a.advisors.security.length} advisors, ` +
-      `${a.metrics.samples.length} metrics, ${a.errors.length} notes\n`,
+    `\n${banner}${RESET} - ${advisors} advisors, ${a.metrics.samples.length} metrics, ${a.errors.length} notes\n`,
   );
   process.exit(hardFail ? 1 : 0);
 }

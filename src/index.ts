@@ -13,7 +13,7 @@ import { makeTransport } from "./transport.ts";
 
 const VERSION = pkg.version;
 
-function usage(): never {
+function usage(code = 1): never {
   console.log(`sbperf ${VERSION} - Supabase performance analysis
 
 Usage:
@@ -24,8 +24,14 @@ Usage:
   sbperf full     --all [--org <slug>]         audit every project + index.html
   sbperf scrape-init --ref <ref> [--dir <d>]   write the Prometheus+Grafana stack
 
+Flags:
+  --prometheus <url>   embed 30-day trend charts from a scraper's Prometheus
+  -h, --help           show this help
+  -v, --version        print version
+
+<ref> is your project ref (dashboard URL, or 'supabase projects list').
 Auth: set SUPABASE_ACCESS_TOKEN (see .env.example).`);
-  process.exit(1);
+  process.exit(code);
 }
 
 type Flags = {
@@ -41,7 +47,8 @@ function parseFlags(argv: string[]): Flags {
   const out: Flags = { _: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === "--ref") out.ref = argv[++i];
+    if (a === "--help" || a === "-h") usage(0);
+    else if (a === "--ref") out.ref = argv[++i];
     else if (a === "--out") out.out = argv[++i];
     else if (a === "--dir") out.dir = argv[++i];
     else if (a === "--org") out.org = argv[++i];
@@ -127,8 +134,13 @@ async function doAnalyze(ref: string, outDir: string, prometheusUrl?: string): P
 
 async function loadAnalysis(dir: string) {
   const { Analysis } = await import("./schemas.ts");
-  const raw = await Bun.file(join(dir, "analysis.json")).json();
-  return Analysis.parse(raw);
+  const path = join(dir, "analysis.json");
+  if (!(await Bun.file(path).exists())) {
+    throw new Error(
+      `no analysis.json in ${dir} - run 'sbperf analyze --ref <ref> --out ${dir}' first`,
+    );
+  }
+  return Analysis.parse(await Bun.file(path).json());
 }
 
 async function doReport(dir: string): Promise<string> {
@@ -152,6 +164,11 @@ async function doPdf(dir: string): Promise<string> {
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const cmd = argv[0];
+  if (cmd === "--version" || cmd === "-v") {
+    console.log(VERSION);
+    process.exit(0);
+  }
+  if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") usage(0);
   const flags = parseFlags(argv.slice(1));
 
   try {
@@ -197,11 +214,9 @@ async function main(): Promise<void> {
         usage();
     }
   } catch (err) {
-    if (err instanceof ConfigError) {
-      console.error(`config error: ${err.message}`);
-    } else {
-      console.error(err instanceof Error ? (err.stack ?? err.message) : String(err));
-    }
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(err instanceof ConfigError ? `config error: ${msg}` : `error: ${msg}`);
+    if (process.env.SBPERF_DEBUG && err instanceof Error) console.error(err.stack);
     process.exit(1);
   }
 }

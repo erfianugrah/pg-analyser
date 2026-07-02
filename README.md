@@ -10,6 +10,8 @@ connection string, no screenshots.
 
 ## Quick start
 
+Needs [Bun](https://bun.sh) (`curl -fsSL https://bun.sh/install | bash`).
+
 ```bash
 bun install
 cp .env.example .env          # add SUPABASE_ACCESS_TOKEN
@@ -19,12 +21,16 @@ bun run src/index.ts full --ref <project-ref>
 # -> reports/<ref>-<ts>/{analysis.json, report.html, report.pdf}
 ```
 
+Your **project ref** is the 20-char id in the dashboard URL
+(`supabase.com/dashboard/project/<ref>`) or from `supabase projects list`.
+Run `sbperf --help` for the full command list.
+
 Or step by step:
 
 ```bash
-bun run src/index.ts analyze --ref <ref> --out ./reports/acme
-bun run src/index.ts report ./reports/acme     # HTML
-bun run src/index.ts pdf    ./reports/acme     # PDF
+bun run src/index.ts analyze --ref <ref> --out ./reports/myproject
+bun run src/index.ts report ./reports/myproject     # HTML
+bun run src/index.ts pdf    ./reports/myproject     # PDF
 ```
 
 Audit every project in the account (writes an `index.html` linking them all):
@@ -67,6 +73,16 @@ cd scraper-live && docker compose up -d         # Prometheus + Grafana, 90d rete
 ```
 
 History accumulates from when you start scraping - it is not retroactive.
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| `SUPABASE_ACCESS_TOKEN is required` | Set the PAT (https://supabase.com/dashboard/account/tokens). |
+| `cannot read project <ref>` / 401 | Wrong ref or the token lacks access to that project's org. |
+| `no Chrome/Chromium found` | Install `chromium`, or `export SBPERF_CHROME=/path/to/chrome`. `analyze`/`report` work without it - only `pdf` needs it. |
+| `no analysis.json in <dir>` | Run `analyze` (or `full`) before `report`/`pdf`. |
+| Report shows a degraded/empty state | Project is paused or unreachable - empty sections mean "not collected", not "clean". The collection-notes section lists why. |
 
 ## Development
 

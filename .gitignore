@@ -6,7 +6,7 @@ node_modules/
 .env.*
 !.env.example
 
-# generated reports contain customer query text - never commit
+# generated reports contain live query text - never commit
 reports/
 out/
 *.report.html
