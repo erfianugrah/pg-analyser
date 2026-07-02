@@ -99,6 +99,19 @@ src/
 
 ## Conventions
 
+- **Derive checks from upstream source; never depend on the CLI at runtime.**
+  sbperf stays API-first (Management API + read-only/superuser SQL + the metrics
+  endpoint) so it syncs with upstream and doesn't inherit the CLI's release lag.
+  But when writing a diagnostic, PORT the actual query from the canonical source
+  rather than hand-rolling: `supabase/cli` `apps/cli-go/internal/inspect/*/*.sql`
+  for inspect-style diagnostics, and `supabase/splinter` (`splinter.sql`, already
+  vendored) for advisor lints. Hand-rolled reimplementations drift and get subtly
+  wrong - e.g. the RLS unwrapped-auth check false-flagged correctly-wrapped
+  policies until it was aligned to how Postgres actually stores the expression.
+  Only write ORIGINAL checks where upstream has a real gap AND the Postgres docs
+  justify it (e.g. the txid-wraparound check the CLI's vacuum-stats lacks).
+
+
 - Every API response has a zod schema in `schemas.ts`. **Never use `.default([])`
   to paper over a shape mismatch** - it silently masks upstream changes. Use
   `.refine()` to fail loud, then let `collect.ts`'s per-source `safe()` wrapper
