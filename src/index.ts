@@ -66,7 +66,7 @@ async function doAll(
   outBase: string,
   prometheusUrl?: string,
 ): Promise<void> {
-  const transport = makeTransport(loadConfig());
+  const transport = makeTransport(loadCfg());
   const m = new Management(transport);
   let projects = await m.projects();
   if (orgFilter) projects = projects.filter((p) => p.organization_id === orgFilter);
@@ -82,9 +82,11 @@ async function doAll(
       await mkdir(dir, { recursive: true });
       await Bun.write(join(dir, "analysis.json"), JSON.stringify(analysis, null, 2));
       const html = render(analysis);
+      const summaryHtml = renderSummary(analysis);
       await Bun.write(join(dir, "report.html"), html);
-      await Bun.write(join(dir, "summary.html"), renderSummary(analysis));
+      await Bun.write(join(dir, "summary.html"), summaryHtml);
       await htmlToPdf(html, join(dir, "report.pdf"));
+      await htmlToPdf(summaryHtml, join(dir, "summary.pdf"));
       const f = deriveFindings(analysis);
       rows.push({
         name: p.name,
@@ -116,13 +118,21 @@ async function doAll(
   console.error(`> index: ${join(outBase, "index.html")}`);
 }
 
+/** Load config and print a one-line notice when the CLI token is the source. */
+function loadCfg() {
+  const cfg = loadConfig();
+  if (cfg.tokenSource === "cli")
+    console.error("> auth: using Supabase CLI token (~/.supabase/access-token)");
+  return cfg;
+}
+
 function defaultOut(ref: string): string {
   const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   return join("reports", `${ref}-${ts}`);
 }
 
 async function doAnalyze(ref: string, outDir: string, prometheusUrl?: string): Promise<string> {
-  const transport = makeTransport(loadConfig());
+  const transport = makeTransport(loadCfg());
   console.error(`> analyzing ${ref} via the Management API`);
   const analysis = await collect(ref, transport, VERSION, { prometheusUrl });
   await mkdir(outDir, { recursive: true });
@@ -226,7 +236,7 @@ async function main(): Promise<void> {
       }
       case "scrape-init": {
         if (!flags.ref) usage();
-        const dir = await writeScraper(flags.ref, loadConfig(), flags.dir ?? "scraper-live");
+        const dir = await writeScraper(flags.ref, loadCfg(), flags.dir ?? "scraper-live");
         console.error(`> wrote scraper stack to ${dir} - cd there and 'docker compose up -d'`);
         break;
       }

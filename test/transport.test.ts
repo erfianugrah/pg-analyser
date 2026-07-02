@@ -24,7 +24,7 @@ afterEach(() => {
 describe("DirectTransport", () => {
   test("mgmt hits api.supabase.com with Bearer PAT", async () => {
     mockFetch(() => jsonResponse({ ok: true }));
-    const t = makeTransport({ accessToken: "sbp_secret" });
+    const t = makeTransport({ accessToken: "sbp_secret", tokenSource: "env" });
     await t.mgmt("/v1/projects/ref");
     expect(calls[0]?.url).toBe("https://api.supabase.com/v1/projects/ref");
     expect((calls[0]?.init?.headers as Record<string, string>).Authorization).toBe(
@@ -39,7 +39,7 @@ describe("DirectTransport", () => {
       }
       return textResponse("# prometheus");
     });
-    const t = makeTransport({ accessToken: "sbp_x" });
+    const t = makeTransport({ accessToken: "sbp_x", tokenSource: "env" });
     await t.metrics("myref");
     await t.metrics("myref");
 
@@ -60,7 +60,7 @@ describe("fetchRetry", () => {
       n++;
       return n === 1 ? textResponse("rate limited", 429) : jsonResponse({ ok: true });
     });
-    const t = makeTransport({ accessToken: "sbp_x" });
+    const t = makeTransport({ accessToken: "sbp_x", tokenSource: "env" });
     const res = await t.mgmt("/v1/x");
     expect(res.status).toBe(200);
     expect(n).toBe(2);
@@ -72,7 +72,7 @@ describe("fetchRetry", () => {
       n++;
       return textResponse('{"message":"connection timeout"}', 544);
     });
-    const t = makeTransport({ accessToken: "sbp_x" });
+    const t = makeTransport({ accessToken: "sbp_x", tokenSource: "env" });
     const res = await t.mgmt("/v1/x");
     expect(res.status).toBe(544);
     expect(n).toBe(1); // single attempt, no retry storm on a paused project
@@ -84,7 +84,7 @@ describe("fetchRetry", () => {
       n++;
       return textResponse("boom", 500);
     });
-    const t = makeTransport({ accessToken: "sbp_x" });
+    const t = makeTransport({ accessToken: "sbp_x", tokenSource: "env" });
     await t.mgmt("/v1/x");
     expect(n).toBe(1);
   });

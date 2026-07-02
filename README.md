@@ -67,7 +67,12 @@ Reports are structured as a pyramid: a ranked **findings summary** (Performance 
 
 ## Auth
 
-Set `SUPABASE_ACCESS_TOKEN` (a Personal Access Token). The per-project
+Either:
+- set `SUPABASE_ACCESS_TOKEN` (a Personal Access Token), or
+- just run `supabase login` - sbperf reads the CLI's stored token from
+  `~/.supabase/access-token` automatically when the env var is unset.
+
+(Resolution order: env var first, then the CLI token.) The per-project
 service_role key used for the metrics endpoint is auto-fetched via the
 Management API per run and never written to disk.
 
