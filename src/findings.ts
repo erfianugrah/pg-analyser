@@ -166,6 +166,18 @@ export function deriveFindings(a: Analysis): Finding[] {
       anchor: "#metrics",
     });
   }
+  // Disk IOPS headroom (needs a Prometheus scraper for the rate; trends-derived).
+  const latestTrend = (title: string) =>
+    a.trends.find((t) => t.title === title)?.points.at(-1)?.v ?? 0;
+  const iops = latestTrend("Disk read IOPS") + latestTrend("Disk write IOPS");
+  if (a.disk?.iops && iops >= a.disk.iops * 0.8) {
+    out.push({
+      severity: "med",
+      category: "Capacity",
+      title: `Disk IOPS at ${Math.round((iops / a.disk.iops) * 100)}% of provisioned (${Math.round(iops)}/${a.disk.iops})`,
+      anchor: "#trends",
+    });
+  }
 
   out.sort(
     (x, y) =>

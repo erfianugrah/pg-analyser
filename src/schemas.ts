@@ -151,7 +151,6 @@ export const Analysis = z.object({
     pgVersion: z.string().nullable(),
     createdAt: z.string(),
     collectedAt: z.string(),
-    transport: z.enum(["direct", "gatekeeper"]),
     sbperfVersion: z.string(),
   }),
   health: HealthList,

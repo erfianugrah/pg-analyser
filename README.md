@@ -12,7 +12,7 @@ connection string, no screenshots.
 
 ```bash
 bun install
-cp .env.example .env          # add SUPABASE_ACCESS_TOKEN (or Gatekeeper creds)
+cp .env.example .env          # add SUPABASE_ACCESS_TOKEN
 # PDF needs a system Chrome/Chromium on PATH (or set SBPERF_CHROME)
 
 bun run src/index.ts full --ref <project-ref>
@@ -51,12 +51,11 @@ bun run src/index.ts full --ref <ref> --prometheus http://localhost:9090
 
 Reports are structured as a pyramid: a ranked **findings summary** (Performance / Security / Capacity) up top, then infrastructure, then collapsible evidence drill-downs. Paused/unreachable projects render an honest degraded state, not misleading empties.
 
-## Transports
+## Auth
 
-| Mode | Env | Notes |
-|---|---|---|
-| direct | `SUPABASE_ACCESS_TOKEN` | service_role for metrics is auto-fetched per run, never written to disk |
-| gatekeeper | `GATEKEEPER_URL` + `GATEKEEPER_KEY` | one narrow IAM key; never touches the PAT or service_role |
+Set `SUPABASE_ACCESS_TOKEN` (a Personal Access Token). The per-project
+service_role key used for the metrics endpoint is auto-fetched via the
+Management API per run and never written to disk.
 
 ## 30-day trends
 

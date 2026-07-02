@@ -15,6 +15,8 @@ const PANELS: Array<{ title: string; unit: string; query: string }> = [
     unit: "bytes",
     query: 'avg(node_filesystem_avail_bytes{mountpoint="/data"})',
   },
+  { title: "Disk read IOPS", unit: "", query: "sum(rate(node_disk_reads_completed_total[5m]))" },
+  { title: "Disk write IOPS", unit: "", query: "sum(rate(node_disk_writes_completed_total[5m]))" },
   { title: "Deadlocks", unit: "", query: "sum(pg_stat_database_deadlocks)" },
 ];
 

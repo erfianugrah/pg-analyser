@@ -24,9 +24,7 @@ Usage:
   sbperf full     --all [--org <slug>]         audit every project + index.html
   sbperf scrape-init --ref <ref> [--dir <d>]   write the Prometheus+Grafana stack
 
-Transport (auto-detected from env; see .env.example):
-  direct      SUPABASE_ACCESS_TOKEN
-  gatekeeper  GATEKEEPER_URL + GATEKEEPER_KEY`);
+Auth: set SUPABASE_ACCESS_TOKEN (see .env.example).`);
   process.exit(1);
 }
 
@@ -65,7 +63,7 @@ async function doAll(
   let projects = await m.projects();
   if (orgFilter) projects = projects.filter((p) => p.organization_id === orgFilter);
   if (!projects.length) throw new Error("no projects found");
-  console.error(`> auditing ${projects.length} projects via ${transport.kind} transport`);
+  console.error(`> auditing ${projects.length} projects via the Management API`);
 
   const rows: IndexRow[] = [];
   for (const p of projects) {
@@ -116,7 +114,7 @@ function defaultOut(ref: string): string {
 
 async function doAnalyze(ref: string, outDir: string, prometheusUrl?: string): Promise<string> {
   const transport = makeTransport(loadConfig());
-  console.error(`> analyzing ${ref} via ${transport.kind} transport`);
+  console.error(`> analyzing ${ref} via the Management API`);
   const analysis = await collect(ref, transport, VERSION, { prometheusUrl });
   await mkdir(outDir, { recursive: true });
   const jsonPath = join(outDir, "analysis.json");

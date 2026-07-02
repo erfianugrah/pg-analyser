@@ -16,13 +16,11 @@ export type MetricsHandler = (ref: string) => Response;
 
 /** A Transport whose behaviour is fully controlled by handlers, recording calls. */
 export function fakeTransport(opts: {
-  kind?: "direct" | "gatekeeper";
   onMgmt: MgmtHandler;
   onMetrics?: MetricsHandler;
 }): Transport & { calls: { mgmt: string[]; metrics: string[] } } {
   const calls = { mgmt: [] as string[], metrics: [] as string[] };
   return {
-    kind: opts.kind ?? "direct",
     calls,
     async mgmt(path, init) {
       calls.mgmt.push(path);

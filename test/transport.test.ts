@@ -24,7 +24,7 @@ afterEach(() => {
 describe("DirectTransport", () => {
   test("mgmt hits api.supabase.com with Bearer PAT", async () => {
     mockFetch(() => jsonResponse({ ok: true }));
-    const t = makeTransport({ kind: "direct", accessToken: "sbp_secret" });
+    const t = makeTransport({ accessToken: "sbp_secret" });
     await t.mgmt("/v1/projects/ref");
     expect(calls[0]?.url).toBe("https://api.supabase.com/v1/projects/ref");
     expect((calls[0]?.init?.headers as Record<string, string>).Authorization).toBe(
@@ -39,7 +39,7 @@ describe("DirectTransport", () => {
       }
       return textResponse("# prometheus");
     });
-    const t = makeTransport({ kind: "direct", accessToken: "sbp_x" });
+    const t = makeTransport({ accessToken: "sbp_x" });
     await t.metrics("myref");
     await t.metrics("myref");
 
@@ -53,32 +53,6 @@ describe("DirectTransport", () => {
   });
 });
 
-describe("GatekeeperTransport", () => {
-  test("mgmt prefixes /supabase and uses the gatekeeper key", async () => {
-    mockFetch(() => jsonResponse({ ok: true }));
-    const t = makeTransport({
-      kind: "gatekeeper",
-      baseUrl: "https://gate.example.com",
-      key: "gk_x",
-    });
-    await t.mgmt("/v1/projects/ref");
-    expect(calls[0]?.url).toBe("https://gate.example.com/supabase/v1/projects/ref");
-    expect((calls[0]?.init?.headers as Record<string, string>).Authorization).toBe("Bearer gk_x");
-  });
-
-  test("metrics uses the /supabase/metrics/:ref path (no service_role)", async () => {
-    mockFetch(() => textResponse("# prometheus"));
-    const t = makeTransport({
-      kind: "gatekeeper",
-      baseUrl: "https://gate.example.com",
-      key: "gk_x",
-    });
-    await t.metrics("myref");
-    expect(calls[0]?.url).toBe("https://gate.example.com/supabase/metrics/myref");
-    expect(calls.some((c) => c.url.includes("/api-keys"))).toBe(false);
-  });
-});
-
 describe("fetchRetry", () => {
   test("retries on 429 then succeeds", async () => {
     let n = 0;
@@ -86,7 +60,7 @@ describe("fetchRetry", () => {
       n++;
       return n === 1 ? textResponse("rate limited", 429) : jsonResponse({ ok: true });
     });
-    const t = makeTransport({ kind: "direct", accessToken: "sbp_x" });
+    const t = makeTransport({ accessToken: "sbp_x" });
     const res = await t.mgmt("/v1/x");
     expect(res.status).toBe(200);
     expect(n).toBe(2);
@@ -98,7 +72,7 @@ describe("fetchRetry", () => {
       n++;
       return textResponse('{"message":"connection timeout"}', 544);
     });
-    const t = makeTransport({ kind: "direct", accessToken: "sbp_x" });
+    const t = makeTransport({ accessToken: "sbp_x" });
     const res = await t.mgmt("/v1/x");
     expect(res.status).toBe(544);
     expect(n).toBe(1); // single attempt, no retry storm on a paused project
@@ -110,7 +84,7 @@ describe("fetchRetry", () => {
       n++;
       return textResponse("boom", 500);
     });
-    const t = makeTransport({ kind: "direct", accessToken: "sbp_x" });
+    const t = makeTransport({ accessToken: "sbp_x" });
     await t.mgmt("/v1/x");
     expect(n).toBe(1);
   });

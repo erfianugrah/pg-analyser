@@ -357,8 +357,7 @@ ${a.errors.length ? `<h2>Collection notes <span class=count>${a.errors.length}</
 <div class=meta>
   <code>${esc(m.name)}</code> (${esc(m.ref)}) &middot; ${esc(m.region)} &middot;
   status <code>${esc(m.status)}</code> &middot;
-  collected <code>${esc(m.collectedAt)}</code> &middot;
-  transport <code>${esc(m.transport)}</code> &middot; sbperf <code>${esc(m.sbperfVersion)}</code>
+  collected <code>${esc(m.collectedAt)}</code> &middot; sbperf <code>${esc(m.sbperfVersion)}</code>
 </div>
 ${banner}
 ${sections}

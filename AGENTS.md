@@ -28,24 +28,19 @@ HTML + PDF report. No superuser `--db-url`, no manual Grafana screenshots.
 
 PDF needs a system Chrome/Chromium on PATH (`chromium`, `google-chrome`, ...) or `SBPERF_CHROME=/path/to/chrome`. `analyze`/`report` need no browser.
 
-## Transports
+## Auth
 
-Auto-detected from env (`GATEKEEPER_URL` set -> gatekeeper, else direct;
-override with `SBPERF_TRANSPORT`). See `.env.example`.
-
-- **direct** - `SUPABASE_ACCESS_TOKEN`; hits `api.supabase.com` and
-  `<ref>.supabase.co` metrics (service_role auto-fetched per run, never stored).
-- **gatekeeper** - `GATEKEEPER_URL` + `GATEKEEPER_KEY`; proxies through the
-  Gatekeeper IAM gateway (`/supabase/v1/*`, `/supabase/metrics/:ref`). One narrow
-  key replaces both the PAT and the service_role secret - Gatekeeper swaps the
-  real upstream credentials in server-side. See `~/gatekeeper`.
+Set `SUPABASE_ACCESS_TOKEN` (Personal Access Token). Hits `api.supabase.com`
+and the `<ref>.supabase.co` metrics endpoint (service_role auto-fetched per run
+via the Management API, never stored). The `Transport` interface exists mainly
+so tests can inject a fake; there is one impl (`DirectTransport`).
 
 ## Architecture (bounded contexts)
 
 ```
 src/
-  config.ts      zod env -> TransportConfig (direct | gatekeeper)
-  transport.ts   Transport interface + Direct/Gatekeeper impls (auth + base URLs)
+  config.ts      zod env -> Config (access token)
+  transport.ts   Transport interface + DirectTransport (auth + retry)
   management.ts  typed, zod-parsed Management API wrapper
   sql.ts         the perf query set (pg_stat_statements, seq_scan, n_dead_tup, ...)
   metrics.ts     Prometheus text parser + curated allowlist
@@ -81,4 +76,3 @@ src/
 - `~/.pi/agent/skills/supabase-postgres-best-practices` - source of the perf queries
 - `~/.pi/agent/skills/supabase` - API/CLI/auth reference
 - `~/.pi/agent/skills/design-utilitarian` - report visual ethos
-- `~/gatekeeper` - the IAM gateway for gatekeeper transport
