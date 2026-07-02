@@ -21,3 +21,7 @@ scraper/data/
 # OS / editor
 .DS_Store
 *.swp
+
+# multi-db superuser targets (connstrings)
+sbperf.databases.json
+sbperf.databases.*.json

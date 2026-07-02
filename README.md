@@ -119,6 +119,33 @@ still used for the API planes (advisors, config, health) and the metrics
 endpoint. The connstring is a secret - it's read from the flag/env and never
 written to `analysis.json` (only which tier was used).
 
+#### Multiple databases
+
+`--db-url` is repeatable, and there's a gitignored config file. `full` sweeps
+them into per-DB report dirs + an `index.html`; `snapshot` records each into the
+history store. The Supabase project ref is auto-derived from each connstring
+(pooler `role.ref` username or `db.<ref>.supabase.co` host), so a bare list Just
+Works:
+
+```bash
+bun run src/index.ts full --db-url "$DB1" --db-url "$DB2"
+```
+
+Or a config file (`sbperf.databases.json`, gitignored - it holds connstrings):
+
+```json
+[
+  { "name": "prod", "dbUrl": "postgresql://supabase_admin.<ref>:...@...:5432/postgres" },
+  { "name": "legacy", "ref": "myref", "dbUrl": "postgresql://user:...@host:5432/db" }
+]
+```
+
+```bash
+bun run src/index.ts full --db-config sbperf.databases.json
+```
+
+`ref` is optional when derivable; set it explicitly for non-Supabase strings.
+
 ## 30-day trends
 
 No Supabase API returns 30 days of infra history - the metrics endpoint is a
