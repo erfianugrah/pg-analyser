@@ -29,10 +29,13 @@ function base(): Analysis {
       cacheHitPct: null,
       pgSettings: [],
       topStatements: [],
+      topByCalls: [],
       biggestTables: [],
       unusedIndexes: [],
       seqScanHeavy: [],
       deadTuples: [],
+      txidWraparound: [],
+      replicationSlots: [],
       rlsPolicies: [],
       connections: [],
       storageUsage: [],
@@ -127,6 +130,48 @@ describe("deriveFindings", () => {
     };
     a.trends = [{ title: "Disk read IOPS", unit: "", points: [{ t: 1, v: 100 }] }];
     expect(deriveFindings(a).some((x) => x.title.includes("Disk IOPS"))).toBe(false);
+  });
+
+  test("txid wraparound flagged high past 40%", () => {
+    const a = base();
+    a.sql.txidWraparound = [
+      { schema: "public", table: "public.events", xid_age: 900000000, pct_wraparound: 45 },
+      { schema: "public", table: "public.small", xid_age: 100, pct_wraparound: 0 },
+    ];
+    const f = deriveFindings(a).find((x) => x.anchor === "#txid");
+    expect(f?.severity).toBe("high");
+    expect(f?.category).toBe("Capacity");
+    expect(f?.title).toContain("45%");
+  });
+
+  test("txid wraparound med between 20-40%, none below 20%", () => {
+    const a = base();
+    a.sql.txidWraparound = [{ schema: "public", table: "public.x", pct_wraparound: 25 }];
+    expect(deriveFindings(a).find((x) => x.anchor === "#txid")?.severity).toBe("med");
+    a.sql.txidWraparound = [{ schema: "public", table: "public.x", pct_wraparound: 12 }];
+    expect(deriveFindings(a).some((x) => x.anchor === "#txid")).toBe(false);
+  });
+
+  test("inactive replication slot retaining WAL -> high Capacity finding", () => {
+    const a = base();
+    a.sql.replicationSlots = [
+      { slot_name: "cdc", slot_type: "logical", active: false, retained_wal_bytes: 5_000_000 },
+    ];
+    const f = deriveFindings(a).find((x) => x.anchor === "#slots");
+    expect(f?.severity).toBe("high");
+    expect(f?.title).toContain("1 inactive replication slot");
+  });
+
+  test("active slot lagging >1GB -> med; small lag ignored", () => {
+    const a = base();
+    a.sql.replicationSlots = [
+      { slot_name: "rep", slot_type: "physical", active: true, retained_wal_bytes: 2_147_483_648 },
+    ];
+    expect(deriveFindings(a).find((x) => x.anchor === "#slots")?.severity).toBe("med");
+    a.sql.replicationSlots = [
+      { slot_name: "rep", slot_type: "physical", active: true, retained_wal_bytes: 1000 },
+    ];
+    expect(deriveFindings(a).some((x) => x.anchor === "#slots")).toBe(false);
   });
 
   test("idle-in-transaction disabled flagged", () => {

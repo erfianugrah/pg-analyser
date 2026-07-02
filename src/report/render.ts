@@ -296,10 +296,13 @@ ${drill("rls", "RLS policies", "auth.*() should be wrapped: (select auth.uid())"
 <h2 id="adv-sec">Advisors - security <span class=count>${a.advisors.security.length}</span></h2>${errored.has("advisors:security") ? '<p class="empty warn-text">not collected</p>' : advisorTable(a.advisors.security)}
 
 ${drill("outliers", "Query outliers", outliersNote, sec(a.sql.topStatements, "sql:topStatements", { mono: ["query"], limit: 20 }))}
+${drill("calls", "Most-frequent queries", "by call count - chatty / hot-path (noise filtered)", sec(a.sql.topByCalls, "sql:topByCalls", { mono: ["query"], limit: 20 }))}
 ${drill("tables", "Biggest tables", "", sec(a.sql.biggestTables, "sql:biggestTables", { mono: ["table"], hide: ["schema"], limit: 20 }))}
 ${drill("unused", "Unused indexes", "idx_scan = 0, non-constraint", sec(a.sql.unusedIndexes, "sql:unusedIndexes", { mono: ["table", "index"], hide: ["schema"] }))}
 ${drill("seqscan", "Sequential-scan heavy", "seq_scan > idx_scan, >1k rows", sec(a.sql.seqScanHeavy, "sql:seqScanHeavy", { mono: ["table"], hide: ["schema"] }))}
 ${drill("deadtuples", "Dead tuples / autovacuum", "significant bloat only (>=1k dead, or >=100 & >=20%)", sec(a.sql.deadTuples, "sql:deadTuples", { mono: ["table"], hide: ["schema"] }))}
+${drill("txid", "Transaction-ID wraparound", "age(relfrozenxid) vs 2B ceiling; non-system tables", sec(a.sql.txidWraparound, "sql:txidWraparound", { mono: ["table"], hide: ["schema"] }))}
+${drill("slots", "Replication slots", "retained WAL; inactive slots pin disk", a.sql.replicationSlots.length ? sqlTable(a.sql.replicationSlots, { mono: ["slot_name"], hide: ["retained_wal_bytes"] }) : "<p class=empty>none</p>")}
 ${drill("connections", "Connections", "by state", sec(a.sql.connections, "sql:connections"))}
 ${drill("functions", "Edge functions", "", a.functions.length ? sqlTable(a.functions as unknown as SqlRow[], { mono: ["slug"] }) : "<p class=empty>none deployed</p>")}
 ${drill("storage", "Storage", "buckets + object usage", storageSection(a))}

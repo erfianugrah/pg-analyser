@@ -63,6 +63,20 @@ export const QUERIES = {
     order by total_exec_time desc
     limit 20`,
 
+  // Same workload, ranked by call count - surfaces chatty N+1 / hot-path
+  // statements that are individually cheap but dominate round-trips.
+  topByCalls: /* sql */ `
+    select
+      calls,
+      round(total_exec_time::numeric, 1) as total_ms,
+      round(mean_exec_time::numeric, 2) as mean_ms,
+      round((100 * calls / nullif(sum(calls) over (), 0))::numeric, 1) as pct_calls,
+      left(regexp_replace(query, '\\s+', ' ', 'g'), 160) as query
+    from extensions.pg_stat_statements
+    where query not ilike all (array[${PLATFORM_NOISE}])
+    order by calls desc
+    limit 20`,
+
   biggestTables: /* sql */ `
     select
       schemaname as schema,
@@ -145,6 +159,39 @@ export const QUERIES = {
     from storage.objects
     group by bucket_id
     order by coalesce(sum((metadata->>'size')::bigint), 0) desc`,
+
+  // Transaction-ID wraparound headroom. age(relfrozenxid) climbing toward 2.1B
+  // means autovacuum is falling behind on freezing; at the ceiling the DB force-
+  // stops writes. Scoped to non-system schemas (user-actionable); pct is against
+  // a 2B practical ceiling (autovacuum_freeze_max_age escalates well before).
+  txidWraparound: /* sql */ `
+    select
+      n.nspname as schema,
+      n.nspname || '.' || c.relname as table,
+      age(c.relfrozenxid) as xid_age,
+      round(100 * age(c.relfrozenxid)::numeric / 2000000000, 1) as pct_wraparound
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    where c.relkind in ('r', 'm')
+      and n.nspname not in ('pg_catalog', 'information_schema', 'pg_toast')
+      and age(c.relfrozenxid) > 0
+    order by age(c.relfrozenxid) desc
+    limit 20`,
+
+  // Replication slots + retained WAL. An INACTIVE slot pins WAL forever and can
+  // fill the disk; a lagging active slot signals a slow downstream consumer.
+  // Empty on projects with no logical replication / read replicas / CDC.
+  replicationSlots: /* sql */ `
+    select
+      slot_name,
+      slot_type,
+      active,
+      coalesce(pg_size_pretty(
+        pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)
+      ), '-') as retained_wal,
+      pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn) as retained_wal_bytes
+    from pg_replication_slots
+    order by pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn) desc nulls last`,
 
   connections: /* sql */ `
     select
