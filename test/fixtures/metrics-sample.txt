@@ -1,0 +1,374 @@
+# HELP node_filesystem_files_free Filesystem total free file nodes.
+# TYPE node_filesystem_files_free gauge
+node_filesystem_files_free{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="/dev/nvme0n1",device_error="",fstype="ext4",mountpoint="/data"} 522970
+node_filesystem_files_free{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="/dev/nvme1n1p2",device_error="",fstype="ext4",mountpoint="/"} 378620
+# HELP node_network_receive_frame_total Network device statistic receive_frame.
+# TYPE node_network_receive_frame_total counter
+node_network_receive_frame_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="ens5"} 0
+# HELP node_network_receive_multicast_total Network device statistic receive_multicast.
+# TYPE node_network_receive_multicast_total counter
+node_network_receive_multicast_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="ens5"} 0
+# HELP node_network_transmit_errs_total Network device statistic transmit_errs.
+# TYPE node_network_transmit_errs_total counter
+node_network_transmit_errs_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="ens5"} 0
+# HELP node_vmstat_pgmajfault /proc/vmstat information field pgmajfault.
+# TYPE node_vmstat_pgmajfault untyped
+node_vmstat_pgmajfault{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 1.98199931e+08
+# HELP node_disk_reads_completed_total The total number of reads completed successfully.
+# TYPE node_disk_reads_completed_total counter
+node_disk_reads_completed_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="nvme0n1"} 3.83632e+06
+node_disk_reads_completed_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="nvme1n1"} 2.05731539e+08
+# HELP node_memory_Active_bytes Memory information field Active_bytes.
+# TYPE node_memory_Active_bytes gauge
+node_memory_Active_bytes{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 1.47480576e+08
+# HELP node_vmstat_pgpgin /proc/vmstat information field pgpgin.
+# TYPE node_vmstat_pgpgin untyped
+node_vmstat_pgpgin{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 6.562624578e+09
+# HELP pgbouncer_databases_current_connections Current number of connections for this database
+# TYPE pgbouncer_databases_current_connections gauge
+pgbouncer_databases_current_connections{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",database="pgbouncer",force_user="pgbouncer",host="",name="pgbouncer",pool_mode="statement",port="6543"} 0
+# HELP pgbouncer_databases_max_connections Maximum number of allowed connections for this database
+# TYPE pgbouncer_databases_max_connections gauge
+pgbouncer_databases_max_connections{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",database="pgbouncer",force_user="pgbouncer",host="",name="pgbouncer",pool_mode="statement",port="6543"} 0
+# HELP pgbouncer_pools_server_used_connections Server connections idle more than server_check_delay, needing server_check_query, shown as connection
+# TYPE pgbouncer_pools_server_used_connections gauge
+pgbouncer_pools_server_used_connections{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",database="pgbouncer",user="pgbouncer"} 0
+# HELP node_disk_flush_requests_total The total number of flush requests completed successfully
+# TYPE node_disk_flush_requests_total counter
+node_disk_flush_requests_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="nvme0n1"} 0
+node_disk_flush_requests_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="nvme1n1"} 0
+# HELP node_disk_filesystem_info Info about disk filesystem.
+# TYPE node_disk_filesystem_info gauge
+node_disk_filesystem_info{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="nvme0n1",type="ext4",usage="filesystem",uuid="00000000-0000-0000-0000-000000000000",version="1.0"} 1
+# HELP node_network_receive_packets_total Network device statistic receive_packets.
+# TYPE node_network_receive_packets_total counter
+node_network_receive_packets_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="ens5"} 1.6771565e+07
+# HELP node_scrape_collector_duration_seconds node_exporter: Duration of a collector scrape.
+# TYPE node_scrape_collector_duration_seconds gauge
+node_scrape_collector_duration_seconds{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",collector="cpu"} 0.001181618
+node_scrape_collector_duration_seconds{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",collector="diskstats"} 0.007213329
+node_scrape_collector_duration_seconds{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",collector="filesystem"} 0.002189389
+node_scrape_collector_duration_seconds{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",collector="loadavg"} 6.6929e-05
+node_scrape_collector_duration_seconds{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",collector="meminfo"} 0.002675087
+node_scrape_collector_duration_seconds{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",collector="netdev"} 0.00041694
+node_scrape_collector_duration_seconds{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",collector="vmstat"} 0.001076865
+# HELP node_memory_AnonPages_bytes Memory information field AnonPages_bytes.
+# TYPE node_memory_AnonPages_bytes gauge
+node_memory_AnonPages_bytes{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 7.9884288e+07
+# HELP node_memory_Dirty_bytes Memory information field Dirty_bytes.
+# TYPE node_memory_Dirty_bytes gauge
+node_memory_Dirty_bytes{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 557056
+# HELP node_memory_VmallocTotal_bytes Memory information field VmallocTotal_bytes.
+# TYPE node_memory_VmallocTotal_bytes gauge
+node_memory_VmallocTotal_bytes{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 1.38535235485696e+14
+# HELP node_network_receive_compressed_total Network device statistic receive_compressed.
+# TYPE node_network_receive_compressed_total counter
+node_network_receive_compressed_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="ens5"} 0
+# HELP pgbouncer_pools Count of pools
+# TYPE pgbouncer_pools gauge
+pgbouncer_pools{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 1
+# HELP pgbouncer_pools_client_active_connections Client connections linked to server connection and able to process queries, shown as connection
+# TYPE pgbouncer_pools_client_active_connections gauge
+pgbouncer_pools_client_active_connections{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",database="pgbouncer",user="pgbouncer"} 1
+# HELP node_disk_info Info of /sys/block/<block_device>.
+# TYPE node_disk_info gauge
+node_disk_info{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="nvme0n1",major="259",minor="1",model="Amazon Elastic Block Store",path="pci-0000:00:1f.0-nvme-1",revision="1.0",rotational="0",serial="vol0000000000000000",wwn="nvme.0000-scrubbed-0000"} 1
+node_disk_info{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="nvme1n1",major="259",minor="0",model="Amazon Elastic Block Store",path="pci-0000:00:04.0-nvme-1",revision="1.0",rotational="0",serial="vol0000000000000000",wwn="nvme.0000-scrubbed-0000"} 1
+# HELP node_cpu_online CPUs that are online and being scheduled.
+# TYPE node_cpu_online gauge
+node_cpu_online{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",cpu="0"} 1
+node_cpu_online{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",cpu="1"} 1
+# HELP node_disk_discards_completed_total The total number of discards completed successfully.
+# TYPE node_disk_discards_completed_total counter
+node_disk_discards_completed_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="nvme0n1"} 0
+node_disk_discards_completed_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="nvme1n1"} 0
+# HELP node_network_transmit_compressed_total Network device statistic transmit_compressed.
+# TYPE node_network_transmit_compressed_total counter
+node_network_transmit_compressed_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="ens5"} 0
+# HELP pgbouncer_pools_client_waiting_cancel_connections Client connections that have not forwarded query cancellations to the server yet
+# TYPE pgbouncer_pools_client_waiting_cancel_connections gauge
+pgbouncer_pools_client_waiting_cancel_connections{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",database="pgbouncer",user="pgbouncer"} 0
+# HELP pgbouncer_up The pgbouncer scrape succeeded
+# TYPE pgbouncer_up gauge
+pgbouncer_up{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 1
+# HELP node_filesystem_device_error Whether an error occurred while getting statistics for the given device.
+# TYPE node_filesystem_device_error gauge
+node_filesystem_device_error{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="/dev/nvme0n1",device_error="",fstype="ext4",mountpoint="/data"} 0
+node_filesystem_device_error{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="/dev/nvme1n1p2",device_error="",fstype="ext4",mountpoint="/"} 0
+# HELP node_filesystem_size_bytes Filesystem size in bytes.
+# TYPE node_filesystem_size_bytes gauge
+node_filesystem_size_bytes{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="/dev/nvme0n1",device_error="",fstype="ext4",mountpoint="/data"} 8.416882688e+09
+node_filesystem_size_bytes{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="/dev/nvme1n1p2",device_error="",fstype="ext4",mountpoint="/"} 1.0359754752e+10
+# HELP node_memory_Inactive_bytes Memory information field Inactive_bytes.
+# TYPE node_memory_Inactive_bytes gauge
+node_memory_Inactive_bytes{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 1.51805952e+08
+# HELP node_memory_SwapFree_bytes Memory information field SwapFree_bytes.
+# TYPE node_memory_SwapFree_bytes gauge
+node_memory_SwapFree_bytes{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 8.0416768e+08
+# HELP node_cpu_seconds_total Seconds the CPUs spent in each mode.
+# TYPE node_cpu_seconds_total counter
+node_cpu_seconds_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",cpu="0",mode="idle"} 7.2209119e+06
+node_cpu_seconds_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",cpu="0",mode="iowait"} 48845.31
+node_cpu_seconds_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",cpu="0",mode="irq"} 0
+node_cpu_seconds_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",cpu="0",mode="nice"} 209.85
+node_cpu_seconds_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",cpu="0",mode="softirq"} 303.67
+node_cpu_seconds_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",cpu="0",mode="steal"} 175.18
+node_cpu_seconds_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",cpu="0",mode="system"} 30987.2
+node_cpu_seconds_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",cpu="0",mode="user"} 88937.64
+node_cpu_seconds_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",cpu="1",mode="idle"} 7.22030789e+06
+node_cpu_seconds_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",cpu="1",mode="iowait"} 48756.84
+node_cpu_seconds_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",cpu="1",mode="irq"} 0
+node_cpu_seconds_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",cpu="1",mode="nice"} 232.76
+node_cpu_seconds_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",cpu="1",mode="softirq"} 560.36
+node_cpu_seconds_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",cpu="1",mode="steal"} 167.81
+node_cpu_seconds_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",cpu="1",mode="system"} 31000.4
+node_cpu_seconds_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",cpu="1",mode="user"} 89446.12
+# HELP node_memory_HugePages_Surp Memory information field HugePages_Surp.
+# TYPE node_memory_HugePages_Surp gauge
+node_memory_HugePages_Surp{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 0
+# HELP node_network_transmit_fifo_total Network device statistic transmit_fifo.
+# TYPE node_network_transmit_fifo_total counter
+node_network_transmit_fifo_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="ens5"} 0
+# HELP node_vmstat_oom_kill /proc/vmstat information field oom_kill.
+# TYPE node_vmstat_oom_kill untyped
+node_vmstat_oom_kill{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 0
+# HELP node_cpu_guest_seconds_total Seconds the CPUs spent in guests (VMs) for each mode.
+# TYPE node_cpu_guest_seconds_total counter
+node_cpu_guest_seconds_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",cpu="0",mode="nice"} 0
+node_cpu_guest_seconds_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",cpu="0",mode="user"} 0
+node_cpu_guest_seconds_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",cpu="1",mode="nice"} 0
+node_cpu_guest_seconds_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",cpu="1",mode="user"} 0
+# HELP node_disk_discards_merged_total The total number of discards merged.
+# TYPE node_disk_discards_merged_total counter
+node_disk_discards_merged_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="nvme0n1"} 0
+node_disk_discards_merged_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="nvme1n1"} 0
+# HELP node_disk_written_bytes_total The total number of bytes written successfully.
+# TYPE node_disk_written_bytes_total counter
+node_disk_written_bytes_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="nvme0n1"} 6.38570676224e+11
+node_disk_written_bytes_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="nvme1n1"} 1.51815877632e+11
+# HELP node_memory_HugePages_Rsvd Memory information field HugePages_Rsvd.
+# TYPE node_memory_HugePages_Rsvd gauge
+node_memory_HugePages_Rsvd{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 0
+# HELP node_memory_MemAvailable_bytes Memory information field MemAvailable_bytes.
+# TYPE node_memory_MemAvailable_bytes gauge
+node_memory_MemAvailable_bytes{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 2.1532672e+08
+# HELP pgbouncer_databases_disabled 1 if this database is currently disabled, else 0
+# TYPE pgbouncer_databases_disabled gauge
+pgbouncer_databases_disabled{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",database="pgbouncer",force_user="pgbouncer",host="",name="pgbouncer",pool_mode="statement",port="6543"} 0
+# HELP node_disk_read_bytes_total The total number of bytes read successfully.
+# TYPE node_disk_read_bytes_total counter
+node_disk_read_bytes_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="nvme0n1"} 3.4665276416e+11
+node_disk_read_bytes_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="nvme1n1"} 6.373474935296e+12
+# HELP node_load15 15m load average.
+# TYPE node_load15 gauge
+node_load15{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 0
+# HELP pgbouncer_pools_client_waiting_connections Client connections waiting on a server connection, shown as connection
+# TYPE pgbouncer_pools_client_waiting_connections gauge
+pgbouncer_pools_client_waiting_connections{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",database="pgbouncer",user="pgbouncer"} 0
+# HELP pgbouncer_pools_server_testing_connections Server connections currently running either server_reset_query or server_check_query, shown as connection
+# TYPE pgbouncer_pools_server_testing_connections gauge
+pgbouncer_pools_server_testing_connections{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",database="pgbouncer",user="pgbouncer"} 0
+# HELP pgbouncer_stats_queries_duration_seconds_total Total number of seconds spent by pgbouncer when actively connected to PostgreSQL, executing queries
+# TYPE pgbouncer_stats_queries_duration_seconds_total counter
+pgbouncer_stats_queries_duration_seconds_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",database="pgbouncer"} 0
+# HELP node_memory_CommitLimit_bytes Memory information field CommitLimit_bytes.
+# TYPE node_memory_CommitLimit_bytes gauge
+node_memory_CommitLimit_bytes{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 1.288044544e+09
+# HELP node_memory_Hugepagesize_bytes Memory information field Hugepagesize_bytes.
+# TYPE node_memory_Hugepagesize_bytes gauge
+node_memory_Hugepagesize_bytes{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 2.097152e+06
+# HELP node_memory_Inactive_anon_bytes Memory information field Inactive_anon_bytes.
+# TYPE node_memory_Inactive_anon_bytes gauge
+node_memory_Inactive_anon_bytes{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 4.3655168e+07
+# HELP node_memory_MemFree_bytes Memory information field MemFree_bytes.
+# TYPE node_memory_MemFree_bytes gauge
+node_memory_MemFree_bytes{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 7.446528e+06
+# HELP node_memory_SUnreclaim_bytes Memory information field SUnreclaim_bytes.
+# TYPE node_memory_SUnreclaim_bytes gauge
+node_memory_SUnreclaim_bytes{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 4.6624768e+07
+# HELP node_network_receive_nohandler_total Network device statistic receive_nohandler.
+# TYPE node_network_receive_nohandler_total counter
+node_network_receive_nohandler_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="ens5"} 0
+# HELP node_disk_read_time_seconds_total The total number of seconds spent by all reads.
+# TYPE node_disk_read_time_seconds_total counter
+node_disk_read_time_seconds_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="nvme0n1"} 3402.821
+node_disk_read_time_seconds_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="nvme1n1"} 139165.776
+# HELP node_disk_flush_requests_time_seconds_total This is the total number of seconds spent by all flush requests.
+# TYPE node_disk_flush_requests_time_seconds_total counter
+node_disk_flush_requests_time_seconds_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="nvme0n1"} 0
+node_disk_flush_requests_time_seconds_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="nvme1n1"} 0
+# HELP node_memory_Shmem_bytes Memory information field Shmem_bytes.
+# TYPE node_memory_Shmem_bytes gauge
+node_memory_Shmem_bytes{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 1.0153984e+07
+# HELP node_memory_CmaTotal_bytes Memory information field CmaTotal_bytes.
+# TYPE node_memory_CmaTotal_bytes gauge
+node_memory_CmaTotal_bytes{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 0
+# HELP pgbouncer_version_info The pgbouncer version info
+# TYPE pgbouncer_version_info gauge
+pgbouncer_version_info{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",version="PgBouncer 1.25.1"} 1
+# HELP node_memory_ShmemHugePages_bytes Memory information field ShmemHugePages_bytes.
+# TYPE node_memory_ShmemHugePages_bytes gauge
+node_memory_ShmemHugePages_bytes{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 0
+# HELP pgbouncer_stats_queries_pooled_total Total number of SQL queries pooled
+# TYPE pgbouncer_stats_queries_pooled_total counter
+pgbouncer_stats_queries_pooled_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",database="pgbouncer"} 11
+# HELP node_disk_io_time_weighted_seconds_total The weighted # of seconds spent doing I/Os.
+# TYPE node_disk_io_time_weighted_seconds_total counter
+node_disk_io_time_weighted_seconds_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="nvme0n1"} 12504.428
+node_disk_io_time_weighted_seconds_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="nvme1n1"} 154782.48500000002
+# HELP node_vmstat_pswpin /proc/vmstat information field pswpin.
+# TYPE node_vmstat_pswpin untyped
+node_vmstat_pswpin{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 3.8141281e+07
+# HELP pgbouncer_pools_server_idle_connections Server connections idle and ready for a client query, shown as connection
+# TYPE pgbouncer_pools_server_idle_connections gauge
+pgbouncer_pools_server_idle_connections{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",database="pgbouncer",user="pgbouncer"} 0
+# HELP node_filesystem_avail_bytes Filesystem space available to non-root users in bytes.
+# TYPE node_filesystem_avail_bytes gauge
+node_filesystem_avail_bytes{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="/dev/nvme0n1",device_error="",fstype="ext4",mountpoint="/data"} 7.444385792e+09
+node_filesystem_avail_bytes{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="/dev/nvme1n1p2",device_error="",fstype="ext4",mountpoint="/"} 2.683387904e+09
+# HELP node_disk_io_time_seconds_total Total seconds spent doing I/Os.
+# TYPE node_disk_io_time_seconds_total counter
+node_disk_io_time_seconds_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="nvme0n1"} 4091.376
+node_disk_io_time_seconds_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="nvme1n1"} 95206.565
+# HELP node_memory_CmaFree_bytes Memory information field CmaFree_bytes.
+# TYPE node_memory_CmaFree_bytes gauge
+node_memory_CmaFree_bytes{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 0
+# HELP node_memory_HugePages_Free Memory information field HugePages_Free.
+# TYPE node_memory_HugePages_Free gauge
+node_memory_HugePages_Free{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 0
+# HELP node_memory_Slab_bytes Memory information field Slab_bytes.
+# TYPE node_memory_Slab_bytes gauge
+node_memory_Slab_bytes{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 7.4510336e+07
+# HELP node_network_transmit_drop_total Network device statistic transmit_drop.
+# TYPE node_network_transmit_drop_total counter
+node_network_transmit_drop_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="ens5"} 0
+# HELP pgbouncer_in_flight_dns_queries Count of in-flight DNS queries
+# TYPE pgbouncer_in_flight_dns_queries gauge
+pgbouncer_in_flight_dns_queries{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} -46
+# HELP node_memory_HardwareCorrupted_bytes Memory information field HardwareCorrupted_bytes.
+# TYPE node_memory_HardwareCorrupted_bytes gauge
+node_memory_HardwareCorrupted_bytes{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 0
+# HELP node_memory_Mlocked_bytes Memory information field Mlocked_bytes.
+# TYPE node_memory_Mlocked_bytes gauge
+node_memory_Mlocked_bytes{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 8192
+# HELP node_memory_WritebackTmp_bytes Memory information field WritebackTmp_bytes.
+# TYPE node_memory_WritebackTmp_bytes gauge
+node_memory_WritebackTmp_bytes{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 0
+# HELP pgbouncer_pools_server_login_connections Server connections currently in the process of logging in, shown as connection
+# TYPE pgbouncer_pools_server_login_connections gauge
+pgbouncer_pools_server_login_connections{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",database="pgbouncer",user="pgbouncer"} 0
+# HELP node_memory_MemTotal_bytes Memory information field MemTotal_bytes.
+# TYPE node_memory_MemTotal_bytes gauge
+node_memory_MemTotal_bytes{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 4.28617728e+08
+# HELP node_memory_Unevictable_bytes Memory information field Unevictable_bytes.
+# TYPE node_memory_Unevictable_bytes gauge
+node_memory_Unevictable_bytes{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 8192
+# HELP node_network_transmit_colls_total Network device statistic transmit_colls.
+# TYPE node_network_transmit_colls_total counter
+node_network_transmit_colls_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="ens5"} 0
+# HELP pgbouncer_databases_paused 1 if this database is currently paused, else 0
+# TYPE pgbouncer_databases_paused gauge
+pgbouncer_databases_paused{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",database="pgbouncer",force_user="pgbouncer",host="",name="pgbouncer",pool_mode="statement",port="6543"} 0
+# HELP node_filesystem_files Filesystem total file nodes.
+# TYPE node_filesystem_files gauge
+node_filesystem_files{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="/dev/nvme0n1",device_error="",fstype="ext4",mountpoint="/data"} 524288
+node_filesystem_files{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="/dev/nvme1n1p2",device_error="",fstype="ext4",mountpoint="/"} 648960
+# HELP node_memory_Active_anon_bytes Memory information field Active_anon_bytes.
+# TYPE node_memory_Active_anon_bytes gauge
+node_memory_Active_anon_bytes{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 6.5216512e+07
+# HELP pgbouncer_free_clients Count of free clients
+# TYPE pgbouncer_free_clients gauge
+pgbouncer_free_clients{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 49
+# HELP pgbouncer_pools_server_active_cancel_connections Server connections that are currently forwarding a cancel request.
+# TYPE pgbouncer_pools_server_active_cancel_connections gauge
+pgbouncer_pools_server_active_cancel_connections{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",database="pgbouncer",user="pgbouncer"} 0
+# HELP db_transmit_bytes postgres and pgbouncer network transmit bytes
+# TYPE db_transmit_bytes counter
+db_transmit_bytes{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 0
+# HELP node_disk_discarded_sectors_total The total number of sectors discarded successfully.
+# TYPE node_disk_discarded_sectors_total counter
+node_disk_discarded_sectors_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="nvme0n1"} 0
+node_disk_discarded_sectors_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="nvme1n1"} 0
+# HELP node_memory_SwapTotal_bytes Memory information field SwapTotal_bytes.
+# TYPE node_memory_SwapTotal_bytes gauge
+node_memory_SwapTotal_bytes{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 1.073737728e+09
+# HELP node_network_receive_drop_total Network device statistic receive_drop.
+# TYPE node_network_receive_drop_total counter
+node_network_receive_drop_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="ens5"} 0
+# HELP pgbouncer_used_servers Count of used servers
+# TYPE pgbouncer_used_servers gauge
+pgbouncer_used_servers{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 0
+# HELP node_memory_Bounce_bytes Memory information field Bounce_bytes.
+# TYPE node_memory_Bounce_bytes gauge
+node_memory_Bounce_bytes{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 0
+# HELP node_memory_VmallocUsed_bytes Memory information field VmallocUsed_bytes.
+# TYPE node_memory_VmallocUsed_bytes gauge
+node_memory_VmallocUsed_bytes{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 1.4753792e+07
+# HELP node_network_receive_bytes_total Network device statistic receive_bytes.
+# TYPE node_network_receive_bytes_total counter
+node_network_receive_bytes_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="ens5"} 4.852862932e+09
+# HELP node_network_transmit_bytes_total Network device statistic transmit_bytes.
+# TYPE node_network_transmit_bytes_total counter
+node_network_transmit_bytes_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="ens5"} 1.1378591631e+10
+# HELP pgbouncer_databases_pool_size Maximum number of server connections
+# TYPE pgbouncer_databases_pool_size gauge
+pgbouncer_databases_pool_size{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",database="pgbouncer",force_user="pgbouncer",host="",name="pgbouncer",pool_mode="statement",port="6543"} 2
+# HELP pgbouncer_free_servers Count of free servers
+# TYPE pgbouncer_free_servers gauge
+pgbouncer_free_servers{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 50
+# HELP node_disk_discard_time_seconds_total This is the total number of seconds spent by all discards.
+# TYPE node_disk_discard_time_seconds_total counter
+node_disk_discard_time_seconds_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="nvme0n1"} 0
+node_disk_discard_time_seconds_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="nvme1n1"} 0
+# HELP node_filesystem_free_bytes Filesystem free space in bytes.
+# TYPE node_filesystem_free_bytes gauge
+node_filesystem_free_bytes{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="/dev/nvme0n1",device_error="",fstype="ext4",mountpoint="/data"} 8.24246272e+09
+node_filesystem_free_bytes{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="/dev/nvme1n1p2",device_error="",fstype="ext4",mountpoint="/"} 2.71079424e+09
+# HELP node_memory_Mapped_bytes Memory information field Mapped_bytes.
+# TYPE node_memory_Mapped_bytes gauge
+node_memory_Mapped_bytes{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 1.03936e+08
+# HELP node_memory_NFS_Unstable_bytes Memory information field NFS_Unstable_bytes.
+# TYPE node_memory_NFS_Unstable_bytes gauge
+node_memory_NFS_Unstable_bytes{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 0
+# HELP node_memory_Percpu_bytes Memory information field Percpu_bytes.
+# TYPE node_memory_Percpu_bytes gauge
+node_memory_Percpu_bytes{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 1.155072e+06
+# HELP node_memory_SReclaimable_bytes Memory information field SReclaimable_bytes.
+# TYPE node_memory_SReclaimable_bytes gauge
+node_memory_SReclaimable_bytes{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 2.7885568e+07
+# HELP node_network_receive_errs_total Network device statistic receive_errs.
+# TYPE node_network_receive_errs_total counter
+node_network_receive_errs_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="ens5"} 0
+# HELP postgresql_restarts_total Number of times postgresql has been restarted
+# TYPE postgresql_restarts_total counter
+postgresql_restarts_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 0
+# HELP node_memory_Inactive_file_bytes Memory information field Inactive_file_bytes.
+# TYPE node_memory_Inactive_file_bytes gauge
+node_memory_Inactive_file_bytes{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 1.08150784e+08
+# HELP node_filesystem_readonly Filesystem read-only status.
+# TYPE node_filesystem_readonly gauge
+node_filesystem_readonly{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="/dev/nvme0n1",device_error="",fstype="ext4",mountpoint="/data"} 0
+node_filesystem_readonly{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="/dev/nvme1n1p2",device_error="",fstype="ext4",mountpoint="/"} 0
+# HELP node_memory_Active_file_bytes Memory information field Active_file_bytes.
+# TYPE node_memory_Active_file_bytes gauge
+node_memory_Active_file_bytes{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 8.2264064e+07
+# HELP pgbouncer_pools_server_being_canceled_connections Servers that normally could become idle but are waiting to do so until all in-flight cancel requests have completed that were sent to cancel a query on this server.
+# TYPE pgbouncer_pools_server_being_canceled_connections gauge
+pgbouncer_pools_server_being_canceled_connections{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",database="pgbouncer",user="pgbouncer"} 0
+# HELP node_memory_Cached_bytes Memory information field Cached_bytes.
+# TYPE node_memory_Cached_bytes gauge
+node_memory_Cached_bytes{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 1.98873088e+08
+# HELP node_memory_Writeback_bytes Memory information field Writeback_bytes.
+# TYPE node_memory_Writeback_bytes gauge
+node_memory_Writeback_bytes{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db"} 0
+# HELP node_network_receive_fifo_total Network device statistic receive_fifo.
+# TYPE node_network_receive_fifo_total counter
+node_network_receive_fifo_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",device="ens5"} 0
+# HELP pgbouncer_pools_client_active_cancel_connections Client connections that have forwarded query cancellations to the server and are waiting for the server response
+# TYPE pgbouncer_pools_client_active_cancel_connections gauge
+pgbouncer_pools_client_active_cancel_connections{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",database="pgbouncer",user="pgbouncer"} 0
+# HELP pgbouncer_stats_received_bytes_total Total volume in bytes of network traffic received by pgbouncer, shown as bytes
+# TYPE pgbouncer_stats_received_bytes_total counter
+pgbouncer_stats_received_bytes_total{supabase_project_ref="examplerefaaaaaaaaaa",supabase_identifier="examplerefaaaaaaaaaa",service_type="db",database="pgbouncer"} 0
+# HELP node_disk_writes_merged_total The number of writes merged.
+# TYPE node_disk_writes_me

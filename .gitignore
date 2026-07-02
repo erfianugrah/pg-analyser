@@ -1,0 +1,23 @@
+# deps
+node_modules/
+
+# secrets - never commit
+.env
+.env.*
+!.env.example
+
+# generated reports contain customer query text - never commit
+reports/
+out/
+*.report.html
+*.report.pdf
+
+# compiled binary
+/sbperf
+
+# scraper runtime data
+scraper/data/
+
+# OS / editor
+.DS_Store
+*.swp
