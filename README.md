@@ -150,6 +150,22 @@ retroactive; it accrues from your first `snapshot`.
 Flags: `--store <db>` (default `~/.sbperf/history.db`, keyed by ref so one
 store holds every project), `--retention-days <n>`.
 
+### Feed the corpus to Grafana (retroactive)
+
+The SQLite store is the collection source of truth; for full Grafana dashboards,
+export it to Prometheus rather than reading the SVG trends. `export-prometheus`
+writes the whole accumulated corpus as OpenMetrics with timestamps:
+
+```bash
+bun run src/index.ts export-prometheus /tmp/out --ref <ref>   # or omit --ref for all
+```
+
+It prints the exact `promtool` backfill command (promtool ships inside the
+`prom/prometheus` image - no host install). Import straight into the
+`scrape-init` stack's data volume, restart, and Grafana queries the full history
+**retroactively** - Prometheus can't scrape the past, but it can ingest
+backfilled blocks. Verified end-to-end against `prom/prometheus:v3.1.0`.
+
 ### Alternate source: an existing Prometheus
 
 If you already run Prometheus scraping the metrics endpoint, skip the store and
