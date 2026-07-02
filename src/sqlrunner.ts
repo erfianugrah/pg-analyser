@@ -19,6 +19,12 @@ import type { SqlRow } from "./schemas.ts";
 export interface SqlRunner {
   readonly source: "read-only" | "superuser";
   run(query: string): Promise<SqlRow[]>;
+  /**
+   * Run a multi-statement query and return each statement's result set. Only
+   * the superuser DirectSqlRunner implements this (simple-query protocol);
+   * absent on the PAT read-only tier. Used to self-host the splinter advisor.
+   */
+  runMulti?(query: string): Promise<SqlRow[][]>;
 }
 
 /** PAT path: delegates to the Management API read-only SQL endpoint. */
@@ -48,6 +54,17 @@ export class DirectSqlRunner implements SqlRunner {
   async run(query: string): Promise<SqlRow[]> {
     const rows = await this.#sql.unsafe(query);
     return rows as unknown as SqlRow[];
+  }
+
+  /**
+   * Bun.SQL with prepare:false uses the simple-query protocol, which allows
+   * multiple statements in one command and returns one result set per
+   * statement. A single-statement query returns a flat row array, so normalize
+   * to SqlRow[][].
+   */
+  async runMulti(query: string): Promise<SqlRow[][]> {
+    const res = (await this.#sql.unsafe(query)) as unknown[];
+    return Array.isArray(res[0]) ? (res as SqlRow[][]) : [res as SqlRow[]];
   }
   close(): Promise<void> {
     return this.#sql.end();

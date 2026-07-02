@@ -2,6 +2,7 @@ import { Management } from "./management.ts";
 import { parsePrometheus } from "./metrics.ts";
 import { fetchTrends } from "./prometheus.ts";
 import { type Analysis, MetricSample } from "./schemas.ts";
+import { collectSplinterPerfLints } from "./splinter.ts";
 import { QUERIES } from "./sql.ts";
 import { ManagementSqlRunner, type SqlRunner } from "./sqlrunner.ts";
 import type { Transport } from "./transport.ts";
@@ -19,7 +20,7 @@ export async function collect(
   const errors: CollectError[] = [];
   // Default SQL tier is the PAT read-only runner; --db-url injects a superuser
   // DirectSqlRunner. API planes + metrics still go through the PAT transport.
-  const runner = opts.sqlRunner ?? new ManagementSqlRunner(m, ref);
+  const runner: SqlRunner = opts.sqlRunner ?? new ManagementSqlRunner(m, ref);
   // Timeframe for the analytics endpoints (API counts + edge-function stats).
   // The metrics scrape is point-in-time and SQL is cumulative-since-reset, so
   // this is the only query window Supabase lets us pick (max ~7 days).
@@ -172,6 +173,15 @@ export async function collect(
   const indexHitPct = rawIndexHit == null ? null : Number(rawIndexHit);
   const statsResetAge = (statsResetRows[0]?.stats_age as string | undefined) ?? null;
 
+  // The hosted advisors/performance endpoint currently 400s on the splinter
+  // storage-buckets lint (42601, prepared-statement path). With a superuser
+  // --db-url we run splinter ourselves over the simple-query protocol.
+  let performanceAdvisors = perfAdvisors;
+  if (performanceAdvisors.length === 0 && runner.runMulti) {
+    const lints = await safe("advisors:splinter", () => collectSplinterPerfLints(runner), []);
+    if (lints.length) performanceAdvisors = lints;
+  }
+
   const analysis: Analysis = {
     meta: {
       ref,
@@ -202,7 +212,7 @@ export async function collect(
     functions,
     functionStats,
     buckets,
-    advisors: { performance: perfAdvisors, security: secAdvisors },
+    advisors: { performance: performanceAdvisors, security: secAdvisors },
     apiCounts,
     sql: {
       dbSize,

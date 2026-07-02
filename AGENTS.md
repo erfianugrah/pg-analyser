@@ -65,6 +65,10 @@ src/
                  (PAT read-only runner, default) + DirectSqlRunner (superuser
                  --db-url via Bun.SQL - full access, any/multiple PG). collect
                  injects one; meta.sqlSource records which. Connstring NEVER stored.
+  splinter.ts    self-hosted Performance Advisor: runs the vendored splinter.sql
+                 (src/splinter.sql, Apache-2.0) over a superuser --db-url via
+                 the simple-query protocol, as a fallback when the hosted
+                 advisors/performance endpoint 400s (the 42601 lint bug).
   dbtargets.ts   multi-DB: parse repeatable --db-url + --db-config (gitignored
                  sbperf.databases.json); refFromConnstring auto-derives the
                  Supabase ref (pooler role.ref / db.<ref> host). `full` sweeps
@@ -107,6 +111,15 @@ src/
 
 - Advisors REST endpoint `/v1/projects/:ref/advisors/{performance,security}`
   returns `{ lints: [...] }` (richer than the CLI - includes INFO lints).
+- KNOWN BUG (2026-07): the hosted `advisors/performance` endpoint runs the
+  splinter lint SQL server-side and currently 400s with `42601 syntax error at
+  or near "'storage.buckets'"` - the multi-statement storage-buckets lint on the
+  prepared-statement path (supabase/cli#4965; fixed in the CLI, not yet on the
+  hosted endpoint). `advisors/security` is unaffected. FALLBACK: with a
+  superuser --db-url, collect runs the vendored splinter.sql itself over the
+  simple-query protocol (multi-statement tolerant) and populates
+  advisors.performance from it (splinter.ts + DirectSqlRunner.runMulti). The
+  hosted 400 is still recorded as a harmless collection note.
 - Read-only SQL: `POST /v1/projects/:ref/database/query/read-only` runs as
   `supabase_read_only_user`; reaches `extensions.pg_stat_statements`, `pg_statio`,
   catalogs. No DB password needed.

@@ -114,7 +114,11 @@ SBPERF_DB_URL='postgresql://supabase_admin:...@...pooler.supabase.com:6543/postg
 ```
 
 This unlocks all schemas, real `inspect`-depth diagnostics, multiple/non-Supabase
-databases, and (via `pg_stat_statements_reset()`) true query windows. The PAT is
+databases, and (via `pg_stat_statements_reset()`) true query windows. It also
+recovers the **Performance Advisor** when Supabase's hosted `advisors/performance`
+endpoint is failing (a known splinter lint bug that 400s server-side): with a
+`--db-url`, sbperf runs the vendored splinter lints itself over the simple-query
+protocol and fills in the performance findings the API dropped. The PAT is
 still used for the API planes (advisors, config, health) and the metrics
 endpoint. The connstring is a secret - it's read from the flag/env and never
 written to `analysis.json` (only which tier was used).
