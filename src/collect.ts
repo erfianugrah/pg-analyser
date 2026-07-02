@@ -12,10 +12,14 @@ export async function collect(
   ref: string,
   transport: Transport,
   version: string,
-  opts: { prometheusUrl?: string } = {},
+  opts: { prometheusUrl?: string; interval?: string } = {},
 ): Promise<Analysis> {
   const m = new Management(transport);
   const errors: CollectError[] = [];
+  // Timeframe for the analytics endpoints (API counts + edge-function stats).
+  // The metrics scrape is point-in-time and SQL is cumulative-since-reset, so
+  // this is the only query window Supabase lets us pick (max ~7 days).
+  const interval = opts.interval ?? "1day";
 
   const safe = async <T>(source: string, fn: () => Promise<T>, fallback: T): Promise<T> => {
     try {
@@ -81,7 +85,7 @@ export async function collect(
     safe("buckets", () => m.buckets(ref), []),
     safe("advisors:performance", () => m.advisors(ref, "performance"), []),
     safe("advisors:security", () => m.advisors(ref, "security"), []),
-    safe("apiCounts", () => m.apiCounts(ref), []),
+    safe("apiCounts", () => m.apiCounts(ref, interval), []),
     sql("dbSize"),
     sql("cacheHit"),
     sql("statsResetAge"),
@@ -131,7 +135,11 @@ export async function collect(
   for (const fn of functions) {
     if (!fn.id) continue;
     const id = fn.id;
-    const resp = await safe(`functionStats:${fn.slug}`, () => m.functionStats(ref, id), null);
+    const resp = await safe(
+      `functionStats:${fn.slug}`,
+      () => m.functionStats(ref, id, interval),
+      null,
+    );
     const rows = resp?.result ?? [];
     if (!rows?.length) continue;
     const sum = (k: string) => rows.reduce((s, r) => s + Number(r[k] ?? 0), 0);

@@ -87,6 +87,20 @@ describe("collect", () => {
     expect(a.metrics.samples).toHaveLength(0);
   });
 
+  test("threads --interval through to the analytics endpoints", async () => {
+    const t = fakeTransport({ onMgmt: fullRoutes(), onMetrics: okMetrics });
+    await collect("ref", t, "0.0.0-test", { interval: "3day" });
+    const apiCall = t.calls.mgmt.find((p) => p.includes("usage.api-counts"));
+    expect(apiCall).toContain("interval=3day");
+  });
+
+  test("defaults the analytics interval to 1day", async () => {
+    const t = fakeTransport({ onMgmt: fullRoutes(), onMetrics: okMetrics });
+    await collect("ref", t, "0.0.0-test");
+    const apiCall = t.calls.mgmt.find((p) => p.includes("usage.api-counts"));
+    expect(apiCall).toContain("interval=1day");
+  });
+
   test("throws when the required project endpoint fails", async () => {
     const t = fakeTransport({
       onMgmt: fullRoutes({ "/v1/projects/ref": () => textResponse("nope", 403) }),
