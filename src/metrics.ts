@@ -62,7 +62,7 @@ function parseLabels(s: string): Record<string, string> {
 // metrics endpoint is NOT in the OpenAPI spec, so the API-drift check can't
 // catch this; test/metrics.test.ts guards a representative slice instead.
 const ALLOW = [
-  // node_exporter - host
+  // node_exporter - host gauges (meaningful from a single scrape)
   "node_load1",
   "node_load5",
   "node_load15",
@@ -71,6 +71,17 @@ const ALLOW = [
   "node_memory_Active_bytes",
   "node_filesystem_size_bytes",
   "node_filesystem_avail_bytes",
+  // node_exporter - host COUNTERS (meaningless from one scrape, but rate-able
+  // across >=2 snapshots -> CPU%, IOPS, throughput. Kept so the SQLite trend
+  // path can reproduce the full node_exporter Grafana dashboard over time.)
+  "node_cpu_seconds_total",
+  "node_disk_reads_completed_total",
+  "node_disk_writes_completed_total",
+  "node_disk_read_bytes_total",
+  "node_disk_written_bytes_total",
+  "node_disk_io_time_seconds_total",
+  "node_network_receive_bytes_total",
+  "node_network_transmit_bytes_total",
   // postgres_exporter - database
   "pg_stat_database_num_backends",
   "pg_stat_database_deadlocks_total",

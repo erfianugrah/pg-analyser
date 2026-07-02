@@ -156,7 +156,7 @@ function sparkline(s: Analysis["trends"][number]): string {
 
 function trendsSection(a: Analysis): string {
   if (!a.trends.length) return "";
-  return `<h2 id="trends">30-day trends <span class=note>from Prometheus scraper</span></h2>
+  return `<h2 id="trends">30-day trends <span class=note>sampled over time</span></h2>
 <div class=sparks>${a.trends.map(sparkline).join("")}</div>`;
 }
 

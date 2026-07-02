@@ -21,7 +21,8 @@ HTML + PDF report. No superuser `--db-url`, no manual Grafana screenshots.
 | `bun run src/index.ts summary <dir>` | `analysis.json` -> `summary.html` (non-technical) |
 | `bun run src/index.ts pdf <dir>` | `analysis.json` -> `report.pdf` + `summary.pdf` |
 | `bun run src/index.ts full --ref <ref>` | analyze + report + summary + pdf |
-| `bun run src/index.ts scrape-init --ref <ref>` | write the Prometheus+Grafana stack |
+| `bun run src/index.ts snapshot --ref <ref>` | collect + append to the SQLite history store (cron this) |
+| `bun run src/index.ts scrape-init --ref <ref>` | write the (alternate) Prometheus+Grafana stack |
 | `bun run check` | biome format + lint (write) |
 | `bun run typecheck` | `tsc --noEmit` |
 | `bun run check:api` | assert endpoints still exist in the upstream OpenAPI spec |
@@ -54,7 +55,13 @@ src/
   collect.ts     orchestrate all planes -> validated Analysis (per-source errors captured)
   report/render  Analysis -> self-contained HTML (utilitarian, print CSS)
   report/pdf     HTML -> PDF via Playwright
-  scraper.ts     generate a going-forward Prometheus+Grafana stack
+  store.ts       SQLite history store (bun:sqlite): `snapshot` appends full
+                 Analysis + denormalized metric_samples/sql_scalars; keyed by
+                 ref at ~/.sbperf/history.db; prune to retention
+  trends.ts      pure computeTrends: gauges (1 pt/snapshot) + counter-derived
+                 rates (CPU util %, IOPS, throughput) across >=2 snapshots
+  scraper.ts     generate a going-forward Prometheus+Grafana stack (alternate
+                 trend source; `report` prefers --prometheus over the store)
   index.ts       CLI
 ```
 
@@ -75,8 +82,15 @@ src/
 - Read-only SQL: `POST /v1/projects/:ref/database/query/read-only` runs as
   `supabase_read_only_user`; reaches `extensions.pg_stat_statements`, `pg_statio`,
   catalogs. No DB password needed.
-- Metrics endpoint is point-in-time (scrape target), not a TSDB - 30-day trends
-  need the `scrape-init` stack running over time.
+- Metrics endpoint is point-in-time (scrape target), not a TSDB, and takes NO
+  time param; the analytics endpoints cap ~24h (verified 2026-07: interval=1day
+  returns 24 hourly buckets). So NO single API call yields 30 days of anything -
+  time series must be accumulated going forward. sbperf does this itself via
+  `snapshot` -> SQLite (`store.ts`); no Prometheus/Grafana required. The metrics
+  allowlist keeps the counter families (node_cpu/disk/network *_total) so rates
+  (CPU%, IOPS, throughput) are computable once >=2 snapshots exist - a single
+  scrape of a counter is meaningless, which is why the point-in-time report
+  curates gauges only but the trend path needs the counters.
 - Per-function invocation stats: `GET /v1/projects/:ref/analytics/endpoints/
   functions.combined-stats?interval=<15min|1hr|3hr|1day>&function_id=<id>` returns
   per-time-bucket `{ request_count, success_count, client_err_count,
