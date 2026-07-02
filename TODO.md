@@ -7,10 +7,11 @@
 - [x] self-contained HTML report (utilitarian) + Playwright PDF
 - [x] scrape-init: Prometheus+Grafana stack for going-forward 30-day history
 - [x] tests: prometheus parser, render, empty-states, tag balance
+- [x] full unit suite (config, schemas, transport, management, collect, scraper, sql) - 55 tests
+- [x] live `smoke.ts` (all planes) + gated Live smoke CI workflow
 
 ## Next
-- [ ] `schemas.test.ts` - parse captured real Management API responses as fixtures
-- [ ] gatekeeper-transport live smoke once a narrow key is provisioned
+- [ ] gatekeeper-transport live smoke once a narrow key is provisioned (set repo secrets, run the Live smoke workflow)
 - [ ] richer disk/IO analysis (IOPS headroom vs node_disk_* rates from the scraper)
 - [ ] optional `--prometheus <url>` on `report` to embed real 30-day panels if a scraper exists
 - [ ] edge-function stats (needs per-function_id) + storage bucket sizes

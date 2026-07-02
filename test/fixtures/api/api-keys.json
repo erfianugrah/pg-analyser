@@ -1,0 +1,4 @@
+[
+  { "name": "anon", "api_key": "anon_example_key_not_real" },
+  { "name": "service_role", "api_key": "service_role_example_key_not_real" }
+]

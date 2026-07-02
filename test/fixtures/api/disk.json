@@ -1,0 +1,1 @@
+{ "attributes": { "size_gb": 8, "iops": 3000, "type": "gp3", "throughput_mibps": 125 } }

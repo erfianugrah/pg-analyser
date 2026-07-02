@@ -1,0 +1,10 @@
+[
+  {
+    "database_type": "PRIMARY",
+    "db_port": 6543,
+    "pool_mode": "transaction",
+    "default_pool_size": null,
+    "max_client_conn": null,
+    "connection_string": "postgresql://postgres.examplerefaaaaaaaaaa:[YOUR-PASSWORD]@aws-1-eu-central-1.pooler.supabase.com:6543/postgres"
+  }
+]

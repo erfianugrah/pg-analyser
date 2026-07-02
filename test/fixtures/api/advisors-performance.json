@@ -1,0 +1,28 @@
+{
+  "lints": [
+    {
+      "name": "unindexed_foreign_keys",
+      "title": "Unindexed foreign keys",
+      "level": "INFO",
+      "facing": "EXTERNAL",
+      "categories": ["PERFORMANCE"],
+      "description": "Identifies foreign key constraints without a covering index.",
+      "detail": "Table `public.orders` has a foreign key `orders_customer_id_fkey` without a covering index.",
+      "remediation": "https://supabase.com/docs/guides/database/database-linter?lint=0001_unindexed_foreign_keys",
+      "metadata": { "name": "orders", "type": "table", "schema": "public" },
+      "cache_key": "unindexed_foreign_keys_public_orders_orders_customer_id_fkey"
+    },
+    {
+      "name": "multiple_permissive_policies",
+      "title": "Multiple Permissive Policies",
+      "level": "WARN",
+      "facing": "EXTERNAL",
+      "categories": ["PERFORMANCE"],
+      "description": "Detects multiple permissive RLS policies for the same role and action.",
+      "detail": "Table `public.orders` has multiple permissive policies for role `authenticated` for action `SELECT`.",
+      "remediation": "https://supabase.com/docs/guides/database/database-linter?lint=0006_multiple_permissive_policies",
+      "metadata": { "name": "orders", "type": "table", "schema": "public" },
+      "cache_key": "multiple_permissive_policies_public_orders_authenticated_SELECT"
+    }
+  ]
+}

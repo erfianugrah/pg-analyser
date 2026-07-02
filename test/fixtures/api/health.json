@@ -1,0 +1,8 @@
+[
+  { "name": "db", "healthy": true, "status": "ACTIVE_HEALTHY" },
+  { "name": "pooler", "healthy": true, "status": "ACTIVE_HEALTHY" },
+  { "name": "auth", "healthy": true, "status": "ACTIVE_HEALTHY" },
+  { "name": "rest", "healthy": true, "status": "ACTIVE_HEALTHY" },
+  { "name": "storage", "healthy": true, "status": "ACTIVE_HEALTHY" },
+  { "name": "realtime", "healthy": false, "status": "UNHEALTHY" }
+]
