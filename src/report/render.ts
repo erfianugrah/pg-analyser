@@ -394,7 +394,7 @@ ${a.errors.length ? `<h2>Collection notes <span class=count>${a.errors.length}</
 </div>
 ${banner}
 ${sections}
-<p class=meta style="margin-top:32px">Generated deterministically from the Supabase Management API, read-only SQL, and the project metrics endpoint. No values inferred.</p>
+<p class=meta style="margin-top:32px">Generated deterministically from the Supabase Management API, ${m.sqlSource === "superuser" ? "superuser SQL (--db-url)" : "read-only SQL"}, and the project metrics endpoint. No values inferred.</p>
 </body></html>`;
 }
 

@@ -9,6 +9,7 @@ import { Management } from "./management.ts";
 import { htmlToPdf } from "./report/pdf.ts";
 import { type IndexRow, render, renderIndex, renderSummary } from "./report/render.ts";
 import { writeScraper } from "./scraper.ts";
+import { DirectSqlRunner } from "./sqlrunner.ts";
 import { DEFAULT_STORE, HistoryStore } from "./store.ts";
 import { makeTransport } from "./transport.ts";
 import { computeTrends } from "./trends.ts";
@@ -32,6 +33,9 @@ Flags:
   --store <db>         history SQLite file (default ~/.sbperf/history.db)
   --retention-days <n> snapshot: prune snapshots older than n days (default 90, 0=keep)
   --interval <window>  analytics timeframe: 15min|30min|1hr|3hr|1day|3day|7day (default 1day)
+  --db-url <connstr>   run SQL as superuser via a Postgres connstring (or SBPERF_DB_URL);
+                       full-access tier for your own projects - PAT still used for
+                       API planes + metrics. Default is the PAT read-only runner.
   --prometheus <url>   trends from a scraper's Prometheus instead of the history store
   -h, --help           show this help
   -v, --version        print version
@@ -56,6 +60,7 @@ type Flags = {
   store?: string;
   retentionDays?: number;
   interval?: string;
+  dbUrl?: string;
 };
 
 /** Analytics-endpoint timeframe enum (verified live 2026-07; iso ranges are clamped). */
@@ -73,6 +78,7 @@ function parseFlags(argv: string[]): Flags {
     else if (a === "--store") out.store = argv[++i];
     else if (a === "--retention-days") out.retentionDays = Number(argv[++i]);
     else if (a === "--interval") out.interval = argv[++i];
+    else if (a === "--db-url") out.dbUrl = argv[++i];
     else if (a === "--all") out.all = true;
     else if (a?.startsWith("--")) usage();
     else if (a) out._.push(a);
@@ -156,10 +162,17 @@ async function doAnalyze(
   outDir: string,
   prometheusUrl?: string,
   interval?: string,
+  dbUrl?: string,
 ): Promise<string> {
   const transport = makeTransport(loadCfg());
+  const runner = dbUrl ? new DirectSqlRunner(dbUrl) : undefined;
+  if (runner) console.error("> SQL tier: superuser (--db-url); PAT used for API + metrics");
   console.error(`> analyzing ${ref} via the Management API`);
-  const analysis = await collect(ref, transport, VERSION, { prometheusUrl, interval });
+  const analysis = await collect(ref, transport, VERSION, {
+    prometheusUrl,
+    interval,
+    sqlRunner: runner,
+  }).finally(() => runner?.close());
   await mkdir(outDir, { recursive: true });
   const jsonPath = join(outDir, "analysis.json");
   await Bun.write(jsonPath, JSON.stringify(analysis, null, 2));
@@ -191,10 +204,16 @@ async function doSnapshot(
   storePath: string,
   retentionDays: number,
   interval?: string,
+  dbUrl?: string,
 ): Promise<void> {
   const transport = makeTransport(loadCfg());
+  const runner = dbUrl ? new DirectSqlRunner(dbUrl) : undefined;
+  if (runner) console.error("> SQL tier: superuser (--db-url); PAT used for API + metrics");
   console.error(`> snapshot ${ref} via the Management API`);
-  const analysis = await collect(ref, transport, VERSION, { interval });
+  const analysis = await collect(ref, transport, VERSION, {
+    interval,
+    sqlRunner: runner,
+  }).finally(() => runner?.close());
   await mkdir(outDir, { recursive: true });
   await Bun.write(join(outDir, "analysis.json"), JSON.stringify(analysis, null, 2));
 
@@ -290,6 +309,7 @@ async function main(): Promise<void> {
           flags.out ?? defaultOut(flags.ref),
           flags.prometheus,
           flags.interval,
+          flags.dbUrl ?? process.env.SBPERF_DB_URL,
         );
         break;
       }
@@ -307,6 +327,7 @@ async function main(): Promise<void> {
           flags.store ?? DEFAULT_STORE,
           flags.retentionDays ?? 90,
           flags.interval,
+          flags.dbUrl ?? process.env.SBPERF_DB_URL,
         );
         break;
       }
@@ -335,7 +356,13 @@ async function main(): Promise<void> {
         }
         if (!flags.ref) usage();
         const dir = flags.out ?? defaultOut(flags.ref);
-        await doAnalyze(flags.ref, dir, flags.prometheus, flags.interval);
+        await doAnalyze(
+          flags.ref,
+          dir,
+          flags.prometheus,
+          flags.interval,
+          flags.dbUrl ?? process.env.SBPERF_DB_URL,
+        );
         await doReport(dir);
         await doPdf(dir);
         console.error(`> done: ${dir}`);

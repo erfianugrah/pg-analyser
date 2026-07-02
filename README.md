@@ -100,6 +100,25 @@ Either:
 service_role key used for the metrics endpoint is auto-fetched via the
 Management API per run and never written to disk.
 
+### Superuser SQL (your own projects): `--db-url`
+
+The default SQL tier is the PAT read-only runner (`supabase_read_only_user`) -
+no password, so it audits a customer project you only have a PAT for. When you
+have superuser access (your own project's `supabase_admin` connstring, or any
+Postgres), pass `--db-url` (or `SBPERF_DB_URL`) to run the diagnostics with full
+access instead:
+
+```bash
+SBPERF_DB_URL='postgresql://supabase_admin:...@...pooler.supabase.com:6543/postgres' \
+  bun run src/index.ts analyze --ref <ref>
+```
+
+This unlocks all schemas, real `inspect`-depth diagnostics, multiple/non-Supabase
+databases, and (via `pg_stat_statements_reset()`) true query windows. The PAT is
+still used for the API planes (advisors, config, health) and the metrics
+endpoint. The connstring is a secret - it's read from the flag/env and never
+written to `analysis.json` (only which tier was used).
+
 ## 30-day trends
 
 No Supabase API returns 30 days of infra history - the metrics endpoint is a

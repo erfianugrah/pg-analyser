@@ -13,6 +13,7 @@ function fixture(overrides: Partial<Analysis> = {}): Analysis {
       createdAt: "2026-01-01T00:00:00Z",
       collectedAt: "2026-07-02T00:00:00Z",
       sbperfVersion: "0.1.0",
+      sqlSource: "read-only",
     },
     health: [
       { name: "db", healthy: true, status: "ACTIVE_HEALTHY" },

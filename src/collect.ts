@@ -3,6 +3,7 @@ import { parsePrometheus } from "./metrics.ts";
 import { fetchTrends } from "./prometheus.ts";
 import { type Analysis, MetricSample } from "./schemas.ts";
 import { QUERIES } from "./sql.ts";
+import { ManagementSqlRunner, type SqlRunner } from "./sqlrunner.ts";
 import type { Transport } from "./transport.ts";
 
 type CollectError = { source: string; message: string };
@@ -12,10 +13,13 @@ export async function collect(
   ref: string,
   transport: Transport,
   version: string,
-  opts: { prometheusUrl?: string; interval?: string } = {},
+  opts: { prometheusUrl?: string; interval?: string; sqlRunner?: SqlRunner } = {},
 ): Promise<Analysis> {
   const m = new Management(transport);
   const errors: CollectError[] = [];
+  // Default SQL tier is the PAT read-only runner; --db-url injects a superuser
+  // DirectSqlRunner. API planes + metrics still go through the PAT transport.
+  const runner = opts.sqlRunner ?? new ManagementSqlRunner(m, ref);
   // Timeframe for the analytics endpoints (API counts + edge-function stats).
   // The metrics scrape is point-in-time and SQL is cumulative-since-reset, so
   // this is the only query window Supabase lets us pick (max ~7 days).
@@ -35,8 +39,7 @@ export async function collect(
     throw new Error(`cannot read project ${ref}: ${err instanceof Error ? err.message : err}`);
   });
 
-  const sql = (key: keyof typeof QUERIES) =>
-    safe(`sql:${key}`, () => m.readOnlySql(ref, QUERIES[key]), []);
+  const sql = (key: keyof typeof QUERIES) => safe(`sql:${key}`, () => runner.run(QUERIES[key]), []);
 
   const [
     health,
@@ -179,6 +182,7 @@ export async function collect(
       createdAt: project.created_at,
       collectedAt: new Date().toISOString(),
       sbperfVersion: version,
+      sqlSource: runner.source,
     },
     health,
     disk: disk

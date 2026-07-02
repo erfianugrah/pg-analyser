@@ -13,6 +13,7 @@ function base(): Analysis {
       createdAt: "x",
       collectedAt: "x",
       sbperfVersion: "t",
+      sqlSource: "read-only",
     },
     health: [],
     disk: null,

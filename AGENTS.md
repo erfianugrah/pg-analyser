@@ -39,6 +39,21 @@ and the `<ref>.supabase.co` metrics endpoint (service_role auto-fetched per run
 via the Management API, never stored). The `Transport` interface exists mainly
 so tests can inject a fake; there is one impl (`DirectTransport`).
 
+### SQL tiers (PAT vs superuser)
+
+SQL diagnostics run through a `SqlRunner` (`sqlrunner.ts`):
+- **PAT (default)** - `ManagementSqlRunner` -> the read-only SQL endpoint
+  (`supabase_read_only_user`). No password; audits a customer project you only
+  have a PAT for.
+- **Superuser (`--db-url` or `SBPERF_DB_URL`)** - `DirectSqlRunner` runs each
+  query directly over a Postgres connstring (e.g. Supabase's `supabase_admin`
+  pooler connstring, or ANY Postgres) via `Bun.SQL` (`prepare:false` for
+  transaction-pooler safety). Full access: real inspect, all schemas, multiple/
+  non-Supabase DBs, and can `pg_stat_statements_reset()` to window queries.
+  Currently AUGMENTS the PAT (API planes + metrics still use the PAT transport);
+  pure no-PAT arbitrary-PG mode is a later step. The connstring is a secret -
+  read from flag/env, never written to analysis.json (only `meta.sqlSource`).
+
 ## Architecture (bounded contexts)
 
 ```
@@ -46,6 +61,10 @@ src/
   config.ts      zod env -> Config (access token)
   transport.ts   Transport interface + DirectTransport (auth + retry)
   management.ts  typed, zod-parsed Management API wrapper
+  sqlrunner.ts   SQL execution tiers behind one interface: ManagementSqlRunner
+                 (PAT read-only runner, default) + DirectSqlRunner (superuser
+                 --db-url via Bun.SQL - full access, any/multiple PG). collect
+                 injects one; meta.sqlSource records which. Connstring NEVER stored.
   sql.ts         the perf query set - superset of `supabase inspect db`:
                  pg_stat_statements (by time + calls), index-stats, bloat,
                  traffic-profile, threshold-aware vacuum, txid wraparound,
