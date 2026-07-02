@@ -1,3 +1,4 @@
+import { meta, THRESHOLDS } from "./heuristics.ts";
 import type { Analysis, SqlRow } from "./schemas.ts";
 
 export type Severity = "high" | "med" | "low";
@@ -8,6 +9,14 @@ export interface Finding {
   category: Category;
   title: string;
   anchor: string;
+  /** Heuristic id from src/heuristics.ts, if this finding is catalogued. */
+  heuristicId?: string;
+  /** One-line copy-pasteable fix guidance (from the heuristic). */
+  remediation?: string;
+  /** Canonical doc/source URL for the reader and the narrate pass to cite. */
+  docUrl?: string;
+  /** Optional measured evidence string (e.g. object name + size + %). */
+  evidence?: string;
 }
 
 const SEV_RANK: Record<Severity, number> = { high: 0, med: 1, low: 2 };
@@ -48,6 +57,7 @@ function groupAdvisors(
     category,
     title: g.count > 1 ? `${title} (${g.count}x)` : title,
     anchor,
+    ...meta(category === "Security" ? "advisor_security" : "advisor_performance"),
   }));
 }
 
@@ -62,12 +72,13 @@ export function deriveFindings(a: Analysis): Finding[] {
   out.push(...groupAdvisors(a.advisors.security, "Security", "#adv-sec"));
 
   // Performance - SQL-derived
-  if (a.sql.cacheHitPct != null && a.sql.cacheHitPct < 99) {
+  if (a.sql.cacheHitPct != null && a.sql.cacheHitPct < THRESHOLDS.cacheHitPct) {
     out.push({
       severity: "med",
       category: "Performance",
-      title: `Cache hit ratio ${a.sql.cacheHitPct}% (target > 99%)`,
+      title: `Cache hit ratio ${a.sql.cacheHitPct}% (target > ${THRESHOLDS.cacheHitPct}%)`,
       anchor: "#infra",
+      ...meta("cache_hit_low"),
     });
   }
   const unwrapped = a.sql.rlsPolicies.filter((r) => r.unwrapped_auth === true).length;
@@ -77,6 +88,7 @@ export function deriveFindings(a: Analysis): Finding[] {
       category: "Performance",
       title: `${unwrapped} RLS ${unwrapped === 1 ? "policy" : "policies"} re-evaluate auth per row - wrap in (select auth.*())`,
       anchor: "#rls",
+      ...meta("rls_initplan"),
     });
   }
   const seqScan = publicRows(a.sql.seqScanHeavy).length;
@@ -86,6 +98,7 @@ export function deriveFindings(a: Analysis): Finding[] {
       category: "Performance",
       title: `${seqScan} public ${seqScan === 1 ? "table" : "tables"} sequential-scan heavy (missing index?)`,
       anchor: "#seqscan",
+      ...meta("seq_scan_heavy"),
     });
   }
   const unused = publicRows(a.sql.indexStats).filter((r) => r.unused === true).length;
@@ -95,6 +108,7 @@ export function deriveFindings(a: Analysis): Finding[] {
       category: "Performance",
       title: `${unused} unused ${unused === 1 ? "index" : "indexes"} in public (write overhead)`,
       anchor: "#unused",
+      ...meta("unused_index"),
     });
   }
   if (
@@ -107,6 +121,7 @@ export function deriveFindings(a: Analysis): Finding[] {
       category: "Performance",
       title: `Postgres update available (${a.upgrade.current_app_version} -> ${a.upgrade.latest_app_version})`,
       anchor: "#infra",
+      ...meta("pg_update_available"),
     });
   }
   if (set.get("idle_in_transaction_session_timeout") === "0") {
@@ -115,6 +130,7 @@ export function deriveFindings(a: Analysis): Finding[] {
       category: "Performance",
       title: "idle_in_transaction_session_timeout disabled (idle txns can block autovacuum)",
       anchor: "#config",
+      ...meta("idle_in_txn_timeout_off"),
     });
   }
   if (set.get("statement_timeout") === "0") {
@@ -123,28 +139,31 @@ export function deriveFindings(a: Analysis): Finding[] {
       category: "Performance",
       title: "statement_timeout disabled (runaway queries not capped)",
       anchor: "#config",
+      ...meta("statement_timeout_off"),
     });
   }
 
   // Capacity
   const conns = a.sql.connections.reduce((s, r) => s + num(r.connections), 0);
   const maxConn = num(set.get("max_connections"));
-  if (maxConn > 0 && conns / maxConn >= 0.7) {
+  if (maxConn > 0 && conns / maxConn >= THRESHOLDS.directConnFrac) {
     out.push({
       severity: "med",
       category: "Capacity",
       title: `Direct connections at ${Math.round((conns / maxConn) * 100)}% of max (${conns}/${maxConn})`,
       anchor: "#connections",
+      ...meta("direct_conn_high"),
     });
   }
   if (a.disk?.usedBytes != null && a.disk.availBytes != null) {
     const total = a.disk.usedBytes + a.disk.availBytes;
-    if (total > 0 && a.disk.usedBytes / total >= 0.8) {
+    if (total > 0 && a.disk.usedBytes / total >= THRESHOLDS.diskFullFrac) {
       out.push({
         severity: "med",
         category: "Capacity",
         title: `Disk ${Math.round((a.disk.usedBytes / total) * 100)}% full`,
         anchor: "#infra",
+        ...meta("disk_full"),
       });
     }
   }
@@ -155,29 +174,32 @@ export function deriveFindings(a: Analysis): Finding[] {
       category: "Capacity",
       title: `${overdue} ${overdue === 1 ? "table" : "tables"} past the autovacuum dead-tuple threshold (vacuum not keeping up)`,
       anchor: "#deadtuples",
+      ...meta("autovacuum_overdue"),
     });
   }
   // Per-role connection exhaustion (a single role burning its own budget).
   for (const r of a.sql.roleStats) {
     const conns = num(r.connections);
     const limit = num(r.conn_limit);
-    if (limit > 0 && conns / limit >= 0.8) {
+    if (limit > 0 && conns / limit >= THRESHOLDS.roleConnFrac) {
       out.push({
         severity: "med",
         category: "Capacity",
         title: `Role ${String(r.role)} at ${Math.round((conns / limit) * 100)}% of its connection limit (${conns}/${limit})`,
         anchor: "#roles",
+        ...meta("role_conn_high"),
       });
     }
   }
   // Transaction-ID wraparound headroom (age(relfrozenxid) toward the 2B ceiling).
   const maxXidPct = a.sql.txidWraparound.reduce((mx, r) => Math.max(mx, num(r.pct_wraparound)), 0);
-  if (maxXidPct >= 20) {
+  if (maxXidPct >= THRESHOLDS.txidWarnPct) {
     out.push({
-      severity: maxXidPct >= 40 ? "high" : "med",
+      severity: maxXidPct >= THRESHOLDS.txidHighPct ? "high" : "med",
       category: "Capacity",
       title: `Transaction-ID wraparound at ${maxXidPct}% on the oldest table (freeze autovacuum falling behind)`,
       anchor: "#txid",
+      ...meta("txid_wraparound"),
     });
   }
   // Replication slots: inactive slots pin WAL (disk-fill risk); large active lag
@@ -191,10 +213,11 @@ export function deriveFindings(a: Analysis): Finding[] {
       category: "Capacity",
       title: `${inactiveSlots} inactive replication ${inactiveSlots === 1 ? "slot" : "slots"} retaining WAL (pins disk until dropped)`,
       anchor: "#slots",
+      ...meta("wal_retained_inactive_slot"),
     });
   }
   const laggingSlots = a.sql.replicationSlots.filter(
-    (r) => r.active === true && num(r.retained_wal_bytes) >= 1_073_741_824,
+    (r) => r.active === true && num(r.retained_wal_bytes) >= THRESHOLDS.slotLagBytes,
   ).length;
   if (laggingSlots > 0) {
     out.push({
@@ -202,17 +225,19 @@ export function deriveFindings(a: Analysis): Finding[] {
       category: "Capacity",
       title: `${laggingSlots} replication ${laggingSlots === 1 ? "slot" : "slots"} lagging >1GB WAL (slow consumer)`,
       anchor: "#slots",
+      ...meta("wal_slot_lag"),
     });
   }
   // Estimated bloat: reclaimable space (>=50MB wasted or >=100MB with 2x+ bloat).
   const worstBloat = a.sql.bloat.reduce((mx, r) => Math.max(mx, num(r.waste_bytes)), 0);
-  if (worstBloat >= 50 * 1024 * 1024) {
+  if (worstBloat >= THRESHOLDS.bloatMinBytes) {
     const top = a.sql.bloat.find((r) => num(r.waste_bytes) === worstBloat);
     out.push({
-      severity: worstBloat >= 500 * 1024 * 1024 ? "med" : "low",
+      severity: worstBloat >= THRESHOLDS.bloatMedBytes ? "med" : "low",
       category: "Capacity",
       title: `~${String(top?.waste ?? "")} reclaimable bloat on ${String(top?.name ?? "a table")} (VACUUM FULL / pg_repack)`,
       anchor: "#bloat",
+      ...meta("table_bloat"),
     });
   }
   // Point-in-time: a blocking chain exists right now (real even as a snapshot).
@@ -222,6 +247,7 @@ export function deriveFindings(a: Analysis): Finding[] {
       category: "Performance",
       title: `${a.sql.blocking.length} blocking lock ${a.sql.blocking.length === 1 ? "chain" : "chains"} at collection time`,
       anchor: "#blocking",
+      ...meta("blocking_locks"),
     });
   }
   // Point-in-time: queries running > 5 minutes at collection time.
@@ -231,17 +257,22 @@ export function deriveFindings(a: Analysis): Finding[] {
       category: "Performance",
       title: `${a.sql.longRunning.length} quer${a.sql.longRunning.length === 1 ? "y" : "ies"} running > 5 min at collection time`,
       anchor: "#longrunning",
+      ...meta("long_running"),
     });
   }
   // Edge-function server-error rate (from functions.combined-stats).
   for (const fn of a.functionStats) {
-    if (fn.requests >= 3 && fn.serverErr / fn.requests >= 0.1) {
+    if (
+      fn.requests >= THRESHOLDS.fnMinRequests &&
+      fn.serverErr / fn.requests >= THRESHOLDS.fnErrWarnFrac
+    ) {
       const pct = Math.round((fn.serverErr / fn.requests) * 100);
       out.push({
-        severity: fn.serverErr / fn.requests >= 0.2 ? "high" : "med",
+        severity: fn.serverErr / fn.requests >= THRESHOLDS.fnErrHighFrac ? "high" : "med",
         category: "Performance",
         title: `Edge function ${fn.slug}: ${pct}% 5xx over ${fn.requests} requests`,
         anchor: "#functions",
+        ...meta("fn_5xx"),
       });
     }
   }
@@ -254,18 +285,20 @@ export function deriveFindings(a: Analysis): Finding[] {
       category: "Capacity",
       title: `${waiting} client${waiting === 1 ? "" : "s"} waiting on the pooler`,
       anchor: "#metrics",
+      ...meta("pooler_clients_waiting"),
     });
   }
   // Disk IOPS headroom (needs a Prometheus scraper for the rate; trends-derived).
   const latestTrend = (title: string) =>
     a.trends.find((t) => t.title === title)?.points.at(-1)?.v ?? 0;
   const iops = latestTrend("Disk read IOPS") + latestTrend("Disk write IOPS");
-  if (a.disk?.iops && iops >= a.disk.iops * 0.8) {
+  if (a.disk?.iops && iops >= a.disk.iops * THRESHOLDS.diskIopsFrac) {
     out.push({
       severity: "med",
       category: "Capacity",
       title: `Disk IOPS at ${Math.round((iops / a.disk.iops) * 100)}% of provisioned (${Math.round(iops)}/${a.disk.iops})`,
       anchor: "#trends",
+      ...meta("disk_iops_high"),
     });
   }
 
