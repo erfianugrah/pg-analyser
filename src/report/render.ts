@@ -288,7 +288,8 @@ export function render(a: Analysis): string {
         ? `<span class="badge ok">up to date</span>`
         : "";
 
-  const outliersNote = "app workload; platform/introspection queries filtered";
+  const statsWindow = a.sql.statsResetAge ? ` (over ${a.sql.statsResetAge.split(".")[0]})` : "";
+  const outliersNote = `app workload; platform/introspection queries filtered${statsWindow}`;
   const sections = `
 <h2>Findings</h2>
 ${findingsSummary(findings, degraded)}
@@ -301,7 +302,9 @@ ${trendsSection(a)}
   <tr><td>Postgres version</td><td class=mono>${esc(m.pgVersion)}</td><td>${upgradeNote}</td></tr>
   <tr><td>Disk</td><td class=mono>${diskLine}</td><td>${diskUsed}</td></tr>
   <tr><td>DB size</td><td class=mono>${esc(a.sql.dbSize ?? (errored.has("sql:dbSize") ? "not collected" : "-"))}</td><td></td></tr>
-  <tr><td>Cache hit</td><td class=mono>${a.sql.cacheHitPct == null ? "-" : `${a.sql.cacheHitPct}%`}</td><td>${a.sql.cacheHitPct != null && a.sql.cacheHitPct < 99 ? '<span class="badge warn">below 99%</span>' : ""}</td></tr>
+  <tr><td>Cache hit (table)</td><td class=mono>${a.sql.cacheHitPct == null ? "-" : `${a.sql.cacheHitPct}%`}</td><td>${a.sql.cacheHitPct != null && a.sql.cacheHitPct < 99 ? '<span class="badge warn">below 99%</span>' : ""}</td></tr>
+  <tr><td>Cache hit (index)</td><td class=mono>${a.sql.indexHitPct == null ? "-" : `${a.sql.indexHitPct}%`}</td><td>${a.sql.indexHitPct != null && a.sql.indexHitPct < 99 ? '<span class="badge warn">below 99%</span>' : ""}</td></tr>
+  <tr><td>Stats window</td><td class=mono>${esc(a.sql.statsResetAge ? a.sql.statsResetAge.split(".")[0] : "-")}</td><td class=note>pg_stat_statements age; cache-hit/outliers are relative to this</td></tr>
 </table>
 
 <h2 id="config">PG tuning params</h2>${errored.has("sql:pgSettings") ? '<p class="empty warn-text">not collected</p>' : pgSettingsTable(a.sql.pgSettings)}
@@ -316,7 +319,8 @@ ${drill("calls", "Most-frequent queries", "by call count - chatty / hot-path (no
 ${drill("tables", "Biggest tables", "", sec(a.sql.biggestTables, "sql:biggestTables", { mono: ["table"], hide: ["schema"], limit: 20 }))}
 ${drill("unused", "Unused indexes", "idx_scan = 0, non-constraint", sec(a.sql.unusedIndexes, "sql:unusedIndexes", { mono: ["table", "index"], hide: ["schema"] }))}
 ${drill("seqscan", "Sequential-scan heavy", "seq_scan > idx_scan, >1k rows", sec(a.sql.seqScanHeavy, "sql:seqScanHeavy", { mono: ["table"], hide: ["schema"] }))}
-${drill("deadtuples", "Dead tuples / autovacuum", "significant bloat only (>=1k dead, or >=100 & >=20%)", sec(a.sql.deadTuples, "sql:deadTuples", { mono: ["table"], hide: ["schema"] }))}
+${drill("deadtuples", "Dead tuples / autovacuum", "overdue = dead tuples past the table's autovacuum threshold", sec(a.sql.deadTuples, "sql:deadTuples", { mono: ["table"], hide: ["schema"] }))}
+${drill("roles", "Role connection usage", "active connections vs each role's limit", sec(a.sql.roleStats, "sql:roleStats", { mono: ["role"] }))}
 ${drill("txid", "Transaction-ID wraparound", "age(relfrozenxid) vs 2B ceiling; non-system tables", sec(a.sql.txidWraparound, "sql:txidWraparound", { mono: ["table"], hide: ["schema"] }))}
 ${drill("slots", "Replication slots", "retained WAL; inactive slots pin disk", a.sql.replicationSlots.length ? sqlTable(a.sql.replicationSlots, { mono: ["slot_name"], hide: ["retained_wal_bytes"] }) : "<p class=empty>none</p>")}
 ${drill("connections", "Connections", "by state", sec(a.sql.connections, "sql:connections"))}

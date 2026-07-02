@@ -13,9 +13,15 @@
 - [x] disk IOPS-headroom finding (latest rate vs provisioned)
 - [x] edge-function + storage bucket coverage
 - [x] full test suite + live smoke.ts + gated Live smoke workflow
-- [x] txid-wraparound finding (age(relfrozenxid) vs 2B ceiling; from vacuum-stats)
+- [x] txid-wraparound finding (age(relfrozenxid) vs 2B ceiling) - ORIGINAL: the
+      CLI's vacuum-stats has no txid logic, `supabase inspect report` lacks this
 - [x] replication-slot lag/inactive finding (inactive slot pins WAL = disk risk)
 - [x] most-frequent-queries cut (pg_stat_statements by call count, noise-filtered)
+- [x] threshold-aware autovacuum finding (dead tuples vs each table's actual
+      autovacuum trigger; `overdue` flag - adapted from CLI vacuum-stats)
+- [x] per-role connection usage vs limit + finding (from CLI role-stats)
+- [x] stats-reset age surfaced (cache-hit/outliers are relative to this window)
+      + index cache-hit ratio (from CLI db-stats)
 - [x] per-function invocation stats (functions.combined-stats: requests, 5xx rate,
       exec time) + high-5xx finding (validated live against deployed functions)
 - [x] C-suite summary tier: non-technical summary.html/pdf (verdict + plain-
@@ -40,3 +46,10 @@
 ## Deferred (needs a precondition)
 - Richer disk/IO beyond IOPS (latency, queue depth) - needs sustained scraper
   history to be meaningful.
+
+## Optional (real gaps vs `supabase inspect report`, deliberately not done yet)
+- Real bloat estimation (table + index wasted-bytes, pgstattuple-style). The CLI
+  has it; sbperf has dead-tuple counts, which are related but not the same. The
+  estimate is rough (statistics-based) - add if a reclaim decision needs it.
+- traffic-profile (read-heavy vs write-heavy ratio per table). Niche; useful for
+  architecture calls (partitioning, index strategy) but not a health signal.

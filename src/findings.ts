@@ -148,14 +148,27 @@ export function deriveFindings(a: Analysis): Finding[] {
       });
     }
   }
-  const vacuumBehind = a.sql.deadTuples.length;
-  if (vacuumBehind > 0) {
+  const overdue = a.sql.deadTuples.filter((r) => r.overdue === "yes").length;
+  if (overdue > 0) {
     out.push({
       severity: "med",
       category: "Capacity",
-      title: `${vacuumBehind} ${vacuumBehind === 1 ? "table" : "tables"} with significant dead tuples (autovacuum behind)`,
+      title: `${overdue} ${overdue === 1 ? "table" : "tables"} past the autovacuum dead-tuple threshold (vacuum not keeping up)`,
       anchor: "#deadtuples",
     });
+  }
+  // Per-role connection exhaustion (a single role burning its own budget).
+  for (const r of a.sql.roleStats) {
+    const conns = num(r.connections);
+    const limit = num(r.conn_limit);
+    if (limit > 0 && conns / limit >= 0.8) {
+      out.push({
+        severity: "med",
+        category: "Capacity",
+        title: `Role ${String(r.role)} at ${Math.round((conns / limit) * 100)}% of its connection limit (${conns}/${limit})`,
+        anchor: "#roles",
+      });
+    }
   }
   // Transaction-ID wraparound headroom (age(relfrozenxid) toward the 2B ceiling).
   const maxXidPct = a.sql.txidWraparound.reduce((mx, r) => Math.max(mx, num(r.pct_wraparound)), 0);

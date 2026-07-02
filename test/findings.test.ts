@@ -28,6 +28,8 @@ function base(): Analysis {
     sql: {
       dbSize: null,
       cacheHitPct: null,
+      indexHitPct: null,
+      statsResetAge: null,
       pgSettings: [],
       topStatements: [],
       topByCalls: [],
@@ -39,6 +41,7 @@ function base(): Analysis {
       replicationSlots: [],
       rlsPolicies: [],
       connections: [],
+      roleStats: [],
       storageUsage: [],
     },
     metrics: { available: false, samples: [] },
@@ -227,6 +230,31 @@ describe("deriveFindings", () => {
       },
     ];
     expect(deriveFindings(a).some((x) => x.anchor === "#functions")).toBe(false);
+  });
+
+  test("autovacuum finding fires only on overdue tables", () => {
+    const a = base();
+    a.sql.deadTuples = [
+      { table: "public.a", dead_rows: 9000, autovacuum_at: 500, overdue: "yes" },
+      { table: "public.b", dead_rows: 10, autovacuum_at: 500, overdue: "no" },
+    ];
+    const f = deriveFindings(a).find((x) => x.anchor === "#deadtuples");
+    expect(f?.category).toBe("Capacity");
+    expect(f?.title).toContain("1 table past the autovacuum");
+    a.sql.deadTuples = [{ table: "public.b", dead_rows: 10, autovacuum_at: 500, overdue: "no" }];
+    expect(deriveFindings(a).some((x) => x.anchor === "#deadtuples")).toBe(false);
+  });
+
+  test("role near its connection limit -> Capacity finding", () => {
+    const a = base();
+    a.sql.roleStats = [
+      { role: "authenticator", connections: 48, conn_limit: 60 },
+      { role: "postgres", connections: 2, conn_limit: 60 },
+    ];
+    const f = deriveFindings(a).find((x) => x.anchor === "#roles");
+    expect(f?.title).toContain("authenticator");
+    expect(f?.title).toContain("80%");
+    expect(deriveFindings(a).filter((x) => x.anchor === "#roles")).toHaveLength(1);
   });
 
   test("idle-in-transaction disabled flagged", () => {

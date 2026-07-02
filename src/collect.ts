@@ -49,6 +49,7 @@ export async function collect(
     apiCounts,
     dbSizeRows,
     cacheHitRows,
+    statsResetRows,
     pgSettings,
     topStatements,
     topByCalls,
@@ -60,6 +61,7 @@ export async function collect(
     replicationSlots,
     rlsPolicies,
     connections,
+    roleStats,
     storageUsage,
     metricsText,
   ] = await Promise.all([
@@ -77,6 +79,7 @@ export async function collect(
     safe("apiCounts", () => m.apiCounts(ref), []),
     sql("dbSize"),
     sql("cacheHit"),
+    sql("statsResetAge"),
     sql("pgSettings"),
     sql("topStatements"),
     sql("topByCalls"),
@@ -88,6 +91,7 @@ export async function collect(
     sql("replicationSlots"),
     sql("rlsPolicies"),
     sql("connections"),
+    sql("roleStats"),
     sql("storageUsage"),
     safe(
       "metrics",
@@ -139,6 +143,9 @@ export async function collect(
   const dbSize = (dbSizeRows[0]?.db_size as string | undefined) ?? null;
   const rawCacheHit = cacheHitRows[0]?.cache_hit_pct;
   const cacheHitPct = rawCacheHit == null ? null : Number(rawCacheHit);
+  const rawIndexHit = cacheHitRows[0]?.index_hit_pct;
+  const indexHitPct = rawIndexHit == null ? null : Number(rawIndexHit);
+  const statsResetAge = (statsResetRows[0]?.stats_age as string | undefined) ?? null;
 
   const analysis: Analysis = {
     meta: {
@@ -174,6 +181,8 @@ export async function collect(
     sql: {
       dbSize,
       cacheHitPct: Number.isFinite(cacheHitPct) ? cacheHitPct : null,
+      indexHitPct: indexHitPct != null && Number.isFinite(indexHitPct) ? indexHitPct : null,
+      statsResetAge,
       pgSettings,
       topStatements,
       topByCalls,
@@ -185,6 +194,7 @@ export async function collect(
       replicationSlots,
       rlsPolicies,
       connections,
+      roleStats,
       storageUsage,
     },
     metrics: { available: metricsText != null, samples },

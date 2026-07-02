@@ -53,8 +53,10 @@ bun run src/index.ts full --ref <ref> --prometheus http://localhost:9090
 ## What it collects
 
 - **Advisors** - performance + security lints (Management API; richer than the CLI)
-- **Read-only SQL** - `pg_stat_statements` outliers, cache-hit %, biggest tables,
-  unused indexes, sequential-scan-heavy tables, dead-tuple bloat, connection state
+- **Read-only SQL** - `pg_stat_statements` outliers + most-frequent queries,
+  table/index cache-hit % (with stats-window age), biggest tables, unused
+  indexes, sequential-scan-heavy tables, threshold-aware autovacuum lag, txid
+  wraparound, replication-slot lag, connection state + per-role usage
 - **RLS policy audit** - flags policies re-evaluating `auth.*()` per row (should be wrapped in `(select ...)`; 94-99% latency win per Supabase's guide)
 - **Config** - Postgres version + upgrade drift, disk spec/util, pooler mode, PG tuning params (`pg_settings`)
 - **Inventory** - edge functions (with per-function invocation stats: request

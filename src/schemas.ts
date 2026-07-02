@@ -198,6 +198,8 @@ export const Analysis = z.object({
   sql: z.object({
     dbSize: z.string().nullable(),
     cacheHitPct: z.number().nullable(),
+    indexHitPct: z.number().nullable(),
+    statsResetAge: z.string().nullable(),
     pgSettings: SqlRows,
     topStatements: SqlRows,
     topByCalls: SqlRows,
@@ -209,6 +211,7 @@ export const Analysis = z.object({
     replicationSlots: SqlRows,
     rlsPolicies: SqlRows,
     connections: SqlRows,
+    roleStats: SqlRows,
     storageUsage: SqlRows,
   }),
   metrics: z.object({

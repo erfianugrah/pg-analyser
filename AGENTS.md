@@ -78,6 +78,15 @@ src/
   per-time-bucket `{ request_count, success_count, client_err_count,
   server_err_count, avg/min/max_execution_time }`. Needs the function `id` from
   the functions list, not the slug. collect.ts aggregates buckets per function.
+- `supabase inspect report` (the CLI's all-in-one) requires a DB connection
+  string (`--db-url`/`--linked` = a password) and emits raw CSV - no findings.
+  sbperf is PAT-only + ranked findings, and additionally has advisors, metrics,
+  RLS audit, txid wraparound, and edge-function stats the CLI lacks. Coverage was
+  compared against the CLI's ACTUAL query source
+  (github.com/supabase/cli `apps/cli-go/internal/inspect/*/*.sql`), not its help
+  text. NOTE: the CLI's vacuum-stats has NO txid/relfrozenxid logic (it is
+  autovacuum-threshold analysis) - sbperf's txid check is original. Remaining
+  CLI-only gaps deliberately left: real bloat estimation, traffic-profile.
 - The endpoints sbperf depends on are asserted against the upstream OpenAPI spec
   by `scripts/check-api-drift.ts` in CI - this is how we stay in sync without a
   CLI dependency or manual tracking. Two layers: PRIMARY (pass/fail) checks the
