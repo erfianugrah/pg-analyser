@@ -82,6 +82,8 @@ src/
                  ref at ~/.sbperf/history.db; prune to retention
   trends.ts      pure computeTrends: gauges (1 pt/snapshot) + counter-derived
                  rates (CPU util %, IOPS, throughput) across >=2 snapshots
+  promexport.ts  history store -> OpenMetrics (timestamped) for `export-prometheus`;
+                 promtool backfills a Prometheus TSDB -> retroactive Grafana
   scraper.ts     generate a going-forward Prometheus+Grafana stack (alternate
                  trend source; `report` prefers --prometheus over the store)
   index.ts       CLI
@@ -115,7 +117,13 @@ src/
   time param; the analytics endpoints cap ~24h (verified 2026-07: interval=1day
   returns 24 hourly buckets). So NO single API call yields 30 days of anything -
   time series must be accumulated going forward. sbperf does this itself via
-  `snapshot` -> SQLite (`store.ts`); no Prometheus/Grafana required. The metrics
+  `snapshot` -> SQLite (`store.ts`); no Prometheus/Grafana required. For full
+  Grafana dashboards, `export-prometheus` renders the store as OpenMetrics with
+  timestamps (`promexport.ts`, TYPE=unknown to sidestep OM suffix strictness);
+  `promtool tsdb create-blocks-from openmetrics` (two tokens; ships in the
+  prom/prometheus image, run --user 65534) backfills the scrape-init volume so
+  Grafana queries history RETROACTIVELY. Verified live vs prom/prometheus:v3.1.0.
+  The metrics
   allowlist keeps the counter families (node_cpu/disk/network *_total) so rates
   (CPU%, IOPS, throughput) are computable once >=2 snapshots exist - a single
   scrape of a counter is meaningless, which is why the point-in-time report

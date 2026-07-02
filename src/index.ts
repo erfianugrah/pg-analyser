@@ -6,6 +6,7 @@ import { collect } from "./collect.ts";
 import { ConfigError, loadConfig } from "./config.ts";
 import { deriveFindings } from "./findings.ts";
 import { Management } from "./management.ts";
+import { backfillInstructions, toOpenMetrics } from "./promexport.ts";
 import { htmlToPdf } from "./report/pdf.ts";
 import { type IndexRow, render, renderIndex, renderSummary } from "./report/render.ts";
 import { writeScraper } from "./scraper.ts";
@@ -27,6 +28,7 @@ Usage:
   sbperf full     --ref <ref> [--out <dir>]    analyze + report + pdf
   sbperf full     --all [--org <slug>]         audit every project + index.html
   sbperf snapshot --ref <ref> [--store <db>]   collect + append to the history store
+  sbperf export-prometheus <dir> [--ref <ref>] history store -> OpenMetrics for promtool backfill
   sbperf scrape-init --ref <ref> [--dir <d>]   write the Prometheus+Grafana stack
 
 Flags:
@@ -254,6 +256,48 @@ function fillTrendsFromStore(
   }
 }
 
+/**
+ * Export the accumulated history store as OpenMetrics for promtool backfill,
+ * so Grafana can query sbperf's corpus retroactively. One ref (--ref) or all
+ * refs in the store (labels carry supabase_project_ref to disambiguate).
+ */
+async function doExportPrometheus(
+  outDir: string,
+  ref: string | undefined,
+  storePath: string,
+): Promise<void> {
+  if (!(await Bun.file(storePath).exists())) {
+    throw new Error(`no history store at ${storePath} - run 'sbperf snapshot' first`);
+  }
+  const store = HistoryStore.open(storePath);
+  try {
+    const refs = ref ? [ref] : store.refs();
+    if (!refs.length) throw new Error(`history store ${storePath} is empty`);
+    const snaps = refs.flatMap((r) => store.loadForTrends(r));
+    if (!snaps.length) throw new Error(`no snapshots for ${ref ?? "any ref"} in ${storePath}`);
+
+    const om = toOpenMetrics(snaps);
+    const seriesCount = (om.match(/^# TYPE /gm) ?? []).length;
+    const sampleCount = snaps.reduce((n, s) => n + s.samples.length, 0);
+    const tsList = snaps.map((s) => s.ts).sort((a, b) => a - b);
+    const span = tsList.length
+      ? `${new Date(tsList[0]! * 1000).toISOString()} .. ${new Date(tsList.at(-1)! * 1000).toISOString()}`
+      : "(none)";
+
+    await mkdir(outDir, { recursive: true });
+    const omPath = join(outDir, `sbperf-${ref ?? "all"}.om`);
+    await Bun.write(omPath, om);
+    console.error(
+      `> ${omPath} (${refs.length} ref(s), ${snaps.length} snapshots, ${seriesCount} families, ${sampleCount} samples)`,
+    );
+    console.error(`> time range: ${span}`);
+    console.error("");
+    console.error(backfillInstructions(omPath));
+  } finally {
+    store.close();
+  }
+}
+
 async function doReport(dir: string, storePath?: string): Promise<string> {
   const analysis = await loadAnalysis(dir);
   const path = storePath ?? DEFAULT_STORE;
@@ -317,6 +361,12 @@ async function main(): Promise<void> {
         const dir = flags._[0];
         if (!dir) usage();
         await doReport(dir, flags.store);
+        break;
+      }
+      case "export-prometheus": {
+        const dir = flags._[0];
+        if (!dir) usage();
+        await doExportPrometheus(dir, flags.ref, flags.store ?? DEFAULT_STORE);
         break;
       }
       case "snapshot": {
