@@ -79,9 +79,13 @@ src/
   server_err_count, avg/min/max_execution_time }`. Needs the function `id` from
   the functions list, not the slug. collect.ts aggregates buckets per function.
 - The endpoints sbperf depends on are asserted against the upstream OpenAPI spec
-  (`api.supabase.com/api/v1-json`) by `scripts/check-api-drift.ts` in CI - this
-  is how we stay in sync without a CLI dependency or manual tracking. When you
-  add/rename a Management API call in `management.ts`, update the manifest there.
+  by `scripts/check-api-drift.ts` in CI - this is how we stay in sync without a
+  CLI dependency or manual tracking. Two layers: PRIMARY (pass/fail) checks the
+  LIVE served spec (`api.supabase.com/api/v1-json`) - ground truth for what the
+  deployed API accepts; CROSS-CHECK (advisory `::warning::`) diffs live against
+  the version-controlled docs copy (`supabase/supabase` `apps/docs/spec`), which
+  is generated from the API and can lag a deploy. When you add/rename a
+  Management API call in `management.ts`, update the manifest in that script.
 
 ## See also
 
