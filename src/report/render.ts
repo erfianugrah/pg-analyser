@@ -171,7 +171,10 @@ ${a.errors.length ? `<h2>Collection notes <span class=count>${a.errors.length}</
   th{background:#f6f6f6;font-weight:600;white-space:nowrap}
   tbody tr:nth-child(even){background:#fafafa}
   td.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;white-space:pre-wrap;max-width:620px;word-break:break-word}
-  table.kv td:first-child{white-space:nowrap;font-weight:600;width:140px}
+  table.kv{table-layout:fixed}
+  table.kv td:first-child{white-space:nowrap;font-weight:600;width:130px}
+  table.kv td:nth-child(3){width:34%;word-break:break-word}
+  table.kv td.mono{white-space:pre-wrap;word-break:break-word}
   .count{display:inline-block;background:var(--fg);color:#fff;border-radius:10px;padding:0 7px;font-size:11px;vertical-align:middle}
   .note{color:var(--mut);font-weight:400;font-size:12px}
   .empty{color:var(--mut);font-style:italic;margin:4px 0}

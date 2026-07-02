@@ -91,4 +91,27 @@ describe("fetchRetry", () => {
     expect(res.status).toBe(200);
     expect(n).toBe(2);
   });
+
+  test("does NOT retry on 544 (Supabase app-level failure) - fails fast", async () => {
+    let n = 0;
+    mockFetch(() => {
+      n++;
+      return textResponse('{"message":"connection timeout"}', 544);
+    });
+    const t = makeTransport({ kind: "direct", accessToken: "sbp_x" });
+    const res = await t.mgmt("/v1/x");
+    expect(res.status).toBe(544);
+    expect(n).toBe(1); // single attempt, no retry storm on a paused project
+  });
+
+  test("does NOT retry on 500", async () => {
+    let n = 0;
+    mockFetch(() => {
+      n++;
+      return textResponse("boom", 500);
+    });
+    const t = makeTransport({ kind: "direct", accessToken: "sbp_x" });
+    await t.mgmt("/v1/x");
+    expect(n).toBe(1);
+  });
 });

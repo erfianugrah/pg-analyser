@@ -15,13 +15,19 @@ export interface Transport {
 
 const SUPABASE_API = "https://api.supabase.com";
 
-/** fetch with one retry on 429 / 5xx (exponential-ish backoff). */
+// Transient statuses worth retrying: rate-limit + gateway/proxy errors.
+// Deliberately EXCLUDES 500 and Supabase's app-level codes (e.g. 544 "query
+// failed / connection timeout") - retrying those just multiplies the wait on a
+// paused or unreachable project.
+const RETRYABLE = new Set([429, 502, 503, 504]);
+
+/** fetch with one retry on transient statuses (exponential-ish backoff). */
 async function fetchRetry(url: string, init: RequestInit, retries = 2): Promise<Response> {
   let lastErr: unknown;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       const res = await fetch(url, init);
-      if ((res.status === 429 || res.status >= 500) && attempt < retries) {
+      if (RETRYABLE.has(res.status) && attempt < retries) {
         const retryAfter = Number(res.headers.get("retry-after"));
         const waitMs =
           Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 400 * 2 ** attempt;
