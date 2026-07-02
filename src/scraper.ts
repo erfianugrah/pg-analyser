@@ -42,7 +42,7 @@ services:
       - --storage.tsdb.retention.time=90d
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./data/prometheus:/prometheus
+      - prometheus-data:/prometheus
     ports:
       - "9090:9090"
 
@@ -57,11 +57,17 @@ services:
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
-      - ./data/grafana:/var/lib/grafana
+      - grafana-data:/var/lib/grafana
     ports:
       - "3000:3000"
     depends_on:
       - prometheus
+
+# Named volumes - Docker owns them, avoiding the host-uid-mismatch crash you get
+# bind-mounting ./data into the nobody(65534)/grafana(472) containers.
+volumes:
+  prometheus-data:
+  grafana-data:
 `;
 
   const datasourceYml = `apiVersion: 1
@@ -84,7 +90,6 @@ providers:
   await mkdir(join(dir, "grafana/provisioning/datasources"), { recursive: true });
   await mkdir(join(dir, "grafana/provisioning/dashboards"), { recursive: true });
   await mkdir(join(dir, "grafana/dashboards"), { recursive: true });
-  await mkdir(join(dir, "data"), { recursive: true });
 
   await Promise.all([
     Bun.write(join(dir, "prometheus.yml"), prometheusYml),
@@ -95,7 +100,7 @@ providers:
       join(dir, "grafana/dashboards/supabase.json"),
       JSON.stringify(dashboard(ref), null, 2),
     ),
-    Bun.write(join(dir, ".gitignore"), "prometheus.yml\ndata/\n"),
+    Bun.write(join(dir, ".gitignore"), "prometheus.yml\n"),
     Bun.write(join(dir, "README.md"), scraperReadme(ref)),
   ]);
 

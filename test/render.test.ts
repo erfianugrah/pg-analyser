@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { render } from "../src/report/render.ts";
+import { render, renderIndex } from "../src/report/render.ts";
 import type { Analysis } from "../src/schemas.ts";
 
 function fixture(overrides: Partial<Analysis> = {}): Analysis {
@@ -31,6 +31,8 @@ function fixture(overrides: Partial<Analysis> = {}): Analysis {
     pooler: [{ database_type: "PRIMARY", db_port: 6543, pool_mode: "transaction" }],
     backups: { pitr_enabled: false, walg_enabled: true, backups: [] },
     upgrade: { eligible: true, current_app_version: "v1", latest_app_version: "v2" },
+    functions: [],
+    buckets: [],
     advisors: {
       performance: [
         { name: "x", title: "Multiple Permissive Policies", level: "WARN", detail: "detail here" },
@@ -54,11 +56,13 @@ function fixture(overrides: Partial<Analysis> = {}): Analysis {
         { table: "public.pastes", policyname: "view own", cmd: "SELECT", unwrapped_auth: true },
       ],
       connections: [{ state: "idle", connections: 3 }],
+      storageUsage: [],
     },
     metrics: {
       available: true,
       samples: [{ name: "node_load1", labels: { service_type: "db" }, value: 0.42 }],
     },
+    trends: [],
     errors: [],
   };
   return { ...base, ...overrides };
@@ -152,6 +156,44 @@ describe("render", () => {
     expect(html).toContain("below 99%");
   });
 
+  test("renders SVG sparklines when trends present", () => {
+    const html = render(
+      fixture({
+        trends: [
+          {
+            title: "CPU load (1m)",
+            unit: "",
+            points: [
+              { t: 1, v: 0.5 },
+              { t: 2, v: 0.9 },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(html).toContain("30-day trends");
+    expect(html).toContain("<svg viewBox");
+  });
+
+  test("omits trends section when no trend data", () => {
+    expect(render(fixture())).not.toContain("30-day trends");
+  });
+
+  test("storage buckets render with access + usage", () => {
+    const html = render(
+      fixture({
+        buckets: [{ name: "avatars", public: true }],
+        sql: {
+          ...fixture().sql,
+          storageUsage: [{ bucket_id: "avatars", objects: 12, size: "3 MB" }],
+        },
+      }),
+    );
+    expect(html).toContain("avatars");
+    expect(html).toContain("public");
+    expect(html).toContain("3 MB");
+  });
+
   test("produces balanced HTML tags", () => {
     expect(tagBalance(render(fixture()))).toBe(true);
   });
@@ -159,5 +201,39 @@ describe("render", () => {
   test("is self-contained (no external asset refs)", () => {
     const html = render(fixture());
     expect(html).not.toMatch(/<(script|link)[^>]+(src|href)=["']https?:/);
+  });
+});
+
+describe("renderIndex", () => {
+  test("links each project with status + findings counts", () => {
+    const html = renderIndex(
+      [
+        {
+          name: "proj-a",
+          ref: "aaa",
+          status: "ACTIVE_HEALTHY",
+          high: 0,
+          med: 2,
+          low: 5,
+          dir: "aaa",
+        },
+        {
+          name: "proj-b",
+          ref: "bbb",
+          status: "INACTIVE",
+          high: 0,
+          med: 0,
+          low: 0,
+          dir: "bbb",
+          error: "unreachable",
+        },
+      ],
+      "2026-07-02T00:00:00Z",
+    );
+    expect(html).toContain('href="aaa/report.html"');
+    expect(html).toContain("proj-a");
+    expect(html).toContain("0 / 2 / 5");
+    expect(html).toContain("unreachable"); // failed project shows its error
+    expect(html).toContain("2 projects");
   });
 });

@@ -15,6 +15,7 @@ export const Project = z.object({
   region: z.string(),
   status: z.string(),
   created_at: z.string(),
+  organization_id: z.string().optional(),
   database: z.object({ version: z.string() }).optional(),
 });
 export type Project = z.infer<typeof Project>;
@@ -61,6 +62,21 @@ export const Backups = z.object({
   walg_enabled: z.boolean().optional(),
   backups: z.array(z.unknown()).optional(),
 });
+
+export const EdgeFunction = z.object({
+  slug: z.string(),
+  name: z.string().optional(),
+  status: z.string().optional(),
+  version: z.number().optional(),
+});
+export const EdgeFunctions = z.array(EdgeFunction);
+
+export const StorageBucket = z.object({
+  id: z.string().optional(),
+  name: z.string(),
+  public: z.boolean().optional(),
+});
+export const StorageBuckets = z.array(StorageBucket);
 
 export const UpgradeEligibility = z.object({
   eligible: z.boolean(),
@@ -118,6 +134,14 @@ export const MetricSample = z.object({
 });
 export type MetricSample = z.infer<typeof MetricSample>;
 
+export const TrendPoint = z.object({ t: z.number(), v: z.number() });
+export const TrendSeries = z.object({
+  title: z.string(),
+  unit: z.string(),
+  points: z.array(TrendPoint),
+});
+export type TrendSeries = z.infer<typeof TrendSeries>;
+
 export const Analysis = z.object({
   meta: z.object({
     ref: z.string(),
@@ -145,6 +169,8 @@ export const Analysis = z.object({
   pooler: PoolerConfig.nullable(),
   backups: Backups.nullable(),
   upgrade: UpgradeEligibility.nullable(),
+  functions: EdgeFunctions,
+  buckets: StorageBuckets,
   advisors: z.object({
     performance: z.array(Advisor),
     security: z.array(Advisor),
@@ -161,11 +187,13 @@ export const Analysis = z.object({
     deadTuples: SqlRows,
     rlsPolicies: SqlRows,
     connections: SqlRows,
+    storageUsage: SqlRows,
   }),
   metrics: z.object({
     available: z.boolean(),
     samples: z.array(MetricSample),
   }),
+  trends: z.array(TrendSeries),
   errors: z.array(z.object({ source: z.string(), message: z.string() })),
 });
 export type Analysis = z.infer<typeof Analysis>;

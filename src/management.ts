@@ -1,3 +1,4 @@
+import { z } from "zod";
 import * as S from "./schemas.ts";
 import type { Transport } from "./transport.ts";
 
@@ -45,6 +46,19 @@ export class Management {
 
   backups(ref: string) {
     return this.#json(`/v1/projects/${ref}/database/backups`).then((d) => S.Backups.parse(d));
+  }
+
+  functions(ref: string) {
+    return this.#json(`/v1/projects/${ref}/functions`).then((d) => S.EdgeFunctions.parse(d));
+  }
+
+  buckets(ref: string) {
+    return this.#json(`/v1/projects/${ref}/storage/buckets`).then((d) => S.StorageBuckets.parse(d));
+  }
+
+  /** All projects visible to the PAT (for org-wide iteration). */
+  projects() {
+    return this.#json(`/v1/projects`).then((d) => z.array(S.Project).parse(d));
   }
 
   upgrade(ref: string) {

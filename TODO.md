@@ -10,11 +10,13 @@
 - [x] full unit suite (config, schemas, transport, management, collect, scraper, sql) - 55 tests
 - [x] live `smoke.ts` (all planes) + gated Live smoke CI workflow
 
+- [x] `full --all` org iteration + index.html overview
+- [x] `--prometheus <url>` 30-day trend panels (inline SVG sparklines)
+- [x] edge-function + storage bucket coverage
+- [x] scraper stack validated end-to-end (fixed host-uid crash with named volumes)
+
 ## Next
-- [ ] gatekeeper-transport live smoke once a narrow key is provisioned (set repo secrets, run the Live smoke workflow)
+- [ ] gatekeeper-transport live smoke once a narrow key is provisioned (parked)
 - [ ] richer disk/IO analysis (IOPS headroom vs node_disk_* rates from the scraper)
-- [ ] optional `--prometheus <url>` on `report` to embed real 30-day panels if a scraper exists
-- [ ] edge-function stats (needs per-function_id) + storage bucket sizes
-- [ ] `full --all` to iterate every project in an org
-- [ ] CI: typecheck + lint + test on push
-- [ ] `bun run build` binary release via GH Actions
+- [ ] per-function invocation stats (needs function_id + analytics endpoint)
+- [ ] push to a remote so CI/release workflows actually run

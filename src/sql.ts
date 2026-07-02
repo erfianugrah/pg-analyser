@@ -137,6 +137,15 @@ export const QUERIES = {
     ) p
     order by 4 desc, 1`,
 
+  storageUsage: /* sql */ `
+    select
+      bucket_id,
+      count(*) as objects,
+      pg_size_pretty(coalesce(sum((metadata->>'size')::bigint), 0)) as size
+    from storage.objects
+    group by bucket_id
+    order by coalesce(sum((metadata->>'size')::bigint), 0) desc`,
+
   connections: /* sql */ `
     select
       coalesce(state, '(none)') as state,
