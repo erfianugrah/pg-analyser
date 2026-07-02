@@ -1,5 +1,5 @@
 import { Management } from "./management.ts";
-import { curate, parsePrometheus } from "./metrics.ts";
+import { parsePrometheus } from "./metrics.ts";
 import { fetchTrends } from "./prometheus.ts";
 import { type Analysis, MetricSample } from "./schemas.ts";
 import { QUERIES } from "./sql.ts";
@@ -114,9 +114,13 @@ export async function collect(
     ),
   ]);
 
-  const samples = metricsText
-    ? curate(parsePrometheus(metricsText)).map((s) => MetricSample.parse(s))
-    : [];
+  // Capture the FULL scrape - every family the endpoint serves, no curation.
+  // The complete corpus is the product (node_exporter + postgres_exporter +
+  // pgbouncer + supavisor + gotrue + realtime + postgREST + ...); the report
+  // curates only at the display boundary (see report/render metricsTable), and
+  // the history store keeps everything so any metric is trendable / analyzable
+  // later. Nothing is dropped at collection.
+  const samples = metricsText ? parsePrometheus(metricsText).map((s) => MetricSample.parse(s)) : [];
   const trends = opts.prometheusUrl
     ? await safe("trends", () => fetchTrends(opts.prometheusUrl as string), [])
     : [];

@@ -13,6 +13,8 @@ import { fakeTransport, jsonResponse, textResponse } from "./helpers.ts";
 
 const METRICS = `node_load1{service_type="db"} 0.5
 pg_stat_database_num_backends{server="localhost:5432"} 4
+go_goroutines 42
+node_memory_Dirty_bytes 1024
 `;
 
 function fullRoutes(overrides: Record<string, () => Response> = {}) {
@@ -57,7 +59,12 @@ describe("collect", () => {
     expect(a.sql.dbSize).toBe("20 MB");
     expect(a.disk?.iops).toBe(3000);
     expect(a.metrics.available).toBe(true);
-    expect(a.metrics.samples.length).toBeGreaterThan(0);
+    // Full corpus captured - even non-allowlisted families (go runtime, the
+    // long-tail node_memory_* fields) are stored, not just the display slice.
+    const names = new Set(a.metrics.samples.map((s) => s.name));
+    expect(names.has("go_goroutines")).toBe(true);
+    expect(names.has("node_memory_Dirty_bytes")).toBe(true);
+    expect(a.metrics.samples).toHaveLength(4);
     expect(a.errors).toHaveLength(0);
     expect(backupsUnused).toBeDefined();
   });

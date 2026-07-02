@@ -1,4 +1,5 @@
 import { deriveFindings, type Finding, type Severity } from "../findings.ts";
+import { curate } from "../metrics.ts";
 import type { Advisor, Analysis, SqlRow } from "../schemas.ts";
 
 const esc = (s: unknown): string =>
@@ -111,8 +112,12 @@ function functionsSection(a: Analysis): string {
 function metricsTable(a: Analysis): string {
   if (!a.metrics.available)
     return `<p class=empty>metrics endpoint not reachable (see collection notes)</p>`;
-  if (!a.metrics.samples.length) return `<p class=empty>no curated samples</p>`;
-  const rows = a.metrics.samples
+  if (!a.metrics.samples.length) return `<p class=empty>no samples</p>`;
+  // The full scrape is captured in analysis.json + the history store; the HTML
+  // shows a readable key-metric slice. curate() is a DISPLAY filter only.
+  const display = curate(a.metrics.samples);
+  const note = `<p class=note>Showing ${display.length} key point-in-time metrics of ${a.metrics.samples.length} captured (full corpus in analysis.json).</p>`;
+  const rows = display
     .map((s) => {
       const label = Object.entries(s.labels)
         .filter(
@@ -123,7 +128,7 @@ function metricsTable(a: Analysis): string {
       return `<tr><td class=mono>${esc(s.name)}</td><td class=mono>${esc(label)}</td><td>${esc(s.value)}</td></tr>`;
     })
     .join("");
-  return `<table><thead><tr><th>metric</th><th>labels</th><th>value</th></tr></thead><tbody>${rows}</tbody></table>`;
+  return `${note}<table><thead><tr><th>metric</th><th>labels</th><th>value</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 const fmtVal = (v: number, unit: string): string =>

@@ -52,9 +52,12 @@ function parseLabels(s: string): Record<string, string> {
 }
 
 /**
- * Curate the full scrape down to the perf-relevant point-in-time families.
- * Drops the long tail (go_*, promhttp_*, per-cpu counters, etc.) so
- * analysis.json stays lean.
+ * DISPLAY-ONLY curation. `collect` captures the FULL scrape (all ~321 families)
+ * into analysis.json + the history store - nothing is dropped at collection.
+ * This allowlist only picks the readable key point-in-time slice the HTML
+ * report's metrics table shows (report/render metricsTable); the full corpus is
+ * always available in analysis.json and trendable from the store. Do NOT use
+ * this to gate what gets stored.
  */
 // Verified against a live privileged-metrics scrape (2026-07). Supabase renames
 // exporter families periodically (e.g. pgbouncer_pools_cl_* -> _client_*,
