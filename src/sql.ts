@@ -30,12 +30,22 @@ export const QUERIES = {
   dbSize: /* sql */ `
     select pg_size_pretty(pg_database_size(current_database())) as db_size`,
 
+  // Table + index cache-hit ratio. Only meaningful relative to how long stats
+  // have accumulated (see statsResetAge) - a fresh reset shows a misleading 100%.
   cacheHit: /* sql */ `
-    select round(
-      sum(heap_blks_hit) * 100.0
-      / nullif(sum(heap_blks_hit + heap_blks_read), 0), 2
-    ) as cache_hit_pct
+    select
+      round(sum(heap_blks_hit) * 100.0
+        / nullif(sum(heap_blks_hit + heap_blks_read), 0), 2) as cache_hit_pct,
+      (select round(sum(idx_blks_hit) * 100.0
+        / nullif(sum(idx_blks_hit + idx_blks_read), 0), 2)
+       from pg_statio_user_indexes) as index_hit_pct
     from pg_statio_user_tables`,
+
+  // How long pg_stat_statements has been accumulating. Cache-hit % and the
+  // outliers/calls views are only interpretable against this window.
+  statsResetAge: /* sql */ `
+    select (now() - stats_reset)::text as stats_age
+    from extensions.pg_stat_statements_info`,
 
   // Perf-relevant server settings - the API config endpoint returns {} on many
   // projects, so read them from pg_settings directly.
@@ -117,22 +127,55 @@ export const QUERIES = {
     order by seq_scan desc
     limit 20`,
 
-  // MVCC bloat / autovacuum-behind. Thresholded by ABSOLUTE dead tuples so
-  // tiny tables (e.g. 22 dead rows) don't headline with alarming ratios.
+  // Autovacuum-behind, threshold-aware. Rather than a fixed dead-tuple cutoff,
+  // compute each table's actual autovacuum trigger (per-table reloptions, else
+  // the cluster default) and flag tables whose dead tuples already exceed it
+  // (`overdue` = autovacuum is due but hasn't caught up). Adapted from the
+  // Supabase CLI's vacuum-stats inspect query.
   deadTuples: /* sql */ `
+    with opts as (
+      select c.oid, c.relname, n.nspname,
+        array_to_string(c.reloptions, '') as relopts,
+        c.reltuples, s.n_live_tup, s.n_dead_tup, s.last_autovacuum
+      from pg_class c
+      join pg_namespace n on n.oid = c.relnamespace
+      join pg_stat_user_tables s on s.relid = c.oid
+      where n.nspname not in ('pg_catalog', 'information_schema')
+    ), settings as (
+      select nspname, relname, reltuples, n_live_tup, n_dead_tup, last_autovacuum,
+        case when relopts like '%autovacuum_vacuum_threshold%'
+          then substring(relopts, '.*autovacuum_vacuum_threshold=([0-9.]+).*')::int
+          else current_setting('autovacuum_vacuum_threshold')::int end as av_t,
+        case when relopts like '%autovacuum_vacuum_scale_factor%'
+          then substring(relopts, '.*autovacuum_vacuum_scale_factor=([0-9.]+).*')::real
+          else current_setting('autovacuum_vacuum_scale_factor')::real end as av_s
+      from opts
+    )
     select
-      schemaname as schema,
-      schemaname || '.' || relname as table,
+      nspname as schema,
+      nspname || '.' || relname as table,
       n_live_tup as live_rows,
       n_dead_tup as dead_rows,
-      case when n_live_tup > 0
-        then round((n_dead_tup::numeric / n_live_tup) * 100, 1)
-        else null end as dead_pct,
-      last_autovacuum
-    from pg_stat_user_tables
-    where n_dead_tup >= 1000
-       or (n_dead_tup >= 100 and n_live_tup > 0 and n_dead_tup::numeric / n_live_tup >= 0.2)
-    order by n_dead_tup desc
+      round(av_t + av_s * reltuples) as autovacuum_at,
+      case when (av_t + av_s * reltuples) < n_dead_tup then 'yes' else 'no' end as overdue,
+      to_char(last_autovacuum, 'YYYY-MM-DD HH24:MI') as last_autovacuum
+    from settings
+    where n_dead_tup > 0
+    order by (case when (av_t + av_s * reltuples) < n_dead_tup then 0 else 1 end), n_dead_tup desc
+    limit 20`,
+
+  // Per-role connection usage vs each role's limit (rolconnlimit, else the
+  // cluster max). Surfaces a single role exhausting its own connection budget.
+  roleStats: /* sql */ `
+    select
+      rolname as role,
+      (select count(*) from pg_stat_activity a where a.usename = r.rolname) as connections,
+      case when rolconnlimit = -1
+        then current_setting('max_connections')::int
+        else rolconnlimit end as conn_limit
+    from pg_roles r
+    where rolcanlogin
+    order by connections desc
     limit 20`,
 
   // RLS policies re-evaluating auth.* per row (should be wrapped: (select auth.uid())).

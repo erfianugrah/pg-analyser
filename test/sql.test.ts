@@ -5,8 +5,9 @@ const WRITE = /\b(insert|update|delete|drop|alter|truncate|create|grant|revoke)\
 
 describe("perf query set is read-only", () => {
   for (const [name, sql] of Object.entries(QUERIES)) {
-    test(`${name} is a bare SELECT with no write keywords`, () => {
-      expect(sql.trim().toLowerCase().startsWith("select")).toBe(true);
+    test(`${name} is a read-only SELECT/CTE with no write keywords`, () => {
+      const head = sql.trim().toLowerCase();
+      expect(head.startsWith("select") || head.startsWith("with")).toBe(true);
       expect(sql).not.toMatch(WRITE);
     });
   }

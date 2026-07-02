@@ -43,6 +43,8 @@ function fixture(overrides: Partial<Analysis> = {}): Analysis {
     sql: {
       dbSize: "20 MB",
       cacheHitPct: 100,
+      indexHitPct: 99.9,
+      statsResetAge: "8 days 01:02:03",
       pgSettings: [
         { name: "max_connections", setting: "60", unit: null },
         { name: "idle_in_transaction_session_timeout", setting: "0", unit: "ms" },
@@ -59,6 +61,7 @@ function fixture(overrides: Partial<Analysis> = {}): Analysis {
         { table: "public.pastes", policyname: "view own", cmd: "SELECT", unwrapped_auth: true },
       ],
       connections: [{ state: "idle", connections: 3 }],
+      roleStats: [],
       storageUsage: [],
     },
     metrics: {
@@ -215,6 +218,8 @@ describe("renderSummary", () => {
       sql: {
         dbSize: "20 MB",
         cacheHitPct: 100,
+        indexHitPct: 100,
+        statsResetAge: null,
         pgSettings: [],
         topStatements: [],
         topByCalls: [],
@@ -226,6 +231,7 @@ describe("renderSummary", () => {
         replicationSlots: [],
         rlsPolicies: [],
         connections: [],
+        roleStats: [],
         storageUsage: [],
       },
     });
