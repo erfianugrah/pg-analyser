@@ -93,13 +93,24 @@ History accumulates from when you start scraping - it is not retroactive.
 ## Staying in sync with the API
 
 sbperf curates its own set of Management API endpoints (PAT-only, no DB
-password, no CLI dependency). To avoid silently drifting when Supabase changes
-the API, `scripts/check-api-drift.ts` asserts every endpoint sbperf uses still
-exists - with the method we call - in the upstream OpenAPI spec
-(`api.supabase.com/api/v1-json`). CI runs it on every push and weekly.
+password, no CLI dependency). `scripts/check-api-drift.ts` guards against
+silent drift in two layers:
+
+1. **Primary (pass/fail)** - asserts every endpoint sbperf calls still exists,
+   with the method we use, in the **live** served spec
+   (`api.supabase.com/api/v1-json`) - the ground truth for what the deployed API
+   actually accepts. A renamed/removed endpoint fails CI (exit 1).
+2. **Cross-check (advisory)** - diffs the live spec against the
+   version-controlled copy in `supabase/supabase` (`apps/docs/spec`). That copy
+   is generated *from* the API and can lag a deploy, so a divergence is an early
+   warning that upstream is mid-change. Emitted as a GitHub Actions `::warning::`
+   annotation; never fails the build on its own.
+
+CI runs it on every push and weekly.
 
 ```bash
-bun run check:api   # fails loudly if an endpoint was renamed/removed upstream
+bun run check:api                    # live check + cross-check
+SBPERF_NO_CROSSCHECK=1 bun run check:api   # primary only
 ```
 
 ## Development
