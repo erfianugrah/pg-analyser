@@ -50,6 +50,27 @@ describe("curate", () => {
     expect(names.has("pg_stat_database_num_backends")).toBe(true);
     expect(names.has("node_vmstat_pgmajfault")).toBe(false); // long tail dropped
   });
+
+  // Guard against allowlist rot: these are the CURRENT (2026-07) exporter names
+  // after Supabase renames. If Supabase renames again, this fails loudly rather
+  // than silently dropping the metric (as pgbouncer_pools_cl_* did before).
+  test("keeps current renamed families (anti-rot guard)", () => {
+    const current = `pgbouncer_pools_client_waiting_connections{a="b"} 3
+pg_stat_database_xact_commit_total{a="b"} 100
+pg_stat_database_deadlocks_total{a="b"} 0
+pg_database_size_bytes{a="b"} 12345
+realtime_postgres_changes_total_subscriptions{a="b"} 2`;
+    const names = new Set(curate(parsePrometheus(current)).map((x) => x.name));
+    for (const n of [
+      "pgbouncer_pools_client_waiting_connections",
+      "pg_stat_database_xact_commit_total",
+      "pg_stat_database_deadlocks_total",
+      "pg_database_size_bytes",
+      "realtime_postgres_changes_total_subscriptions",
+    ]) {
+      expect(names.has(n)).toBe(true);
+    }
+  });
 });
 
 describe("real fixture", () => {
