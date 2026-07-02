@@ -110,6 +110,40 @@ function metricsTable(a: Analysis): string {
   return `<table><thead><tr><th>metric</th><th>labels</th><th>value</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
+const fmtVal = (v: number, unit: string): string =>
+  unit === "bytes" ? bytes(v) : v < 10 ? v.toFixed(2) : String(Math.round(v));
+
+/** Inline SVG sparkline for one trend series - self-contained, no external assets. */
+function sparkline(s: Analysis["trends"][number]): string {
+  const w = 340;
+  const h = 70;
+  const pad = 4;
+  const vals = s.points.map((p) => p.v);
+  const min = Math.min(...vals);
+  const max = Math.max(...vals);
+  const span = max - min || 1;
+  const n = s.points.length;
+  const x = (i: number) => pad + (n <= 1 ? 0 : (i / (n - 1)) * (w - 2 * pad));
+  const y = (v: number) => h - pad - ((v - min) / span) * (h - 2 * pad);
+  const path = s.points
+    .map((p, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(p.v).toFixed(1)}`)
+    .join(" ");
+  const last = s.points[n - 1]?.v ?? 0;
+  return `<figure class=spark>
+    <figcaption>${esc(s.title)} <b>${esc(fmtVal(last, s.unit))}</b></figcaption>
+    <svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}" preserveAspectRatio="none">
+      <path d="${path}" fill="none" stroke="#3056d3" stroke-width="1.5"/>
+    </svg>
+    <span class=note>${esc(fmtVal(min, s.unit))} - ${esc(fmtVal(max, s.unit))} over ${n} pts</span>
+  </figure>`;
+}
+
+function trendsSection(a: Analysis): string {
+  if (!a.trends.length) return "";
+  return `<h2 id="trends">30-day trends <span class=note>from Prometheus scraper</span></h2>
+<div class=sparks>${a.trends.map(sparkline).join("")}</div>`;
+}
+
 function healthBadges(a: Analysis): string {
   if (!a.health.length) return `<p class=empty>unavailable</p>`;
   return a.health
@@ -146,6 +180,59 @@ function findingsSummary(findings: Finding[], degraded: boolean): string {
 /** Collapsible evidence section (open by default so PDF shows everything). */
 function drill(id: string, title: string, note: string, body: string): string {
   return `<details open id="${id}"><summary><span class=h2>${esc(title)}</span>${note ? ` <span class=note>${esc(note)}</span>` : ""}</summary>${body}</details>`;
+}
+
+export interface IndexRow {
+  name: string;
+  ref: string;
+  status: string;
+  high: number;
+  med: number;
+  low: number;
+  dir: string;
+  error?: string;
+}
+
+/** Org-level index page linking every project report. */
+export function renderIndex(rows: IndexRow[], collectedAt: string): string {
+  const body = rows
+    .map((r) => {
+      const healthy = r.status === "ACTIVE_HEALTHY";
+      const sev =
+        r.error != null
+          ? '<span class="lvl ERROR">ERROR</span>'
+          : r.high > 0
+            ? '<span class="lvl ERROR">high</span>'
+            : r.med > 0
+              ? '<span class="lvl WARN">med</span>'
+              : '<span class="lvl INFO">low</span>';
+      return `<tr>
+      <td><a href="${esc(r.dir)}/report.html">${esc(r.name)}</a></td>
+      <td class=mono>${esc(r.ref)}</td>
+      <td><span class="badge ${healthy ? "ok" : "bad"}">${esc(r.status)}</span></td>
+      <td>${r.error ? esc(r.error) : `${r.high} / ${r.med} / ${r.low}`}</td>
+      <td>${sev}</td>
+    </tr>`;
+    })
+    .join("");
+  return `<!doctype html><html lang=en><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1"><title>sbperf - org report</title>
+<style>
+  body{font:14px/1.45 -apple-system,Segoe UI,Roboto,sans-serif;color:#1a1a1a;margin:0 auto;padding:24px;max-width:1000px}
+  h1{font-size:20px;margin:0 0 4px}.meta{color:#666;font-size:12px;margin-bottom:16px}
+  table{border-collapse:collapse;width:100%;font-size:13px}
+  th,td{text-align:left;padding:5px 9px;border:1px solid #ddd}
+  th{background:#f6f6f6}tbody tr:nth-child(even){background:#fafafa}
+  td.mono{font-family:ui-monospace,Menlo,monospace;font-size:11.5px}
+  .badge{font-size:11px;padding:1px 6px;border-radius:3px}.badge.ok{background:#e3f4e3}.badge.bad{background:#fde2e2}
+  .lvl{font-weight:700;font-size:11px;padding:1px 5px;border-radius:2px}
+  .lvl.WARN{background:#fff4d6}.lvl.ERROR{background:#fde2e2}.lvl.INFO{background:#e6f0ff}
+  a{color:#3056d3}
+</style></head><body>
+<h1>Supabase performance - org report</h1>
+<div class=meta>${rows.length} projects &middot; collected ${esc(collectedAt)} &middot; findings shown as high / med / low</div>
+<table><thead><tr><th>project</th><th>ref</th><th>status</th><th>findings</th><th>top sev</th></tr></thead><tbody>${body}</tbody></table>
+</body></html>`;
 }
 
 export function render(a: Analysis): string {
@@ -191,6 +278,7 @@ export function render(a: Analysis): string {
 ${findingsSummary(findings, degraded)}
 
 <h2>Service health</h2><p>${healthBadges(a)}</p>
+${trendsSection(a)}
 
 <h2 id="infra">Infrastructure</h2>
 <table class=kv>
@@ -213,6 +301,8 @@ ${drill("unused", "Unused indexes", "idx_scan = 0, non-constraint", sec(a.sql.un
 ${drill("seqscan", "Sequential-scan heavy", "seq_scan > idx_scan, >1k rows", sec(a.sql.seqScanHeavy, "sql:seqScanHeavy", { mono: ["table"], hide: ["schema"] }))}
 ${drill("deadtuples", "Dead tuples / autovacuum", "significant bloat only (>=1k dead, or >=100 & >=20%)", sec(a.sql.deadTuples, "sql:deadTuples", { mono: ["table"], hide: ["schema"] }))}
 ${drill("connections", "Connections", "by state", sec(a.sql.connections, "sql:connections"))}
+${drill("functions", "Edge functions", "", a.functions.length ? sqlTable(a.functions as unknown as SqlRow[], { mono: ["slug"] }) : "<p class=empty>none deployed</p>")}
+${drill("storage", "Storage", "buckets + object usage", storageSection(a))}
 ${drill("apivol", "API request volume", "per interval", errored.has("apiCounts") ? '<p class="empty warn-text">not collected</p>' : sqlTable(a.apiCounts as unknown as SqlRow[], { mono: ["timestamp"] }))}
 ${drill("metrics", "Infra metrics", "point-in-time snapshot", metricsTable(a))}
 ${a.errors.length ? `<h2>Collection notes <span class=count>${a.errors.length}</span></h2>${collectionNotes(a)}` : ""}
@@ -256,6 +346,10 @@ ${a.errors.length ? `<h2>Collection notes <span class=count>${a.errors.length}</
   .badge.ok{background:var(--okbg)}.badge.warn{background:var(--warnbg)}.badge.bad{background:var(--errbg)}
   table.adv td:nth-child(3){max-width:560px}
   a{color:var(--accent)}
+  .sparks{display:grid;grid-template-columns:repeat(2,1fr);gap:10px 18px;margin-top:8px}
+  figure.spark{margin:0}
+  figure.spark figcaption{font-size:12px;font-weight:600}
+  figure.spark svg{border:1px solid var(--line);background:#fafafa}
   @page{size:A4;margin:14mm 12mm}
   @media print{body{padding:0;max-width:none}h2,summary{page-break-after:avoid}tr{page-break-inside:avoid}details{page-break-inside:auto}}
 </style></head><body>
@@ -270,6 +364,19 @@ ${banner}
 ${sections}
 <p class=meta style="margin-top:32px">Generated deterministically from the Supabase Management API, read-only SQL, and the project metrics endpoint. No values inferred.</p>
 </body></html>`;
+}
+
+function storageSection(a: Analysis): string {
+  if (!a.buckets.length) return `<p class=empty>no buckets</p>`;
+  const usage = new Map<string, SqlRow>();
+  for (const r of a.sql.storageUsage) usage.set(String(r.bucket_id), r);
+  const body = a.buckets
+    .map((b) => {
+      const u = usage.get(b.name);
+      return `<tr><td class=mono>${esc(b.name)}</td><td>${b.public ? '<span class="badge warn">public</span>' : '<span class="badge ok">private</span>'}</td><td>${esc(u?.objects ?? 0)}</td><td>${esc(u?.size ?? "0 bytes")}</td></tr>`;
+    })
+    .join("");
+  return `<table><thead><tr><th>bucket</th><th>access</th><th>objects</th><th>size</th></tr></thead><tbody>${body}</tbody></table>`;
 }
 
 /** Dedup identical error messages (e.g. 8x connection-timeout) into one row + count. */

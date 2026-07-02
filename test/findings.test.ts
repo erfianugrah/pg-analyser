@@ -21,6 +21,8 @@ function base(): Analysis {
     pooler: null,
     backups: null,
     upgrade: null,
+    functions: [],
+    buckets: [],
     advisors: { performance: [], security: [] },
     apiCounts: [],
     sql: {
@@ -34,8 +36,10 @@ function base(): Analysis {
       deadTuples: [],
       rlsPolicies: [],
       connections: [],
+      storageUsage: [],
     },
     metrics: { available: false, samples: [] },
+    trends: [],
     errors: [],
   };
 }

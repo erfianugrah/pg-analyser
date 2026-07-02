@@ -4,7 +4,10 @@ import { join } from "node:path";
 import pkg from "../package.json" with { type: "json" };
 import { collect } from "./collect.ts";
 import { ConfigError, loadConfig } from "./config.ts";
-import { render } from "./report/render.ts";
+import { deriveFindings } from "./findings.ts";
+import { Management } from "./management.ts";
+import { htmlToPdf } from "./report/pdf.ts";
+import { type IndexRow, render, renderIndex } from "./report/render.ts";
 import { writeScraper } from "./scraper.ts";
 import { makeTransport } from "./transport.ts";
 
@@ -18,6 +21,7 @@ Usage:
   sbperf report   <dir>                       analysis.json -> report.html
   sbperf pdf      <dir>                        analysis.json -> report.pdf
   sbperf full     --ref <ref> [--out <dir>]    analyze + report + pdf
+  sbperf full     --all [--org <slug>]         audit every project + index.html
   sbperf scrape-init --ref <ref> [--dir <d>]   write the Prometheus+Grafana stack
 
 Transport (auto-detected from env; see .env.example):
@@ -26,17 +30,83 @@ Transport (auto-detected from env; see .env.example):
   process.exit(1);
 }
 
-function parseFlags(argv: string[]): { _: string[]; ref?: string; out?: string; dir?: string } {
-  const out: { _: string[]; ref?: string; out?: string; dir?: string } = { _: [] };
+type Flags = {
+  _: string[];
+  ref?: string;
+  out?: string;
+  dir?: string;
+  org?: string;
+  all?: boolean;
+  prometheus?: string;
+};
+function parseFlags(argv: string[]): Flags {
+  const out: Flags = { _: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--ref") out.ref = argv[++i];
     else if (a === "--out") out.out = argv[++i];
     else if (a === "--dir") out.dir = argv[++i];
+    else if (a === "--org") out.org = argv[++i];
+    else if (a === "--prometheus") out.prometheus = argv[++i];
+    else if (a === "--all") out.all = true;
     else if (a?.startsWith("--")) usage();
     else if (a) out._.push(a);
   }
   return out;
+}
+
+async function doAll(
+  orgFilter: string | undefined,
+  outBase: string,
+  prometheusUrl?: string,
+): Promise<void> {
+  const transport = makeTransport(loadConfig());
+  const m = new Management(transport);
+  let projects = await m.projects();
+  if (orgFilter) projects = projects.filter((p) => p.organization_id === orgFilter);
+  if (!projects.length) throw new Error("no projects found");
+  console.error(`> auditing ${projects.length} projects via ${transport.kind} transport`);
+
+  const rows: IndexRow[] = [];
+  for (const p of projects) {
+    const dir = join(outBase, p.id);
+    process.stderr.write(`  - ${p.name} (${p.id}) `);
+    try {
+      const analysis = await collect(p.id, transport, VERSION, { prometheusUrl });
+      await mkdir(dir, { recursive: true });
+      await Bun.write(join(dir, "analysis.json"), JSON.stringify(analysis, null, 2));
+      const html = render(analysis);
+      await Bun.write(join(dir, "report.html"), html);
+      await htmlToPdf(html, join(dir, "report.pdf"));
+      const f = deriveFindings(analysis);
+      rows.push({
+        name: p.name,
+        ref: p.id,
+        status: p.status,
+        high: f.filter((x) => x.severity === "high").length,
+        med: f.filter((x) => x.severity === "med").length,
+        low: f.filter((x) => x.severity === "low").length,
+        dir: p.id,
+      });
+      console.error(`ok (${f.length} findings)`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      rows.push({
+        name: p.name,
+        ref: p.id,
+        status: p.status,
+        high: 0,
+        med: 0,
+        low: 0,
+        dir: p.id,
+        error: msg,
+      });
+      console.error(`FAILED: ${msg}`);
+    }
+  }
+  await mkdir(outBase, { recursive: true });
+  await Bun.write(join(outBase, "index.html"), renderIndex(rows, new Date().toISOString()));
+  console.error(`> index: ${join(outBase, "index.html")}`);
 }
 
 function defaultOut(ref: string): string {
@@ -44,10 +114,10 @@ function defaultOut(ref: string): string {
   return join("reports", `${ref}-${ts}`);
 }
 
-async function doAnalyze(ref: string, outDir: string): Promise<string> {
+async function doAnalyze(ref: string, outDir: string, prometheusUrl?: string): Promise<string> {
   const transport = makeTransport(loadConfig());
   console.error(`> analyzing ${ref} via ${transport.kind} transport`);
-  const analysis = await collect(ref, transport, VERSION);
+  const analysis = await collect(ref, transport, VERSION, { prometheusUrl });
   await mkdir(outDir, { recursive: true });
   const jsonPath = join(outDir, "analysis.json");
   await Bun.write(jsonPath, JSON.stringify(analysis, null, 2));
@@ -75,7 +145,6 @@ async function doReport(dir: string): Promise<string> {
 async function doPdf(dir: string): Promise<string> {
   const analysis = await loadAnalysis(dir);
   const html = render(analysis);
-  const { htmlToPdf } = await import("./report/pdf.ts");
   const pdfPath = join(dir, "report.pdf");
   await htmlToPdf(html, pdfPath);
   console.error(`> ${pdfPath}`);
@@ -91,7 +160,7 @@ async function main(): Promise<void> {
     switch (cmd) {
       case "analyze": {
         if (!flags.ref) usage();
-        await doAnalyze(flags.ref, flags.out ?? defaultOut(flags.ref));
+        await doAnalyze(flags.ref, flags.out ?? defaultOut(flags.ref), flags.prometheus);
         break;
       }
       case "report": {
@@ -107,9 +176,14 @@ async function main(): Promise<void> {
         break;
       }
       case "full": {
+        if (flags.all) {
+          const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+          await doAll(flags.org, flags.out ?? join("reports", `all-${ts}`), flags.prometheus);
+          break;
+        }
         if (!flags.ref) usage();
         const dir = flags.out ?? defaultOut(flags.ref);
-        await doAnalyze(flags.ref, dir);
+        await doAnalyze(flags.ref, dir, flags.prometheus);
         await doReport(dir);
         await doPdf(dir);
         console.error(`> done: ${dir}`);

@@ -27,6 +27,8 @@ function fullRoutes(overrides: Record<string, () => Response> = {}) {
     if (clean.endsWith("/database/backups"))
       return jsonResponse({ pitr_enabled: false, walg_enabled: true, backups: [] });
     if (clean.endsWith("/upgrade/eligibility")) return jsonResponse(upgrade);
+    if (clean.endsWith("/functions")) return jsonResponse([]);
+    if (clean.endsWith("/storage/buckets")) return jsonResponse([]);
     if (clean.endsWith("/advisors/performance")) return jsonResponse(advisorsPerf);
     if (clean.endsWith("/advisors/security")) return jsonResponse({ lints: [] });
     if (clean.includes("usage.api-counts")) return jsonResponse(apiCounts);

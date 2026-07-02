@@ -1,5 +1,6 @@
 import { Management } from "./management.ts";
 import { curate, parsePrometheus } from "./metrics.ts";
+import { fetchTrends } from "./prometheus.ts";
 import { type Analysis, MetricSample } from "./schemas.ts";
 import { QUERIES } from "./sql.ts";
 import type { Transport } from "./transport.ts";
@@ -11,6 +12,7 @@ export async function collect(
   ref: string,
   transport: Transport,
   version: string,
+  opts: { prometheusUrl?: string } = {},
 ): Promise<Analysis> {
   const m = new Management(transport);
   const errors: CollectError[] = [];
@@ -40,6 +42,8 @@ export async function collect(
     pooler,
     backups,
     upgrade,
+    functions,
+    buckets,
     perfAdvisors,
     secAdvisors,
     apiCounts,
@@ -53,6 +57,7 @@ export async function collect(
     deadTuples,
     rlsPolicies,
     connections,
+    storageUsage,
     metricsText,
   ] = await Promise.all([
     safe("health", () => m.health(ref), []),
@@ -62,6 +67,8 @@ export async function collect(
     safe("pooler", () => m.pooler(ref), null),
     safe("backups", () => m.backups(ref), null),
     safe("upgrade", () => m.upgrade(ref), null),
+    safe("functions", () => m.functions(ref), []),
+    safe("buckets", () => m.buckets(ref), []),
     safe("advisors:performance", () => m.advisors(ref, "performance"), []),
     safe("advisors:security", () => m.advisors(ref, "security"), []),
     safe("apiCounts", () => m.apiCounts(ref), []),
@@ -75,6 +82,7 @@ export async function collect(
     sql("deadTuples"),
     sql("rlsPolicies"),
     sql("connections"),
+    sql("storageUsage"),
     safe(
       "metrics",
       async () => {
@@ -88,6 +96,9 @@ export async function collect(
 
   const samples = metricsText
     ? curate(parsePrometheus(metricsText)).map((s) => MetricSample.parse(s))
+    : [];
+  const trends = opts.prometheusUrl
+    ? await safe("trends", () => fetchTrends(opts.prometheusUrl as string), [])
     : [];
 
   const dbSize = (dbSizeRows[0]?.db_size as string | undefined) ?? null;
@@ -121,6 +132,8 @@ export async function collect(
     pooler,
     backups,
     upgrade,
+    functions,
+    buckets,
     advisors: { performance: perfAdvisors, security: secAdvisors },
     apiCounts,
     sql: {
@@ -134,8 +147,10 @@ export async function collect(
       deadTuples,
       rlsPolicies,
       connections,
+      storageUsage,
     },
     metrics: { available: metricsText != null, samples },
+    trends,
     errors,
   };
 

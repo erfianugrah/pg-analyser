@@ -27,13 +27,29 @@ bun run src/index.ts report ./reports/acme     # HTML
 bun run src/index.ts pdf    ./reports/acme     # PDF
 ```
 
+Audit every project in the account (writes an `index.html` linking them all):
+
+```bash
+bun run src/index.ts full --all [--org <slug>]
+```
+
+Embed real 30-day trend charts (needs a running scraper, see below):
+
+```bash
+bun run src/index.ts full --ref <ref> --prometheus http://localhost:9090
+```
+
 ## What it collects
 
 - **Advisors** - performance + security lints (Management API; richer than the CLI)
 - **Read-only SQL** - `pg_stat_statements` outliers, cache-hit %, biggest tables,
   unused indexes, sequential-scan-heavy tables, dead-tuple bloat, connection state
-- **Config** - Postgres version + upgrade drift, disk spec/util, pooler mode, PG tuning params
-- **Infra metrics** - point-in-time snapshot from the project metrics endpoint
+- **RLS policy audit** - flags policies re-evaluating `auth.*()` per row (should be wrapped in `(select ...)`; 94-99% latency win per Supabase's guide)
+- **Config** - Postgres version + upgrade drift, disk spec/util, pooler mode, PG tuning params (`pg_settings`)
+- **Inventory** - edge functions, storage buckets + object usage
+- **Infra metrics** - point-in-time snapshot; optional 30-day trends via `--prometheus`
+
+Reports are structured as a pyramid: a ranked **findings summary** (Performance / Security / Capacity) up top, then infrastructure, then collapsible evidence drill-downs. Paused/unreachable projects render an honest degraded state, not misleading empties.
 
 ## Transports
 
