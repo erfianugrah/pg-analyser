@@ -4,11 +4,13 @@ import { join } from "node:path";
 import pkg from "../package.json" with { type: "json" };
 import { collect } from "./collect.ts";
 import { ConfigError, loadConfig } from "./config.ts";
+import { type DbTarget, parseDbConfig, type RawEntry, resolveTargets } from "./dbtargets.ts";
 import { deriveFindings } from "./findings.ts";
 import { Management } from "./management.ts";
 import { backfillInstructions, toOpenMetrics } from "./promexport.ts";
 import { htmlToPdf } from "./report/pdf.ts";
 import { type IndexRow, render, renderIndex, renderSummary } from "./report/render.ts";
+import type { Analysis } from "./schemas.ts";
 import { writeScraper } from "./scraper.ts";
 import { DirectSqlRunner } from "./sqlrunner.ts";
 import { DEFAULT_STORE, HistoryStore } from "./store.ts";
@@ -38,6 +40,10 @@ Flags:
   --db-url <connstr>   run SQL as superuser via a Postgres connstring (or SBPERF_DB_URL);
                        full-access tier for your own projects - PAT still used for
                        API planes + metrics. Default is the PAT read-only runner.
+                       REPEATABLE: pass multiple --db-url to sweep several DBs
+                       ('full' -> per-DB reports + index; 'snapshot' -> each to store).
+  --db-config <file>   JSON list of {name?,ref?,dbUrl} targets (gitignored); an
+                       alternative to repeated --db-url. ref auto-derived if omitted.
   --prometheus <url>   trends from a scraper's Prometheus instead of the history store
   -h, --help           show this help
   -v, --version        print version
@@ -62,13 +68,14 @@ type Flags = {
   store?: string;
   retentionDays?: number;
   interval?: string;
-  dbUrl?: string;
+  dbUrls: string[];
+  dbConfig?: string;
 };
 
 /** Analytics-endpoint timeframe enum (verified live 2026-07; iso ranges are clamped). */
 const INTERVALS = ["15min", "30min", "1hr", "3hr", "1day", "3day", "7day"] as const;
 function parseFlags(argv: string[]): Flags {
-  const out: Flags = { _: [] };
+  const out: Flags = { _: [], dbUrls: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--help" || a === "-h") usage(0);
@@ -80,12 +87,89 @@ function parseFlags(argv: string[]): Flags {
     else if (a === "--store") out.store = argv[++i];
     else if (a === "--retention-days") out.retentionDays = Number(argv[++i]);
     else if (a === "--interval") out.interval = argv[++i];
-    else if (a === "--db-url") out.dbUrl = argv[++i];
+    else if (a === "--db-url") out.dbUrls.push(argv[++i]!);
+    else if (a === "--db-config") out.dbConfig = argv[++i];
     else if (a === "--all") out.all = true;
     else if (a?.startsWith("--")) usage();
     else if (a) out._.push(a);
   }
   return out;
+}
+
+/** Write a project's full report set to `dir` and return its finding counts. */
+async function emitReport(
+  analysis: Analysis,
+  dir: string,
+): Promise<{ high: number; med: number; low: number }> {
+  await mkdir(dir, { recursive: true });
+  await Bun.write(join(dir, "analysis.json"), JSON.stringify(analysis, null, 2));
+  const html = render(analysis);
+  const summaryHtml = renderSummary(analysis);
+  await Bun.write(join(dir, "report.html"), html);
+  await Bun.write(join(dir, "summary.html"), summaryHtml);
+  await htmlToPdf(html, join(dir, "report.pdf"));
+  await htmlToPdf(summaryHtml, join(dir, "summary.pdf"));
+  const f = deriveFindings(analysis);
+  return {
+    high: f.filter((x) => x.severity === "high").length,
+    med: f.filter((x) => x.severity === "med").length,
+    low: f.filter((x) => x.severity === "low").length,
+  };
+}
+
+/**
+ * Sweep multiple superuser databases (--db-url x N / --db-config) into per-DB
+ * report dirs + an index. SQL runs as superuser per target; the PAT transport
+ * still serves each target's API planes + metrics (keyed by its ref).
+ */
+async function doAllDbs(
+  targets: DbTarget[],
+  outBase: string,
+  prometheusUrl?: string,
+  interval?: string,
+): Promise<void> {
+  const transport = makeTransport(loadCfg());
+  console.error(
+    `> auditing ${targets.length} databases (superuser --db-url; PAT for API + metrics)`,
+  );
+  const rows: IndexRow[] = [];
+  for (const t of targets) {
+    const label = t.name ?? t.ref;
+    process.stderr.write(`  - ${label} (${t.ref}) `);
+    const runner = new DirectSqlRunner(t.dbUrl);
+    try {
+      const analysis = await collect(t.ref, transport, VERSION, {
+        prometheusUrl,
+        interval,
+        sqlRunner: runner,
+      }).finally(() => runner.close());
+      const counts = await emitReport(analysis, join(outBase, t.ref));
+      rows.push({
+        name: t.name ?? analysis.meta.name,
+        ref: t.ref,
+        status: analysis.meta.status,
+        ...counts,
+        dir: t.ref,
+      });
+      console.error(`ok (${counts.high + counts.med + counts.low} findings)`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      rows.push({
+        name: label,
+        ref: t.ref,
+        status: "?",
+        high: 0,
+        med: 0,
+        low: 0,
+        dir: t.ref,
+        error: msg,
+      });
+      console.error(`FAILED: ${msg}`);
+    }
+  }
+  await mkdir(outBase, { recursive: true });
+  await Bun.write(join(outBase, "index.html"), renderIndex(rows, new Date().toISOString()));
+  console.error(`> index: ${join(outBase, "index.html")}`);
 }
 
 async function doAll(
@@ -107,25 +191,9 @@ async function doAll(
     process.stderr.write(`  - ${p.name} (${p.id}) `);
     try {
       const analysis = await collect(p.id, transport, VERSION, { prometheusUrl, interval });
-      await mkdir(dir, { recursive: true });
-      await Bun.write(join(dir, "analysis.json"), JSON.stringify(analysis, null, 2));
-      const html = render(analysis);
-      const summaryHtml = renderSummary(analysis);
-      await Bun.write(join(dir, "report.html"), html);
-      await Bun.write(join(dir, "summary.html"), summaryHtml);
-      await htmlToPdf(html, join(dir, "report.pdf"));
-      await htmlToPdf(summaryHtml, join(dir, "summary.pdf"));
-      const f = deriveFindings(analysis);
-      rows.push({
-        name: p.name,
-        ref: p.id,
-        status: p.status,
-        high: f.filter((x) => x.severity === "high").length,
-        med: f.filter((x) => x.severity === "med").length,
-        low: f.filter((x) => x.severity === "low").length,
-        dir: p.id,
-      });
-      console.error(`ok (${f.length} findings)`);
+      const counts = await emitReport(analysis, dir);
+      rows.push({ name: p.name, ref: p.id, status: p.status, ...counts, dir: p.id });
+      console.error(`ok (${counts.high + counts.med + counts.low} findings)`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       rows.push({
@@ -345,15 +413,35 @@ async function main(): Promise<void> {
   }
 
   try {
+    // Resolve superuser DB targets: repeatable --db-url / --db-config / SBPERF_DB_URL.
+    // Env fallback applies only when no explicit --db-url / --db-config is given
+    // (otherwise the config/flags are authoritative and env would double-count).
+    const flagUrls = flags.dbUrls.length
+      ? flags.dbUrls
+      : !flags.dbConfig && process.env.SBPERF_DB_URL
+        ? [process.env.SBPERF_DB_URL]
+        : [];
+    let targets: DbTarget[] = [];
+    if (flags.dbConfig || flagUrls.length) {
+      const raw: RawEntry[] = [];
+      if (flags.dbConfig) raw.push(...parseDbConfig(await Bun.file(flags.dbConfig).text()));
+      for (const u of flagUrls) raw.push({ dbUrl: u });
+      targets = resolveTargets(raw, raw.length === 1 ? flags.ref : undefined);
+    }
+    const singleDbUrl = targets.length === 1 ? targets[0]!.dbUrl : undefined;
+
     switch (cmd) {
       case "analyze": {
-        if (!flags.ref) usage();
+        if (targets.length > 1)
+          throw new Error("multiple --db-url given; use 'full' to sweep them into per-DB reports");
+        const ref = flags.ref ?? targets[0]?.ref;
+        if (!ref) usage();
         await doAnalyze(
-          flags.ref,
-          flags.out ?? defaultOut(flags.ref),
+          ref,
+          flags.out ?? defaultOut(ref),
           flags.prometheus,
           flags.interval,
-          flags.dbUrl ?? process.env.SBPERF_DB_URL,
+          singleDbUrl,
         );
         break;
       }
@@ -370,14 +458,29 @@ async function main(): Promise<void> {
         break;
       }
       case "snapshot": {
-        if (!flags.ref) usage();
+        const store = flags.store ?? DEFAULT_STORE;
+        const ret = flags.retentionDays ?? 90;
+        if (targets.length > 1) {
+          for (const t of targets)
+            await doSnapshot(
+              t.ref,
+              flags.out ?? defaultOut(t.ref),
+              store,
+              ret,
+              flags.interval,
+              t.dbUrl,
+            );
+          break;
+        }
+        const ref = flags.ref ?? targets[0]?.ref;
+        if (!ref) usage();
         await doSnapshot(
-          flags.ref,
-          flags.out ?? defaultOut(flags.ref),
-          flags.store ?? DEFAULT_STORE,
-          flags.retentionDays ?? 90,
+          ref,
+          flags.out ?? defaultOut(ref),
+          store,
+          ret,
           flags.interval,
-          flags.dbUrl ?? process.env.SBPERF_DB_URL,
+          singleDbUrl,
         );
         break;
       }
@@ -404,15 +507,20 @@ async function main(): Promise<void> {
           );
           break;
         }
-        if (!flags.ref) usage();
-        const dir = flags.out ?? defaultOut(flags.ref);
-        await doAnalyze(
-          flags.ref,
-          dir,
-          flags.prometheus,
-          flags.interval,
-          flags.dbUrl ?? process.env.SBPERF_DB_URL,
-        );
+        if (targets.length > 1) {
+          const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+          await doAllDbs(
+            targets,
+            flags.out ?? join("reports", `all-dbs-${ts}`),
+            flags.prometheus,
+            flags.interval,
+          );
+          break;
+        }
+        const ref = flags.ref ?? targets[0]?.ref;
+        if (!ref) usage();
+        const dir = flags.out ?? defaultOut(ref);
+        await doAnalyze(ref, dir, flags.prometheus, flags.interval, singleDbUrl);
         await doReport(dir);
         await doPdf(dir);
         console.error(`> done: ${dir}`);

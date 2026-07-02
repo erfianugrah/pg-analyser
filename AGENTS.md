@@ -65,6 +65,10 @@ src/
                  (PAT read-only runner, default) + DirectSqlRunner (superuser
                  --db-url via Bun.SQL - full access, any/multiple PG). collect
                  injects one; meta.sqlSource records which. Connstring NEVER stored.
+  dbtargets.ts   multi-DB: parse repeatable --db-url + --db-config (gitignored
+                 sbperf.databases.json); refFromConnstring auto-derives the
+                 Supabase ref (pooler role.ref / db.<ref> host). `full` sweeps
+                 targets -> per-DB reports + index; `snapshot` records each.
   sql.ts         the perf query set - superset of `supabase inspect db`:
                  pg_stat_statements (by time + calls), index-stats, bloat,
                  traffic-profile, threshold-aware vacuum, txid wraparound,
