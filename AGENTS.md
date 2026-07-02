@@ -51,8 +51,11 @@ src/
                  traffic-profile, threshold-aware vacuum, txid wraparound,
                  replication slots, role-stats, point-in-time locks/blocking/
                  long-running, cache-hit + stats-reset age, RLS audit
-  metrics.ts     Prometheus text parser + curated allowlist
-  collect.ts     orchestrate all planes -> validated Analysis (per-source errors captured)
+  metrics.ts     Prometheus text parser + DISPLAY-only allowlist (collect
+                 captures the FULL scrape; curate() only picks the HTML slice)
+  collect.ts     orchestrate all planes -> validated Analysis (per-source errors
+                 captured); captures the COMPLETE metrics corpus (all ~321
+                 families, no curation) - the corpus is the product
   report/render  Analysis -> self-contained HTML (utilitarian, print CSS)
   report/pdf     HTML -> PDF via Playwright
   store.ts       SQLite history store (bun:sqlite): `snapshot` appends full
@@ -82,6 +85,13 @@ src/
 - Read-only SQL: `POST /v1/projects/:ref/database/query/read-only` runs as
   `supabase_read_only_user`; reaches `extensions.pg_stat_statements`, `pg_statio`,
   catalogs. No DB password needed.
+- Metrics endpoint is essentially node_exporter + postgres_exporter + pgbouncer
+  + supavisor + gotrue + realtime + postgREST + db_sql, ~321 families / ~850
+  samples on a real project. `collect` captures ALL of it (no curation) into
+  analysis.json + the SQLite store - the complete corpus is the product, and
+  the deterministic report curates only for the HTML display slice. Design
+  intent (2026-07): collect the whole corpus now; analysis/report/PDF becomes an
+  LLM pass over the corpus later. Never gate storage behind the display allowlist.
 - Metrics endpoint is point-in-time (scrape target), not a TSDB, and takes NO
   time param; the analytics endpoints cap ~24h (verified 2026-07: interval=1day
   returns 24 hourly buckets). So NO single API call yields 30 days of anything -

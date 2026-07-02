@@ -62,8 +62,11 @@ bun run src/index.ts report <dir>            # draws trends from accumulated sna
 - **Config** - Postgres version + upgrade drift, disk spec/util, pooler mode, PG tuning params (`pg_settings`)
 - **Inventory** - edge functions (with per-function invocation stats: request
   volume, 5xx rate, execution time), storage buckets + object usage
-- **Infra metrics** - full node_exporter family set (CPU/disk/network counters
-  included) point-in-time; 30-day trends accumulate via `snapshot` (see below)
+- **Infra metrics** - the COMPLETE scrape (node_exporter + postgres_exporter +
+  pgbouncer + supavisor + gotrue + realtime + postgREST, ~321 families) captured
+  in full to `analysis.json`; no curation. The HTML report shows a readable
+  key-metric slice; the whole corpus is in the data + the history store. 30-day
+  trends accumulate via `snapshot` (see below)
 
 Reports are structured as a pyramid: a ranked **findings summary** (Performance / Security / Capacity) up top, then infrastructure, then collapsible evidence drill-downs. Paused/unreachable projects render an honest degraded state, not misleading empties.
 
