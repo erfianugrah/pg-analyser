@@ -47,9 +47,16 @@
 - Richer disk/IO beyond IOPS (latency, queue depth) - needs sustained scraper
   history to be meaningful.
 
-## Optional (real gaps vs `supabase inspect report`, deliberately not done yet)
-- Real bloat estimation (table + index wasted-bytes, pgstattuple-style). The CLI
-  has it; sbperf has dead-tuple counts, which are related but not the same. The
-  estimate is rough (statistics-based) - add if a reclaim decision needs it.
-- traffic-profile (read-heavy vs write-heavy ratio per table). Niche; useful for
-  architecture calls (partitioning, index strategy) but not a health signal.
+## Comprehensive inspect-parity (done)
+- [x] full index-stats (all indexes by size + scans + unused flag; supersedes the
+      bare unused-only list)
+- [x] estimated bloat (pg_stats-based wasted-bytes) + reclaim finding (>=50MB)
+- [x] traffic-profile (read-heavy vs write-heavy ratio per table)
+- [x] point-in-time locks / blocking / long-running-queries as snapshot evidence;
+      blocking + long-running fire findings when non-empty (real even as a
+      snapshot), captioned as point-in-time. Reversed the earlier "skip" call now
+      that coverage is the goal.
+
+With these, sbperf collects a superset of the `supabase inspect` command set
+(minus point-in-time semantics it can't have offline) plus advisors, metrics,
+RLS audit, txid, and edge-function stats the CLI lacks.

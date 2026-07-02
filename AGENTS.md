@@ -45,8 +45,11 @@ src/
   config.ts      zod env -> Config (access token)
   transport.ts   Transport interface + DirectTransport (auth + retry)
   management.ts  typed, zod-parsed Management API wrapper
-  sql.ts         the perf query set (pg_stat_statements, seq_scan, n_dead_tup,
-                 txid wraparound, replication slots, ...)
+  sql.ts         the perf query set - superset of `supabase inspect db`:
+                 pg_stat_statements (by time + calls), index-stats, bloat,
+                 traffic-profile, threshold-aware vacuum, txid wraparound,
+                 replication slots, role-stats, point-in-time locks/blocking/
+                 long-running, cache-hit + stats-reset age, RLS audit
   metrics.ts     Prometheus text parser + curated allowlist
   collect.ts     orchestrate all planes -> validated Analysis (per-source errors captured)
   report/render  Analysis -> self-contained HTML (utilitarian, print CSS)
