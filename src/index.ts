@@ -5,7 +5,7 @@ import pkg from "../package.json" with { type: "json" };
 import { type Brand, DEFAULT_BRAND, loadBrand } from "./brand.ts";
 import { collect } from "./collect.ts";
 import { ConfigError, loadConfig } from "./config.ts";
-import { type DbTarget, parseDbConfig, type RawEntry, resolveTargets } from "./dbtargets.ts";
+import { type DbTarget, parseDbConfig, type RawEntry, REF, resolveTargets } from "./dbtargets.ts";
 import { deriveFindings } from "./findings.ts";
 import { mergeTrends, parseTrendsFile } from "./importtrends.ts";
 import { Management } from "./management.ts";
@@ -45,7 +45,8 @@ Usage:
   sbperf narrate  <dir>                        analysis.json -> narrative.md (LLM pass)
   sbperf import-trends <dir> <file...>         merge external CSV/JSON series into analysis.trends
   sbperf full     --ref <ref> [--out <dir>]    analyze + report + pdf
-  sbperf full     --ref <r1> --ref <r2> ...    audit several projects + combined index
+  sbperf full     --ref <r1>,<r2> ...          audit several projects + combined index
+  sbperf full     --ref-file <refs.txt|.csv>   ...refs from a file (one per line / CSV)
   sbperf full     --all [--org <slug>]         audit every project + index.html
   sbperf snapshot --ref <ref> [--store <db>]   collect + append to the history store
   sbperf export-prometheus <dir> [--ref <ref>] history store -> OpenMetrics for promtool backfill
@@ -87,6 +88,7 @@ type Flags = {
   _: string[];
   ref?: string;
   refs: string[];
+  refFiles: string[];
   out?: string;
   dir?: string;
   org?: string;
@@ -105,17 +107,24 @@ type Flags = {
 /** Analytics-endpoint timeframe enum (verified live 2026-07; iso ranges are clamped). */
 const INTERVALS = ["15min", "30min", "1hr", "3hr", "1day", "3day", "7day"] as const;
 function parseFlags(argv: string[]): Flags {
-  const out: Flags = { _: [], dbUrls: [], refs: [] };
+  const out: Flags = { _: [], dbUrls: [], refs: [], refFiles: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--help" || a === "-h") usage(0);
-    // --ref is repeatable: each occurrence accumulates into refs[]; the last
-    // also sets `ref` so single-ref call sites keep working unchanged.
+    // --ref is repeatable AND accepts comma/space-delimited lists in a single
+    // value (--ref a,b or --ref "a b"). Each token accumulates into refs[]; the
+    // last also sets `ref` so single-ref call sites keep working unchanged.
     else if (a === "--ref") {
-      const v = argv[++i]!;
-      out.refs.push(v);
-      out.ref = v;
-    } else if (a === "--out") out.out = argv[++i];
+      for (const r of splitRefs(argv[++i]!)) {
+        out.refs.push(r);
+        out.ref = r;
+      }
+    }
+    // --ref-file <path>: read refs from a .txt (one per line) or .csv. Any
+    // ref-shaped token (20 lowercase letters) is picked up; headers, names,
+    // blank lines and #-comments are ignored. Repeatable.
+    else if (a === "--ref-file") out.refFiles.push(argv[++i]!);
+    else if (a === "--out") out.out = argv[++i];
     else if (a === "--dir") out.dir = argv[++i];
     else if (a === "--org") out.org = argv[++i];
     else if (a === "--prometheus") out.prometheus = argv[++i];
@@ -353,6 +362,28 @@ function loadCfg() {
 function defaultOut(ref: string): string {
   const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   return join("reports", `${ref}-${ts}`);
+}
+
+/** Split a --ref value on commas/whitespace into individual tokens. */
+function splitRefs(v: string): string[] {
+  return v.split(/[\s,]+/).filter(Boolean);
+}
+
+/**
+ * Extract project refs from a --ref-file (.txt one-per-line, or .csv). Any
+ * ref-shaped token (20 lowercase letters) is kept; headers, project names,
+ * regions, blank lines and #-comments fall away because they don't match the
+ * shape. Throws if the file has content but yields no ref so a wrong column /
+ * format fails loud instead of silently auditing nothing.
+ */
+function parseRefsFile(text: string, path: string): string[] {
+  const tokens = text.split(/[\s,]+/).filter(Boolean);
+  const refs = tokens.filter((t) => REF.test(t));
+  if (tokens.length && !refs.length)
+    throw new Error(
+      `${path}: no project refs found (expected 20-lowercase-letter refs, one per line or CSV)`,
+    );
+  return refs;
 }
 
 /**
@@ -639,6 +670,18 @@ async function main(): Promise<void> {
       if (flags.dbConfig) raw.push(...parseDbConfig(await Bun.file(flags.dbConfig).text()));
       for (const u of flagUrls) raw.push({ dbUrl: u });
       targets = resolveTargets(raw, raw.length === 1 ? flags.ref : undefined);
+    }
+
+    // Expand --ref-file(s) into refs[], then dedupe (a ref may repeat across
+    // flags + files). The last file token also sets the single `ref`.
+    for (const f of flags.refFiles) {
+      const fromFile = parseRefsFile(await Bun.file(f).text(), f);
+      flags.refs.push(...fromFile);
+      if (fromFile.length) flags.ref = fromFile.at(-1);
+    }
+    if (flags.refs.length) {
+      flags.refs = [...new Set(flags.refs)];
+      flags.ref ??= flags.refs.at(-1);
     }
     const singleDbUrl = targets.length === 1 ? targets[0]!.dbUrl : undefined;
 
