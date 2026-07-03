@@ -67,7 +67,7 @@ function barSvg(frac: number): string {
   const w = 150;
   const h = 11;
   const bw = Math.max(1, Math.round(Math.max(0, Math.min(1, frac)) * w));
-  return `<svg class=bar width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><rect width="${w}" height="${h}" fill="#eee"/><rect width="${bw}" height="${h}" class=fg/></svg>`;
+  return `<svg class=bar width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><rect width="${w}" height="${h}" fill="#eee"/><rect width="${bw}" height="${h}" fill="var(--accent)"/></svg>`;
 }
 
 /**
@@ -443,7 +443,6 @@ ${faviconTag(brand)}
 <style>
   :root{--fg:#1a1a1a;--mut:#666;--line:#ddd;--bg:#fff;${brandVars(brand)};--okbg:#e3f4e3;--warnbg:#fff4d6;--errbg:#fde2e2}
   ${BRAND_CSS}
-  svg.bar .fg{fill:var(--accent)}
   *{box-sizing:border-box}
   body{font:14px/1.45 -apple-system,Segoe UI,Roboto,sans-serif;color:var(--fg);background:var(--bg);margin:0 auto;padding:24px;max-width:1200px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   h1{font-size:20px;margin:0 0 4px}
