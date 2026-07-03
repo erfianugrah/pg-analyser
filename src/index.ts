@@ -45,6 +45,7 @@ Usage:
   sbperf narrate  <dir>                        analysis.json -> narrative.md (LLM pass)
   sbperf import-trends <dir> <file...>         merge external CSV/JSON series into analysis.trends
   sbperf full     --ref <ref> [--out <dir>]    analyze + report + pdf
+  sbperf full     --ref <r1> --ref <r2> ...    audit several projects + combined index
   sbperf full     --all [--org <slug>]         audit every project + index.html
   sbperf snapshot --ref <ref> [--store <db>]   collect + append to the history store
   sbperf export-prometheus <dir> [--ref <ref>] history store -> OpenMetrics for promtool backfill
@@ -85,6 +86,7 @@ Auth: set SUPABASE_ACCESS_TOKEN (see .env.example).`);
 type Flags = {
   _: string[];
   ref?: string;
+  refs: string[];
   out?: string;
   dir?: string;
   org?: string;
@@ -103,12 +105,17 @@ type Flags = {
 /** Analytics-endpoint timeframe enum (verified live 2026-07; iso ranges are clamped). */
 const INTERVALS = ["15min", "30min", "1hr", "3hr", "1day", "3day", "7day"] as const;
 function parseFlags(argv: string[]): Flags {
-  const out: Flags = { _: [], dbUrls: [] };
+  const out: Flags = { _: [], dbUrls: [], refs: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--help" || a === "-h") usage(0);
-    else if (a === "--ref") out.ref = argv[++i];
-    else if (a === "--out") out.out = argv[++i];
+    // --ref is repeatable: each occurrence accumulates into refs[]; the last
+    // also sets `ref` so single-ref call sites keep working unchanged.
+    else if (a === "--ref") {
+      const v = argv[++i]!;
+      out.refs.push(v);
+      out.ref = v;
+    } else if (a === "--out") out.out = argv[++i];
     else if (a === "--dir") out.dir = argv[++i];
     else if (a === "--org") out.org = argv[++i];
     else if (a === "--prometheus") out.prometheus = argv[++i];
@@ -214,11 +221,17 @@ async function doAll(
   prometheusUrl?: string,
   interval?: string,
   syncCheck?: boolean,
+  refFilter?: Set<string>,
 ): Promise<void> {
   const transport = makeTransport(loadCfg());
   const m = new Management(transport);
   let projects = await m.projects();
   if (orgFilter) projects = projects.filter((p) => p.organization_id === orgFilter);
+  if (refFilter) {
+    projects = projects.filter((p) => refFilter.has(p.id));
+    const missing = [...refFilter].filter((r) => !projects.some((p) => p.id === r));
+    if (missing.length) throw new Error(`ref(s) not visible to this PAT: ${missing.join(", ")}`);
+  }
   if (!projects.length) throw new Error("no projects found");
 
   // Org metadata for grouping (best-effort: the PAT may lack org scope, in which
@@ -633,6 +646,10 @@ async function main(): Promise<void> {
       case "analyze": {
         if (targets.length > 1)
           throw new Error("multiple --db-url given; use 'full' to sweep them into per-DB reports");
+        if (flags.refs.length > 1)
+          throw new Error(
+            "multiple --ref given; 'analyze' writes one analysis.json - use 'full' for a combined multi-project index",
+          );
         const ref = flags.ref ?? targets[0]?.ref;
         if (!ref) usage();
         await doAnalyze(
@@ -669,6 +686,19 @@ async function main(): Promise<void> {
               ret,
               flags.interval,
               t.dbUrl,
+              !flags.noSyncCheck,
+            );
+          break;
+        }
+        if (flags.refs.length > 1) {
+          for (const r of flags.refs)
+            await doSnapshot(
+              r,
+              flags.out ?? (await nestedOut(r)),
+              store,
+              ret,
+              flags.interval,
+              undefined,
               !flags.noSyncCheck,
             );
           break;
@@ -730,6 +760,20 @@ async function main(): Promise<void> {
             flags.prometheus,
             flags.interval,
             !flags.noSyncCheck,
+          );
+          break;
+        }
+        // Multiple --ref (PAT-only): audit just those projects, grouped org ->
+        // project with a combined index, reusing the --all path via refFilter.
+        if (flags.refs.length > 1) {
+          const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+          await doAll(
+            flags.org,
+            flags.out ?? join("reports", `refs-${ts}`),
+            flags.prometheus,
+            flags.interval,
+            !flags.noSyncCheck,
+            new Set(flags.refs),
           );
           break;
         }
