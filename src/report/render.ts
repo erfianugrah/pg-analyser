@@ -487,7 +487,7 @@ export function render(a: Analysis, opts: { narrative?: boolean; brand?: Brand }
   const disk = a.disk;
   const narrativeBlock =
     opts.narrative && a.narrative
-      ? `<h2 id="narrative">Narrative <span class=note>LLM synthesis - the tables below are ground truth</span></h2>\n<div class=narrative>${mdToHtml(a.narrative)}</div>`
+      ? `<h2 id="narrative">Executive narrative</h2>\n<div class=narrative>${mdToHtml(a.narrative)}</div>`
       : "";
   const errored = new Set(a.errors.map((e) => e.source));
   const findings = deriveFindings(a);
@@ -539,11 +539,11 @@ export function render(a: Analysis, opts: { narrative?: boolean; brand?: Brand }
     <div class=sc-vitals><div class=sc-sub>At a glance</div>${vitalsMini(a)}<p class=hbadges>${healthBadges(a)}</p></div>
   </div>
 </section>
+${narrativeBlock}
 
 <h2 id="findings">Findings <span class=count>${findings.length}</span></h2>
 ${auditFindings(findings, degraded)}
 ${positivesSection(positives)}
-${narrativeBlock}
 
 <h2 id="evidence">Evidence</h2>
 <p class=note>Substantiating data for the findings above - each finding's "Evidence" link lands in one of these sections.</p>
@@ -612,7 +612,7 @@ ${faviconTag(brand)}
   .banner.bad{background:var(--errbg)}.banner.ok{background:var(--okbg)}
   ul.positives{margin:6px 0;padding-left:20px;columns:2;column-gap:28px}
   ul.positives li{margin:2px 0;break-inside:avoid}
-  .narrative{font-size:13px;line-height:1.5;max-width:78ch;border-left:3px solid var(--accent);padding:2px 0 2px 14px;margin:8px 0}
+  .narrative{font-size:13px;line-height:1.5;border-left:3px solid var(--accent);padding:2px 0 2px 14px;margin:8px 0}
   .narrative h2{font-size:14px;margin:14px 0 4px;border:none;padding:0}
   .narrative h3{font-size:13px;font-weight:700;margin:10px 0 2px}
   .narrative ul,.narrative ol{margin:4px 0;padding-left:22px}
@@ -646,13 +646,13 @@ ${faviconTag(brand)}
   p.fix{margin:0;font-size:13px;line-height:1.5}
   p.fix.empty{color:var(--mut)}
   p.flinks{margin:8px 0 0;font-size:12px}
-  table.chart{border:none;width:auto;margin:4px 0 8px}
+  table.chart{border:none;width:100%;margin:4px 0 8px;table-layout:fixed}
   table.chart{border-spacing:0}
   table.chart td{border:none;padding:3px 0;vertical-align:middle}
-  table.chart td.mono{max-width:380px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;padding-right:20px}
-  table.chart td.barcell{width:150px;padding-right:12px}
-  table.chart td.num{font-family:ui-monospace,Menlo,monospace;font-size:11px;white-space:nowrap;text-align:right;color:var(--mut)}
-  svg.bar{display:block}
+  table.chart td.mono{width:42%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;padding-right:20px}
+  table.chart td.barcell{width:auto;padding-right:12px}
+  table.chart td.num{width:130px;font-family:ui-monospace,Menlo,monospace;font-size:11px;white-space:nowrap;text-align:right;color:var(--mut)}
+  svg.bar{display:block;width:100%}
   table{border-collapse:collapse;width:100%;font-size:12.5px;margin:2px 0}
   th,td{text-align:left;padding:4px 8px;border:1px solid var(--line);vertical-align:top}
   th{background:var(--panel);font-weight:600;white-space:nowrap}
