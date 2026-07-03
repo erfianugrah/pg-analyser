@@ -32,6 +32,8 @@ bun run src/index.ts analyze --ref <ref> --out ./reports/myproject
 bun run src/index.ts report  ./reports/myproject    # report.html + summary.html
 bun run src/index.ts summary ./reports/myproject    # non-technical summary.html only
 bun run src/index.ts pdf     ./reports/myproject    # report.pdf + summary.pdf
+bun run src/index.ts narrate ./reports/myproject    # narrative.md (optional LLM pass)
+bun run src/index.ts import-trends ./reports/myproject series.csv  # merge external trends
 ```
 
 `report`/`pdf` emit two documents: the full technical **report** and a
@@ -56,9 +58,15 @@ bun run src/index.ts report <dir>            # draws trends from accumulated sna
 - **Advisors** - performance + security lints (Management API; richer than the CLI)
 - **Read-only SQL** - `pg_stat_statements` outliers + most-frequent queries,
   table/index cache-hit % (with stats-window age), biggest tables, unused
-  indexes, sequential-scan-heavy tables, threshold-aware autovacuum lag, txid
-  wraparound, replication-slot lag, connection state + per-role usage
-- **RLS policy audit** - flags policies re-evaluating `auth.*()` per row (should be wrapped in `(select ...)`; 94-99% latency win per Supabase's guide)
+  indexes, duplicate indexes, sequential-scan-heavy tables, threshold-aware
+  autovacuum lag, txid wraparound, replication-slot lag, connection state +
+  per-role usage
+- **RLS policy audit** - flags policies re-evaluating `auth.*()` per row (should
+  be wrapped in `(select ...)`; 94-99% latency win per Supabase's guide) and RLS
+  policy columns without a covering index (seq scan per row check)
+- **Metrics-derived signals** - swap in use (memory pressure), cumulative
+  deadlocks, work_mem spill to disk (temp-file rate), and a `postgres_changes`
+  -> Broadcast nudge for realtime at scale
 - **Config** - Postgres version + upgrade drift, disk spec/util, pooler mode, PG tuning params (`pg_settings`)
 - **Inventory** - edge functions (with per-function invocation stats: request
   volume, 5xx rate, execution time), storage buckets + object usage
@@ -68,7 +76,19 @@ bun run src/index.ts report <dir>            # draws trends from accumulated sna
   key-metric slice; the whole corpus is in the data + the history store. 30-day
   trends accumulate via `snapshot` (see below)
 
-Reports are structured as a pyramid: a ranked **findings summary** (Performance / Security / Capacity) up top, then infrastructure, then collapsible evidence drill-downs. Paused/unreachable projects render an honest degraded state, not misleading empties.
+Reports are structured as a pyramid: a ranked **findings summary** (Performance /
+Security / Capacity) with a severity bar up top, a **"what's looking good"** pass
+(confirmed-healthy checks, only asserted when actually measured), then
+infrastructure, then collapsible evidence drill-downs with inline-SVG bar charts
+on the query outliers. Paused/unreachable projects render an honest degraded
+state, not misleading empties.
+
+Every heuristic is grounded in `docs/heuristics.md` (thresholds cite Supabase/
+Postgres sources). An on-by-default, soft-fail **sync check** annotates the
+footer with the catalog vintage and whether the vendored advisor lint SQL still
+matches upstream `supabase/splinter`; it skips silently when offline so runs stay
+reproducible (`--no-sync-check` to disable). Live advisor lints are fetched per
+run and are always current.
 
 ## Choosing a timeframe
 
@@ -210,6 +230,48 @@ bun run src/index.ts full --ref <ref> --prometheus http://localhost:9090
 
 `--prometheus` trends take precedence over the history store when both exist.
 
+### Bring your own history (CSV / JSON import)
+
+If your metrics history lives somewhere sbperf can't reach - an internal Grafana,
+a managed Prometheus, a spreadsheet - **export the series yourself and hand it to
+the tool**. `import-trends` merges any external time series into
+`analysis.trends`, so the report renders them as native inline-SVG panels instead
+of pasted screenshots. sbperf never talks to your dashboard; it only ingests a
+file you produced (so the tool stays vendor-neutral).
+
+```bash
+# in Grafana: open a time-series panel -> Inspect -> Data -> Download CSV
+bun run src/index.ts import-trends ./reports/myproject cpu.csv disk-io.csv wal.csv
+bun run src/index.ts report ./reports/myproject     # renders the imported panels
+```
+
+- **CSV (wide)** - first column is the timestamp, every other column is a series
+  (its header is the panel title). A `Title [unit]` / `Title (unit)` header sets
+  the unit (e.g. `Disk free [bytes]`). This is Grafana's default CSV export shape.
+- **JSON** - a `TrendSeries[]` (`{title, unit?, points:[{t,v}]}`), a `{trends:[...]}`
+  wrapper, or `[t,v]` tuple points.
+- Timestamps may be ISO-8601 or epoch (seconds or milliseconds). Re-importing an
+  updated file for the same series title replaces it (idempotent).
+
+## Narrative (optional LLM pass)
+
+The deterministic report is ground truth. `narrate` layers a written narrative on
+top of it - an executive summary, prioritised actions, and per-finding root
+cause + fix - by feeding an LLM the ranked findings (with their catalogued
+remediation + doc URLs), the healthy positives, and a bounded evidence digest.
+
+```bash
+export SBPERF_LLM_BASE_URL=http://localhost:11434/v1   # any OpenAI-compatible endpoint
+export SBPERF_LLM_MODEL=your-model-id                  # SBPERF_LLM_API_KEY if the endpoint needs one
+bun run src/index.ts narrate ./reports/myproject       # -> narrative.md
+```
+
+Works with OpenAI, a local llama-server, OpenRouter, etc. The prompt forbids the
+model from inventing thresholds, numbers, table names, or doc URLs not present in
+the data, and requires it to caveat when collection was degraded - so the prose
+stays grounded and auditable. It sends a size-bounded digest, not the full ~850-
+sample corpus (which stays in `analysis.json`). No other command calls an LLM.
+
 ## Troubleshooting
 
 | Symptom | Fix |
@@ -217,7 +279,9 @@ bun run src/index.ts full --ref <ref> --prometheus http://localhost:9090
 | `SUPABASE_ACCESS_TOKEN is required` | Set the PAT (https://supabase.com/dashboard/account/tokens). |
 | `cannot read project <ref>` / 401 | Wrong ref or the token lacks access to that project's org. |
 | `no Chrome/Chromium found` | Install `chromium`, or `export SBPERF_CHROME=/path/to/chrome`. `analyze`/`report` work without it - only `pdf` needs it. |
-| `no analysis.json in <dir>` | Run `analyze` (or `full`) before `report`/`pdf`. |
+| `no analysis.json in <dir>` | Run `analyze` (or `full`) before `report`/`pdf`/`narrate`. |
+| `narrate needs an LLM: set SBPERF_LLM_...` | Set `SBPERF_LLM_BASE_URL` + `SBPERF_LLM_MODEL` (see the Narrative section). |
+| Footer says advisor lint SQL drifted / catalog stale | Re-vendor `src/splinter.sql` from `supabase/splinter`, or re-review `docs/heuristics.md`. Advisory only; `--no-sync-check` skips it. |
 | Report shows a degraded/empty state | Project is paused or unreachable - empty sections mean "not collected", not "clean". The collection-notes section lists why. |
 
 ## Staying in sync with the API
@@ -246,11 +310,12 @@ SBPERF_NO_CROSSCHECK=1 bun run check:api   # primary only
 ## Development
 
 ```bash
-bun run check       # biome format + lint
-bun run typecheck   # tsc --noEmit
-bun test            # unit tests
-bun run check:api   # upstream API drift check
-bun run build       # standalone binary
+bun run check        # biome format + lint
+bun run typecheck    # tsc --noEmit
+bun test             # unit tests
+bun run check:api    # upstream Management API drift check (live spec, pass/fail)
+bun run check:inspect # advisory: warn when upstream CLI inspect SQL drifts from our derived baseline
+bun run build        # standalone binary
 ```
 
 See `AGENTS.md` for architecture and conventions.

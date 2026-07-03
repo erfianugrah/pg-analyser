@@ -6,6 +6,7 @@ import { collect } from "./collect.ts";
 import { ConfigError, loadConfig } from "./config.ts";
 import { type DbTarget, parseDbConfig, type RawEntry, resolveTargets } from "./dbtargets.ts";
 import { deriveFindings } from "./findings.ts";
+import { mergeTrends, parseTrendsFile } from "./importtrends.ts";
 import { Management } from "./management.ts";
 import { clientFromEnv, narrate } from "./narrate.ts";
 import { backfillInstructions, toOpenMetrics } from "./promexport.ts";
@@ -29,6 +30,7 @@ Usage:
   sbperf summary  <dir>                        analysis.json -> summary.html (non-technical)
   sbperf pdf      <dir>                        analysis.json -> report.pdf + summary.pdf
   sbperf narrate  <dir>                        analysis.json -> narrative.md (LLM pass)
+  sbperf import-trends <dir> <file...>         merge external CSV/JSON series into analysis.trends
   sbperf full     --ref <ref> [--out <dir>]    analyze + report + pdf
   sbperf full     --all [--org <slug>]         audit every project + index.html
   sbperf snapshot --ref <ref> [--store <db>]   collect + append to the history store
@@ -418,6 +420,33 @@ async function doPdf(dir: string): Promise<string> {
   return pdfPath;
 }
 
+/**
+ * Merge externally-exported time series (Grafana CSV export, Prometheus dump,
+ * spreadsheet, ...) into analysis.trends so `report` renders them as native
+ * trend panels. Vendor-neutral: sbperf ingests a file you produced, it never
+ * talks to your dashboard.
+ */
+async function doImportTrends(dir: string, files: string[]): Promise<void> {
+  if (!files.length) throw new Error("import-trends needs at least one CSV/JSON file");
+  const analysis = await loadAnalysis(dir);
+  let added = 0;
+  for (const f of files) {
+    const text = await Bun.file(f).text();
+    const series = parseTrendsFile(f, text);
+    if (!series.length) {
+      console.error(`> ${f}: no usable series (need a time column + >=1 numeric column)`);
+      continue;
+    }
+    analysis.trends = mergeTrends(analysis.trends, series);
+    added += series.length;
+    console.error(`> ${f}: ${series.length} series (${series.map((s) => s.title).join(", ")})`);
+  }
+  const path = join(dir, "analysis.json");
+  await Bun.write(path, JSON.stringify(analysis, null, 2));
+  console.error(`> merged ${added} series into ${path} (${analysis.trends.length} total)`);
+  console.error("> run 'sbperf report' / 'pdf' to render them");
+}
+
 async function doNarrate(dir: string): Promise<string> {
   const analysis = await loadAnalysis(dir);
   const built = clientFromEnv();
@@ -535,6 +564,12 @@ async function main(): Promise<void> {
         const dir = flags._[0];
         if (!dir) usage();
         await doNarrate(dir);
+        break;
+      }
+      case "import-trends": {
+        const [dir, ...files] = flags._;
+        if (!dir) usage();
+        await doImportTrends(dir, files);
         break;
       }
       case "full": {
