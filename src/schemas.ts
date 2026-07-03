@@ -243,6 +243,8 @@ export const Analysis = z.object({
   // Upstream sync check; nullable + defaulted for back-compat with analysis.json
   // written before the check existed.
   sync: SyncStatus.nullable().default(null),
+  // LLM narrative (Markdown) from `narrate`; embedded in report.html on demand.
+  narrative: z.string().nullable().default(null),
   errors: z.array(z.object({ source: z.string(), message: z.string() })),
 });
 export type Analysis = z.infer<typeof Analysis>;

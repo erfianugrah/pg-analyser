@@ -266,6 +266,7 @@ export async function collect(
     metrics: { available: metricsText != null, samples },
     trends,
     sync: await syncP,
+    narrative: null,
     errors,
   };
 

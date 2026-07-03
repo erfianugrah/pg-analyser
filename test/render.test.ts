@@ -78,6 +78,7 @@ function fixture(overrides: Partial<Analysis> = {}): Analysis {
     },
     trends: [],
     sync: null,
+    narrative: null,
     errors: [],
   };
   return { ...base, ...overrides };
@@ -155,6 +156,16 @@ describe("render", () => {
 
   test("sync footer omitted when no sync status recorded (back-compat)", () => {
     expect(render(fixture())).not.toContain("Heuristics sync:");
+  });
+
+  test("narrative embeds only with the flag AND when present", () => {
+    const withNar = fixture({ narrative: "## Executive summary\nLooks fine." });
+    expect(render(withNar)).not.toContain("Executive summary"); // no flag -> not embedded
+    const html = render(withNar, { narrative: true });
+    expect(html).toContain('id="narrative"');
+    expect(html).toContain("<h2>Executive summary</h2>");
+    // flag on but no narrative -> nothing
+    expect(render(fixture(), { narrative: true })).not.toContain('id="narrative"');
   });
 
   test("renders advisor finding with level badge", () => {

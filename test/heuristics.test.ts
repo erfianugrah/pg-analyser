@@ -56,6 +56,7 @@ function base(): Analysis {
     metrics: { available: false, samples: [] },
     trends: [],
     sync: null,
+    narrative: null,
     errors: [],
   };
 }
