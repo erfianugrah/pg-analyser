@@ -23,7 +23,10 @@
 - [x] On-by-default soft-fail upstream sync check (src/sync.ts) - hashes vendored
       splinter.sql vs upstream + catalog vintage/age; stored on analysis.sync,
       rendered in the footer; --no-sync-check to skip
-- [ ] narrate command (LLM pass over corpus + enriched findings)
+- [x] narrate command (src/narrate.ts): LLM pass over the corpus + enriched
+      findings -> narrative.md. Grounded (bounded evidence digest + findings with
+      remediation/doc; system prompt forbids inventing facts). OpenAI-compatible
+      client, injectable for tests; SBPERF_LLM_BASE_URL + _MODEL (+ _API_KEY).
 
 ## Done
 - [x] PAT-only collector across Management API + read-only SQL + metrics

@@ -7,6 +7,7 @@ import { ConfigError, loadConfig } from "./config.ts";
 import { type DbTarget, parseDbConfig, type RawEntry, resolveTargets } from "./dbtargets.ts";
 import { deriveFindings } from "./findings.ts";
 import { Management } from "./management.ts";
+import { clientFromEnv, narrate } from "./narrate.ts";
 import { backfillInstructions, toOpenMetrics } from "./promexport.ts";
 import { htmlToPdf } from "./report/pdf.ts";
 import { type IndexRow, render, renderIndex, renderSummary } from "./report/render.ts";
@@ -27,6 +28,7 @@ Usage:
   sbperf report   <dir>                       analysis.json -> report.html
   sbperf summary  <dir>                        analysis.json -> summary.html (non-technical)
   sbperf pdf      <dir>                        analysis.json -> report.pdf + summary.pdf
+  sbperf narrate  <dir>                        analysis.json -> narrative.md (LLM pass)
   sbperf full     --ref <ref> [--out <dir>]    analyze + report + pdf
   sbperf full     --all [--org <slug>]         audit every project + index.html
   sbperf snapshot --ref <ref> [--store <db>]   collect + append to the history store
@@ -48,6 +50,10 @@ Flags:
   --no-sync-check      skip the on-by-default upstream sync check (offline runs)
   -h, --help           show this help
   -v, --version        print version
+
+narrate: LLM synthesis over the corpus + enriched findings (analysis.json ->
+narrative.md). Set SBPERF_LLM_BASE_URL + SBPERF_LLM_MODEL (SBPERF_LLM_API_KEY if
+the endpoint needs one). Works with OpenAI, a local llama-server, OpenRouter, etc.
 
 30-day trends: run 'sbperf snapshot' on a schedule (e.g. hourly cron) to
 accumulate history, then 'sbperf report <dir>' draws trends from the store.
@@ -412,6 +418,18 @@ async function doPdf(dir: string): Promise<string> {
   return pdfPath;
 }
 
+async function doNarrate(dir: string): Promise<string> {
+  const analysis = await loadAnalysis(dir);
+  const built = clientFromEnv();
+  if ("error" in built) throw new Error(built.error);
+  console.error(`> narrating ${dir} via ${built.client.model}`);
+  const md = await narrate(analysis, built.client);
+  const path = join(dir, "narrative.md");
+  await Bun.write(path, md);
+  console.error(`> ${path}`);
+  return path;
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const cmd = argv[0];
@@ -511,6 +529,12 @@ async function main(): Promise<void> {
         const dir = flags._[0];
         if (!dir) usage();
         await doPdf(dir);
+        break;
+      }
+      case "narrate": {
+        const dir = flags._[0];
+        if (!dir) usage();
+        await doNarrate(dir);
         break;
       }
       case "full": {
