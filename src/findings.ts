@@ -1,4 +1,5 @@
 import { meta, THRESHOLDS } from "./heuristics.ts";
+import { lintFix } from "./lints.ts";
 import type { Analysis, SqlRow } from "./schemas.ts";
 
 export type Severity = "high" | "med" | "low";
@@ -62,10 +63,11 @@ function groupAdvisors(
 ): Finding[] {
   const byTitle = new Map<
     string,
-    { level: string; count: number; description?: string; remediation?: string }
+    { name: string; level: string; count: number; description?: string; remediation?: string }
   >();
   for (const a of list) {
     const g = byTitle.get(a.title) ?? {
+      name: a.name,
       level: a.level,
       count: 0,
       description: a.description,
@@ -80,18 +82,30 @@ function groupAdvisors(
   const page = category === "Security" ? "security" : "performance";
   const dashUrl = `https://supabase.com/dashboard/project/${ref ?? "_"}/advisors/${page}`;
   const base = meta(category === "Security" ? "advisor_security" : "advisor_performance");
-  return [...byTitle].map(([title, g]) => ({
-    severity: sevFromLevel(g.level),
-    category,
-    title: g.count > 1 ? `${title} (${g.count}x)` : title,
-    anchor,
-    // Per-lint specifics: splinter's own description is the "what's happening",
-    // and its remediation URL is a better Reference than the generic doc.
-    evidence: g.description,
-    dashUrl,
-    ...base,
-    docUrl: g.remediation ?? base.docUrl,
-  }));
+  return [...byTitle].map(([title, g]) => {
+    // One-stop-shop: the per-lint catalog gives a plain-English title + concrete
+    // fix + SQL + verify. Fall back to the lint's own text when uncatalogued.
+    const fix = lintFix(g.name);
+    // What's happening: the lint's own description + the affected-object scale.
+    // Splinter text backslash-escapes quotes/backticks for markdown; unescape so
+    // it doesn't render as literal \'role\'.
+    const desc = g.description?.replace(/\\(['"`])/g, "$1");
+    const scale = g.count > 1 ? `Affects ${g.count} objects.` : "";
+    const evidence = [desc, scale].filter(Boolean).join(" ") || undefined;
+    return {
+      severity: sevFromLevel(g.level),
+      category,
+      title: fix?.plainTitle ?? (g.count > 1 ? `${title} (${g.count}x)` : title),
+      anchor,
+      evidence,
+      dashUrl,
+      ...base,
+      remediation: fix?.whatToDo ?? base.remediation,
+      sql: fix?.sql,
+      howToVerify: fix?.howToVerify ?? base.howToVerify,
+      docUrl: g.remediation ?? base.docUrl,
+    };
+  });
 }
 
 /** Derive a ranked, deduped findings list - the pyramid apex of the report. */
