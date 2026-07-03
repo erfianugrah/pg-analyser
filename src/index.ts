@@ -72,6 +72,13 @@ Flags:
   --prometheus-token <t>  bearer token for an auth'd datasource - e.g. a Grafana
                        datasource proxy (/api/datasources/proxy/uid/<uid>) or an
                        auth'd Prometheus / Prometheus (env: SBPERF_PROMETHEUS_TOKEN)
+  --prometheus-cookie <c> session Cookie header for a datasource behind an SSO /
+                       SSO proxy that a bearer token can't traverse (the same
+                       auth the Grafana UI uses). Token wins if both are set.
+                       (env: SBPERF_PROMETHEUS_COOKIE)
+  --prometheus-matcher <m> project-label selector template for a scraper whose
+                       schema isn't the default supabase_project_ref="{ref}";
+                       "{ref}" -> the project ref (env: SBPERF_PROMETHEUS_MATCHER)
   --no-sync-check      skip the on-by-default upstream sync check (offline runs)
   --narrative          report/pdf: embed the narrative summary (run 'narrate' first)
   --print-prompt       narrate: write the grounded prompt to prompt.md for copy-paste
@@ -112,6 +119,8 @@ type Flags = {
   all?: boolean;
   prometheus?: string;
   prometheusToken?: string;
+  prometheusCookie?: string;
+  prometheusMatcher?: string;
   store?: string;
   retentionDays?: number;
   interval?: string;
@@ -150,6 +159,8 @@ function parseFlags(argv: string[]): Flags {
     else if (a === "--org") out.org = argv[++i];
     else if (a === "--prometheus") out.prometheus = argv[++i];
     else if (a === "--prometheus-token") out.prometheusToken = argv[++i];
+    else if (a === "--prometheus-cookie") out.prometheusCookie = argv[++i];
+    else if (a === "--prometheus-matcher") out.prometheusMatcher = argv[++i];
     else if (a === "--store") out.store = argv[++i];
     else if (a === "--retention-days") out.retentionDays = Number(argv[++i]);
     else if (a === "--interval") out.interval = argv[++i];
@@ -821,6 +832,8 @@ async function main(): Promise<void> {
   // Bridge the flag to the env that collect reads, so the token reaches
   // fetchTrends without threading a secret through every collect call site.
   if (flags.prometheusToken) process.env.SBPERF_PROMETHEUS_TOKEN = flags.prometheusToken;
+  if (flags.prometheusCookie) process.env.SBPERF_PROMETHEUS_COOKIE = flags.prometheusCookie;
+  if (flags.prometheusMatcher) process.env.SBPERF_PROMETHEUS_MATCHER = flags.prometheusMatcher;
 
   try {
     // Resolve superuser DB targets. Precedence: explicit flags are authoritative

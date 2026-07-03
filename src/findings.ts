@@ -359,6 +359,15 @@ export function deriveFindings(a: Analysis): Finding[] {
     const pts = a.trends.find((t) => t.title === title)?.points ?? [];
     return pts.length ? pts.reduce((sum, p) => sum + p.v, 0) / pts.length : 0;
   };
+  // Whether a series is present at all - needed for "lower is worse" signals
+  // (EBS balance) where an absent series must NOT be read as 0%.
+  const hasTrend = (title: string) =>
+    (a.trends.find((t) => t.title === title)?.points.length ?? 0) > 0;
+  // Worst (min) point over the window - for depletion signals.
+  const minTrend = (title: string) => {
+    const pts = a.trends.find((t) => t.title === title)?.points ?? [];
+    return pts.length ? Math.min(...pts.map((p) => p.v)) : Number.POSITIVE_INFINITY;
+  };
   const maxMetric = (name: string) =>
     a.metrics.samples.filter((s) => s.name === name).reduce((mx, s) => Math.max(mx, s.value), 0);
   const sumMetric = (name: string) =>
@@ -391,6 +400,62 @@ export function deriveFindings(a: Analysis): Finding[] {
       title: `Memory pressure: working set paging to disk (${bits.join(", ")})`,
       anchor: "#trends",
       ...meta("mem_pressure_paging"),
+    });
+  }
+  // PSI saturation: sustained stall time waiting on CPU / memory / I/O (rate;
+  // needs >=2 snapshots / a Prometheus). PSI is the fraction of time work was
+  // stalled for a resource - a truer saturation signal than a utilization
+  // snapshot, and it names WHICH resource is the bottleneck.
+  const stalled = (
+    [
+      ["CPU stall (PSI %)", "CPU"],
+      ["Memory stall (PSI %)", "memory"],
+      ["I/O stall (PSI %)", "I/O"],
+    ] as const
+  )
+    .map(([title, label]) => [avgTrend(title), label] as const)
+    .filter(([v]) => v >= THRESHOLDS.psiStallPct);
+  if (stalled.length) {
+    const bits = stalled.map(([v, label]) => `${label} ${Math.round(v)}%`);
+    out.push({
+      severity: "med",
+      category: "Capacity",
+      title: `Resource saturation: sustained stall time (${bits.join(", ")})`,
+      anchor: "#trends",
+      ...meta("psi_saturation"),
+    });
+  }
+  // OOM kills: the kernel OOM killer fired - memory was genuinely exhausted and
+  // a process was killed. Any nonzero rate over the window means kills happened.
+  const oomKills = avgTrend("OOM kills/s");
+  if (oomKills > 0) {
+    out.push({
+      severity: "high",
+      category: "Capacity",
+      title: "OOM killer fired (out-of-memory process kills)",
+      anchor: "#trends",
+      ...meta("oom_kill"),
+    });
+  }
+  // EBS burst-balance depletion: gp2/gp3 throttle hard when credits run down.
+  // Only evaluate when the series exists - an absent series is NOT 0% balance.
+  const depleted = (
+    [
+      ["EBS IOPS balance (%)", "IOPS"],
+      ["EBS throughput balance (%)", "throughput"],
+    ] as const
+  )
+    .filter(([title]) => hasTrend(title))
+    .map(([title, label]) => [minTrend(title), label] as const)
+    .filter(([v]) => v <= THRESHOLDS.ebsBalancePct);
+  if (depleted.length) {
+    const bits = depleted.map(([v, label]) => `${label} ${Math.round(v)}%`);
+    out.push({
+      severity: "high",
+      category: "Capacity",
+      title: `EBS burst balance depleting (${bits.join(", ")})`,
+      anchor: "#trends",
+      ...meta("ebs_balance_low"),
     });
   }
   // Deadlocks (cumulative counter since stats reset). A rate from >=2 snapshots

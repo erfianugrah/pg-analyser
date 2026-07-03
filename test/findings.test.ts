@@ -452,4 +452,68 @@ describe("deriveFindings", () => {
     expect(f?.severity).toBe("med");
     expect(f?.title).toContain("major faults/s");
   });
+
+  test("PSI saturation finding fires on sustained stall %, names the resource", () => {
+    const pts = (v: number) => [
+      { t: 1, v },
+      { t: 2, v },
+    ];
+    const calm = base();
+    calm.trends = [{ title: "CPU stall (PSI %)", unit: "%", points: pts(5) }];
+    expect(deriveFindings(calm).some((f) => f.title.includes("Resource saturation"))).toBe(false);
+
+    const hot = base();
+    hot.trends = [
+      { title: "CPU stall (PSI %)", unit: "%", points: pts(45) },
+      { title: "I/O stall (PSI %)", unit: "%", points: pts(30) },
+      { title: "Memory stall (PSI %)", unit: "%", points: pts(2) },
+    ];
+    const f = deriveFindings(hot).find((x) => x.title.includes("Resource saturation"));
+    expect(f).toBeDefined();
+    expect(f?.severity).toBe("med");
+    expect(f?.title).toContain("CPU");
+    expect(f?.title).toContain("I/O");
+    expect(f?.title).not.toContain("memory"); // below threshold, omitted
+  });
+
+  test("OOM-kill finding fires on any nonzero rate", () => {
+    const zero = base();
+    zero.trends = [{ title: "OOM kills/s", unit: "", points: [{ t: 1, v: 0 }] }];
+    expect(deriveFindings(zero).some((f) => f.title.includes("OOM killer"))).toBe(false);
+
+    const killed = base();
+    killed.trends = [{ title: "OOM kills/s", unit: "", points: [{ t: 1, v: 0.01 }] }];
+    const f = deriveFindings(killed).find((x) => x.title.includes("OOM killer"));
+    expect(f).toBeDefined();
+    expect(f?.severity).toBe("high");
+  });
+
+  test("EBS-balance finding fires only when the series exists (absent != 0%)", () => {
+    // series absent -> must NOT fire (a missing series is not 0% balance)
+    const noSeries = base();
+    noSeries.trends = [];
+    expect(deriveFindings(noSeries).some((f) => f.title.includes("EBS burst balance"))).toBe(false);
+
+    // healthy balance present -> no finding
+    const healthy = base();
+    healthy.trends = [{ title: "EBS IOPS balance (%)", unit: "%", points: [{ t: 1, v: 95 }] }];
+    expect(deriveFindings(healthy).some((f) => f.title.includes("EBS burst balance"))).toBe(false);
+
+    // depleting balance present -> high Capacity finding
+    const low = base();
+    low.trends = [
+      {
+        title: "EBS IOPS balance (%)",
+        unit: "%",
+        points: [
+          { t: 1, v: 60 },
+          { t: 2, v: 12 },
+        ],
+      },
+    ];
+    const f = deriveFindings(low).find((x) => x.title.includes("EBS burst balance"));
+    expect(f).toBeDefined();
+    expect(f?.severity).toBe("high");
+    expect(f?.title).toContain("IOPS");
+  });
 });

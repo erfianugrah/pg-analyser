@@ -19,6 +19,8 @@ export async function collect(
   opts: {
     prometheusUrl?: string;
     prometheusToken?: string;
+    prometheusCookie?: string;
+    prometheusMatcher?: string;
     interval?: string;
     sqlRunner?: SqlRunner;
     syncCheck?: boolean;
@@ -146,11 +148,25 @@ export async function collect(
   // the history store keeps everything so any metric is trendable / analyzable
   // later. Nothing is dropped at collection.
   const samples = metricsText ? parsePrometheus(metricsText).map((s) => MetricSample.parse(s)) : [];
-  // Token for an auth'd datasource (Grafana proxy / auth'd Prometheus or Victoria
-  // Metrics). Flag-provided (opts) wins; else SBPERF_PROMETHEUS_TOKEN from env.
+  // Auth + schema for an auth'd datasource (Grafana proxy / auth'd Prometheus or
+  // Prometheus). Flag-provided (opts) wins; else the SBPERF_PROMETHEUS_*
+  // env. token = service-account bearer; cookie = browser session (SSO-fronted
+  // Grafana); matcher = project-label template for a non-default scraper schema.
+  const promUrl = opts.prometheusUrl ?? process.env.SBPERF_PROMETHEUS_URL;
   const promToken = opts.prometheusToken ?? process.env.SBPERF_PROMETHEUS_TOKEN;
-  const trends = opts.prometheusUrl
-    ? await safe("trends", () => fetchTrends(opts.prometheusUrl as string, 30, ref, promToken), [])
+  const promCookie = opts.prometheusCookie ?? process.env.SBPERF_PROMETHEUS_COOKIE;
+  const promMatcher = opts.prometheusMatcher ?? process.env.SBPERF_PROMETHEUS_MATCHER;
+  const trends = promUrl
+    ? await safe(
+        "trends",
+        () =>
+          fetchTrends(promUrl, 30, ref, {
+            token: promToken,
+            cookie: promCookie,
+            matcher: promMatcher,
+          }),
+        [],
+      )
     : [];
 
   // Per-function invocation stats depend on the functions list (need each id),
