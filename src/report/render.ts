@@ -414,7 +414,7 @@ ${a.errors.length ? `<h2>Collection notes <span class=count>${a.errors.length}</
 <style>
   :root{--fg:#1a1a1a;--mut:#666;--line:#ddd;--bg:#fff;--accent:#3056d3;--okbg:#e3f4e3;--warnbg:#fff4d6;--errbg:#fde2e2}
   *{box-sizing:border-box}
-  body{font:14px/1.45 -apple-system,Segoe UI,Roboto,sans-serif;color:var(--fg);background:var(--bg);margin:0 auto;padding:24px;max-width:1200px}
+  body{font:14px/1.45 -apple-system,Segoe UI,Roboto,sans-serif;color:var(--fg);background:var(--bg);margin:0 auto;padding:24px;max-width:1200px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   h1{font-size:20px;margin:0 0 4px}
   h2,.h2{font-size:15px;font-weight:700}
   h2{margin:26px 0 6px;padding-bottom:3px;border-bottom:2px solid var(--fg)}
@@ -462,7 +462,20 @@ ${a.errors.length ? `<h2>Collection notes <span class=count>${a.errors.length}</
   figure.spark figcaption{font-size:12px;font-weight:600}
   figure.spark svg{border:1px solid var(--line);background:#fafafa}
   @page{size:A4;margin:14mm 12mm}
-  @media print{body{padding:0;max-width:none}h2,summary{page-break-after:avoid}tr{page-break-inside:avoid}details{page-break-inside:auto}}
+  @media print{
+    body{padding:0;max-width:none;font-size:11.5px}
+    h1{font-size:17px}
+    /* keep a heading with the content that follows it */
+    h1,h2,.h2,summary{break-after:avoid;page-break-after:avoid;break-inside:avoid}
+    /* repeat table headers on every page a long table spans */
+    thead{display:table-header-group}
+    tbody tr{break-inside:avoid;page-break-inside:avoid}
+    /* never split these visual units across a page boundary */
+    .banner,.lead,.sevbar,figure.spark,table.chart,ul.positives li,table.kv{break-inside:avoid;page-break-inside:avoid}
+    details{break-inside:auto}
+    p{orphans:3;widows:3}
+    a{color:var(--fg);text-decoration:none}
+  }
 </style></head><body>
 <h1>Supabase performance report</h1>
 <div class=meta>
@@ -547,10 +560,12 @@ export function renderSummary(a: Analysis): string {
 <meta name=viewport content="width=device-width,initial-scale=1">
 <title>${esc(m.name)} - performance summary</title>
 <style>
-  body{font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;color:#1a1a1a;background:#fff;margin:0 auto;padding:32px;max-width:760px}
+  body{font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;color:#1a1a1a;background:#fff;margin:0 auto;padding:32px;max-width:760px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   h1{font-size:22px;margin:0 0 2px}
   .meta{color:#666;font-size:13px;margin-bottom:16px}
   .verdict{padding:14px 16px;border-radius:6px;font-size:17px;font-weight:600;margin:12px 0 20px}
+  h2.g,ul,tr,.verdict{break-inside:avoid;page-break-inside:avoid}
+  h2.g{page-break-after:avoid}
   .verdict.ok{background:#e3f4e3}.verdict.warn{background:#fff4d6}.verdict.bad{background:#fde2e2}
   h2.g{font-size:14px;margin:20px 0 4px;padding:2px 8px;border-radius:3px;display:inline-block}
   h2.g.ERROR{background:#fde2e2}h2.g.WARN{background:#fff4d6}h2.g.INFO{background:#e6f0ff}
