@@ -6,7 +6,7 @@ import {
   resolveTargets,
 } from "../src/dbtargets.ts";
 
-const REF = "abcdefghijklmnopqrst"; // 20 lowercase letters
+const REF = "abcdefghijklmnopqrst"; // 20 lowercase letters (placeholder)
 
 describe("refFromConnstring", () => {
   test("pooler: role.ref in username", () => {
