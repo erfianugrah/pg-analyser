@@ -1,0 +1,15 @@
+[
+  {
+    "name": "prod",
+    "dbUrl": "postgresql://supabase_admin.aaaaaaaaaaaaaaaaaaaa:PASSWORD@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres"
+  },
+  {
+    "name": "staging",
+    "dbUrl": "postgresql://supabase_admin.bbbbbbbbbbbbbbbbbbbb:PASSWORD@aws-0-us-east-1.pooler.supabase.com:6543/postgres"
+  },
+  {
+    "name": "legacy-non-supabase",
+    "ref": "manual-ref-label",
+    "dbUrl": "postgresql://user:PASSWORD@db.internal.example.com:5432/appdb"
+  }
+]

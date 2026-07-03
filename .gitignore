@@ -25,6 +25,7 @@ scraper/data/
 # multi-db superuser targets (connstrings)
 sbperf.databases.json
 sbperf.databases.*.json
+!sbperf.databases.example.json
 
 # active white-label brand config (keep the .example); may point at private logos
 sbperf.brand.json

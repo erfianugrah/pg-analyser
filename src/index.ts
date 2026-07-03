@@ -56,13 +56,15 @@ Flags:
   --store <db>         history SQLite file (default ~/.sbperf/history.db)
   --retention-days <n> snapshot: prune snapshots older than n days (default 90, 0=keep)
   --interval <window>  analytics timeframe: 15min|30min|1hr|3hr|1day|3day|7day (default 1day)
-  --db-url <connstr>   run SQL as superuser via a Postgres connstring (or SBPERF_DB_URL);
-                       full-access tier for your own projects - PAT still used for
-                       API planes + metrics. Default is the PAT read-only runner.
-                       REPEATABLE: pass multiple --db-url to sweep several DBs
-                       ('full' -> per-DB reports + index; 'snapshot' -> each to store).
+  --db-url <connstr>   run SQL as superuser via a Postgres connstring; full-access
+                       tier for your own projects - PAT still used for API planes +
+                       metrics. Default is the PAT read-only runner. REPEATABLE:
+                       sweep several DBs ('full' -> per-DB reports + index;
+                       'snapshot' -> each to store). Env fallback (no flag given):
+                       SBPERF_DB_URL plus numbered SBPERF_DB_URL_2, _3, ...
   --db-config <file>   JSON list of {name?,ref?,dbUrl} targets (gitignored); an
                        alternative to repeated --db-url. ref auto-derived if omitted.
+                       ./sbperf.databases.json is auto-loaded when no db flag/env set.
   --prometheus <url>   trends from a scraper's Prometheus instead of the history store
   --no-sync-check      skip the on-by-default upstream sync check (offline runs)
   --narrative          report/pdf: embed the LLM narrative (run 'narrate' first)
@@ -369,6 +371,25 @@ function splitRefs(v: string): string[] {
   return v.split(/[\s,]+/).filter(Boolean);
 }
 
+/** Default multi-DB config file auto-loaded from cwd when no db flag/env given. */
+const DEFAULT_DB_CONFIG = "sbperf.databases.json";
+
+/**
+ * Collect superuser connstrings from the environment: SBPERF_DB_URL plus the
+ * numbered SBPERF_DB_URL_2, SBPERF_DB_URL_3, ... (gaps tolerated). Each var
+ * holds ONE full connstring - we never split a single var, since a password can
+ * contain any delimiter. Order: base var first, then ascending index.
+ */
+function collectEnvDbUrls(): string[] {
+  const urls: string[] = [];
+  if (process.env.SBPERF_DB_URL) urls.push(process.env.SBPERF_DB_URL);
+  for (let i = 2; i <= 99; i++) {
+    const v = process.env[`SBPERF_DB_URL_${i}`];
+    if (v) urls.push(v);
+  }
+  return urls;
+}
+
 /**
  * Extract project refs from a --ref-file (.txt one-per-line, or .csv). Any
  * ref-shaped token (20 lowercase letters) is kept; headers, project names,
@@ -656,21 +677,27 @@ async function main(): Promise<void> {
   activeBrand = await loadBrand({ file: flags.brand });
 
   try {
-    // Resolve superuser DB targets: repeatable --db-url / --db-config / SBPERF_DB_URL.
-    // Env fallback applies only when no explicit --db-url / --db-config is given
-    // (otherwise the config/flags are authoritative and env would double-count).
-    const flagUrls = flags.dbUrls.length
-      ? flags.dbUrls
-      : !flags.dbConfig && process.env.SBPERF_DB_URL
-        ? [process.env.SBPERF_DB_URL]
-        : [];
+    // Resolve superuser DB targets. Precedence: explicit flags are authoritative
+    // (--db-url repeatable + --db-config, merged as before). With NO explicit db
+    // flag, fall back to env, then to an auto-discovered config file:
+    //   1. --db-url / --db-config      (explicit; merged)
+    //   2. SBPERF_DB_URL[_N] env vars  (numbered; each a full connstring)
+    //   3. ./sbperf.databases.json     (auto-loaded if it exists)
     let targets: DbTarget[] = [];
-    if (flags.dbConfig || flagUrls.length) {
-      const raw: RawEntry[] = [];
+    const raw: RawEntry[] = [];
+    if (flags.dbUrls.length || flags.dbConfig) {
       if (flags.dbConfig) raw.push(...parseDbConfig(await Bun.file(flags.dbConfig).text()));
-      for (const u of flagUrls) raw.push({ dbUrl: u });
-      targets = resolveTargets(raw, raw.length === 1 ? flags.ref : undefined);
+      for (const u of flags.dbUrls) raw.push({ dbUrl: u });
+    } else {
+      const envUrls = collectEnvDbUrls();
+      if (envUrls.length) {
+        for (const u of envUrls) raw.push({ dbUrl: u });
+      } else if (await Bun.file(DEFAULT_DB_CONFIG).exists()) {
+        raw.push(...parseDbConfig(await Bun.file(DEFAULT_DB_CONFIG).text()));
+        console.error(`> db targets: auto-loaded ${DEFAULT_DB_CONFIG} (${raw.length})`);
+      }
     }
+    if (raw.length) targets = resolveTargets(raw, raw.length === 1 ? flags.ref : undefined);
 
     // Expand --ref-file(s) into refs[], then dedupe (a ref may repeat across
     // flags + files). The last file token also sets the single `ref`.
