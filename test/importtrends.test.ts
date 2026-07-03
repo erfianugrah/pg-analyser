@@ -58,6 +58,39 @@ describe("parseTrendsCsv", () => {
   });
 });
 
+describe("parseTrendsCsv (long format)", () => {
+  test("time,series,value grouped into one series per label (by header)", () => {
+    const csv =
+      "time,series,value\n1783036800,CPU,40\n1783036800,Mem,3.2\n1783036900,CPU,55\n1783036900,Mem,3.3\n";
+    const s = parseTrendsCsv(csv);
+    expect(s).toHaveLength(2);
+    const cpu = s.find((x) => x.title === "CPU");
+    expect(cpu?.points).toEqual([
+      { t: 1783036800, v: 40 },
+      { t: 1783036900, v: 55 },
+    ]);
+  });
+
+  test("detected by sniffing when headers are unhelpful", () => {
+    const csv = "ts,k,n\n1783036800,disk_a,10\n1783036900,disk_a,12\n1783036800,disk_b,20\n";
+    const s = parseTrendsCsv(csv);
+    expect(s.map((x) => x.title).sort()).toEqual(["disk_a", "disk_b"]);
+  });
+
+  test("a genuine 3-col WIDE table (two numeric series) is NOT misread as long", () => {
+    const csv = "Time,a,b\n1783036800,1,2\n1783036900,3,4\n";
+    const s = parseTrendsCsv(csv);
+    expect(s.map((x) => x.title).sort()).toEqual(["a", "b"]);
+    expect(s.find((x) => x.title === "a")?.points).toHaveLength(2);
+  });
+
+  test("long-format series label can carry a [unit]", () => {
+    const csv = "time,metric,value\n1783036800,Disk free [bytes],1000\n";
+    const s = parseTrendsCsv(csv);
+    expect(s[0]).toMatchObject({ title: "Disk free", unit: "bytes" });
+  });
+});
+
 describe("parseTrendsJson", () => {
   test("accepts a TrendSeries[] and {t,v} points", () => {
     const j = JSON.stringify([{ title: "CPU", unit: "%", points: [{ t: 1783036800, v: 40 }] }]);

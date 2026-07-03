@@ -248,6 +248,9 @@ bun run src/index.ts report ./reports/myproject     # renders the imported panel
 - **CSV (wide)** - first column is the timestamp, every other column is a series
   (its header is the panel title). A `Title [unit]` / `Title (unit)` header sets
   the unit (e.g. `Disk free [bytes]`). This is Grafana's default CSV export shape.
+- **CSV (long)** - exactly three columns `time,series,value` (the Prometheus /
+  tidy-data shape), grouped into one series per label. Auto-detected by header
+  names or by sniffing; the series label may carry a `[unit]` too.
 - **JSON** - a `TrendSeries[]` (`{title, unit?, points:[{t,v}]}`), a `{trends:[...]}`
   wrapper, or `[t,v]` tuple points.
 - Timestamps may be ISO-8601 or epoch (seconds or milliseconds). Re-importing an
