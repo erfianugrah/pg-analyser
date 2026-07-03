@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { Overlay } from "../src/overlay.ts";
 import { render, renderIndex, renderOrgIndex, renderSummary } from "../src/report/render.ts";
 import type { Analysis } from "../src/schemas.ts";
 
@@ -304,6 +305,36 @@ describe("render", () => {
   test("is self-contained (no external asset refs)", () => {
     const html = render(fixture());
     expect(html).not.toMatch(/<(script|link)[^>]+(src|href)=["']https?:/);
+  });
+});
+
+describe("render overlay", () => {
+  test("overlay hides a section", () => {
+    const base = render(fixture());
+    expect(base).toContain('id="outliers"');
+    const overlay: Overlay = { hide: new Set(["outliers"]), notes: {} };
+    const html = render(fixture(), { overlay });
+    expect(html).not.toContain('id="outliers"');
+    // sibling section unaffected
+    expect(html).toContain('id="calls"');
+  });
+
+  test("overlay appends a section note as rendered markdown", () => {
+    const overlay: Overlay = { hide: new Set(), notes: { outliers: "**cron only**" } };
+    const html = render(fixture(), { overlay });
+    const seg = html.slice(html.indexOf('id="outliers"'), html.indexOf('id="calls"'));
+    expect(seg).toContain("<strong>cron only</strong>");
+  });
+
+  test("overlay top note renders after the exec summary", () => {
+    const overlay: Overlay = { hide: new Set(), notes: { top: "reviewed today" } };
+    const html = render(fixture(), { overlay });
+    expect(html).toContain("overlay-note");
+    expect(html).toContain("reviewed today");
+  });
+
+  test("no overlay leaves output identical to default", () => {
+    expect(render(fixture(), { overlay: { hide: new Set(), notes: {} } })).toBe(render(fixture()));
   });
 });
 

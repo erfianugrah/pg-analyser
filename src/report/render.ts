@@ -7,6 +7,7 @@ import {
   type Severity,
 } from "../findings.ts";
 import { curate } from "../metrics.ts";
+import { EMPTY_OVERLAY, type Overlay } from "../overlay.ts";
 import type { Advisor, Analysis, SqlRow } from "../schemas.ts";
 import { mdToHtml } from "./markdown.ts";
 
@@ -290,7 +291,7 @@ function positivesSection(positives: Positive[]): string {
 }
 
 /** Collapsible evidence section (open by default so PDF shows everything). */
-function drill(id: string, title: string, note: string, body: string): string {
+function baseDrill(id: string, title: string, note: string, body: string): string {
   return `<details open id="${id}"><summary><span class=h2>${esc(title)}</span>${note ? ` <span class=note>${esc(note)}</span>` : ""}</summary>${body}</details>`;
 }
 
@@ -574,8 +575,23 @@ ${brandHead(brand, "Supabase performance - all organizations")}
 </body></html>`;
 }
 
-export function render(a: Analysis, opts: { narrative?: boolean; brand?: Brand } = {}): string {
+export function render(
+  a: Analysis,
+  opts: { narrative?: boolean; brand?: Brand; overlay?: Overlay } = {},
+): string {
   const brand = opts.brand ?? DEFAULT_BRAND;
+  const overlay = opts.overlay ?? EMPTY_OVERLAY;
+  // Local drill: honour the reviewer overlay (hide sections, append notes)
+  // while leaving the 22 call sites in the template unchanged.
+  const drill = (id: string, title: string, note: string, body: string): string => {
+    // A hidden section is dropped entirely - any note keyed to it goes with it.
+    if (overlay.hide.has(id)) return "";
+    const overlayNote = overlay.notes[id];
+    const withNote = overlayNote
+      ? `${body}<div class="overlay-note">${mdToHtml(overlayNote)}</div>`
+      : body;
+    return baseDrill(id, title, note, withNote);
+  };
   const m = a.meta;
   const disk = a.disk;
   const narrativeHtml =
@@ -632,7 +648,12 @@ export function render(a: Analysis, opts: { narrative?: boolean; brand?: Brand }
     <div class=sc-vitals><div class=sc-sub>At a glance</div>${vitalsMini(a)}<p class=hbadges>${healthBadges(a)}</p></div>
   </div>
 </section>
-${execSummarySection(a, findings, positives, degraded, narrativeHtml)}
+${execSummarySection(a, findings, positives, degraded, narrativeHtml)}${
+  overlay.notes.top
+    ? `
+<section class="overlay-note">${mdToHtml(overlay.notes.top)}</section>`
+    : ""
+}
 
 ${trendsSection(a)}
 
@@ -712,6 +733,7 @@ ${faviconTag(brand)}
   .narrative h2{font-size:14px;margin:14px 0 4px;border:none;padding:0}
   .narrative h3{font-size:13px;font-weight:700;margin:10px 0 2px}
   .narrative ul,.narrative ol{margin:4px 0;padding-left:22px}
+  .overlay-note{border-left:3px solid var(--accent);padding:.4rem .8rem;margin:.6rem 0;background:var(--panel)}
   .narrative li{margin:2px 0}
   .narrative code{background:var(--code);padding:1px 4px;border-radius:2px;font-size:12px}
   .narrative pre{background:var(--code);padding:8px 10px;border-radius:3px;overflow:auto}
