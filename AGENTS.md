@@ -21,6 +21,7 @@ HTML + PDF report. No superuser `--db-url`, no manual Grafana screenshots.
 | `bun run src/index.ts summary <dir>` | `analysis.json` -> `summary.html` (non-technical) |
 | `bun run src/index.ts pdf <dir>` | `analysis.json` -> `report.pdf` + `summary.pdf` |
 | `bun run src/index.ts narrate <dir>` | `analysis.json` -> `narrative.md` (LLM pass; needs `SBPERF_LLM_*`) |
+| `bun run src/index.ts import-trends <dir> <file...>` | merge external CSV/JSON series into `analysis.trends` (vendor-neutral; no dashboard coupling) |
 | `bun run src/index.ts full --ref <ref>` | analyze + report + summary + pdf |
 | `bun run src/index.ts snapshot --ref <ref>` | collect + append to the SQLite history store (cron this) |
 | `bun run src/index.ts scrape-init --ref <ref>` | write the (alternate) Prometheus+Grafana stack |
@@ -85,8 +86,10 @@ src/
   collect.ts     orchestrate all planes -> validated Analysis (per-source errors
                  captured); captures the COMPLETE metrics corpus (all ~321
                  families, no curation) - the corpus is the product
-  report/render  Analysis -> self-contained HTML (utilitarian, print CSS)
-  report/pdf     HTML -> PDF via Playwright
+  report/render  Analysis -> self-contained HTML (utilitarian, print CSS,
+                 positives pass + inline-SVG bar charts + severity bar)
+  report/pdf     HTML -> PDF via headless Chromium --print-to-pdf (no Playwright
+                 dep; system Chrome discovered on PATH or SBPERF_CHROME)
   narrate.ts     LLM pass over the corpus + enriched findings -> narrative.md.
                  Grounded: hands the model the ranked findings (with catalogued
                  remediation + doc URL), positives, and a BOUNDED evidence digest
@@ -105,6 +108,12 @@ src/
                  promtool backfills a Prometheus TSDB -> retroactive Grafana
   scraper.ts     generate a going-forward Prometheus+Grafana stack (alternate
                  trend source; `report` prefers --prometheus over the store)
+  importtrends.ts vendor-neutral trend import: parse external CSV (wide: time +
+                 series columns, "Title [unit]" headers) / JSON (TrendSeries[] or
+                 {t,v}/[t,v] points; ISO or epoch s/ms) -> merge into
+                 analysis.trends (same-title replaces). For bringing your own
+                 30-day history (e.g. a Grafana CSV export) into the report
+                 WITHOUT coupling the public tool to any dashboard.
   index.ts       CLI
 ```
 
