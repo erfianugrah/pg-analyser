@@ -40,6 +40,31 @@ bun run src/index.ts import-trends ./reports/myproject series.csv  # merge exter
 non-technical one-page **summary** (plain-language verdict for a non-engineering
 audience).
 
+## Install as a command (`sbperf`)
+
+The examples above use `bun run src/index.ts ...` (the raw dev invocation). To
+get a real `sbperf` command, pick one:
+
+**Compiled binary** (no Bun at runtime, fastest startup - best for just using it):
+
+```bash
+bun run build              # -> ./sbperf (standalone, embeds the Bun runtime; gitignored)
+mv sbperf ~/.local/bin/    # or anywhere on your PATH
+sbperf full --ref <ref>    # works anywhere
+```
+
+Rebuild after code changes (`bun run build && mv sbperf ~/.local/bin/`).
+
+**`bun link`** (tracks live source, no rebuild - best while developing):
+
+```bash
+bun link                   # uses the `bin` + shebang in package.json
+sbperf full --ref <ref>    # runs current src/ instantly; needs Bun installed
+```
+
+Both give the same `sbperf <command>` UX; the rest of this README writes
+`sbperf ...` interchangeably with `bun run src/index.ts ...`.
+
 Audit every project in the account (writes an `index.html` linking them all):
 
 ```bash
