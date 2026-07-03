@@ -416,7 +416,24 @@ bun run typecheck    # tsc --noEmit
 bun test             # unit tests
 bun run check:api    # upstream Management API drift check (live spec, pass/fail)
 bun run check:inspect # advisory: warn when upstream CLI inspect SQL drifts from our derived baseline
+bun run check:lints  # advisory: warn when splinter lints drift from src/lints.ts fix catalog
 bun run build        # standalone binary
 ```
 
 See `AGENTS.md` for architecture and conventions.
+
+## pi extension
+
+`extensions/sbperf.pi.ts` exposes sbperf as a single tool inside
+[pi](https://pi.dev). Sync it:
+
+```bash
+ln -s "$PWD/extensions/sbperf.pi.ts" ~/.pi/agent/extensions/sbperf.pi.ts   # then restart pi
+```
+
+Actions: `analyze` / `full` (collect + render), `report` / `pdf` / `summary`
+(re-render), and the copy-paste narrate round-trip with **pi itself as the LLM** -
+`narrate_prompt` returns the grounded executive-summary prompt for pi to write
+in-session, `narrate_import` embeds pi's reply back, then `report` with
+`narrative:true`. Binary resolution: `$SBPERF_BIN` -> `sbperf` on PATH ->
+`bun run $SBPERF_REPO/src/index.ts`.

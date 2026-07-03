@@ -32,6 +32,7 @@ HTML + PDF report. No superuser `--db-url`, no manual Grafana screenshots.
 | `bun run typecheck` | `tsc --noEmit` |
 | `bun run check:api` | assert endpoints still exist in the upstream OpenAPI spec |
 | `bun run check:inspect` | warn when upstream CLI inspect SQL drifts from our derived baseline |
+| `bun run check:lints` | warn when splinter lints drift from the src/lints.ts fix catalog |
 | `bun test` | run tests |
 | `bun run build` | compile a standalone `sbperf` binary |
 
@@ -89,10 +90,23 @@ src/
   collect.ts     orchestrate all planes -> validated Analysis (per-source errors
                  captured); captures the COMPLETE metrics corpus (all ~321
                  families, no curation) - the corpus is the product
-  report/render  Analysis -> self-contained HTML (utilitarian, print CSS,
-                 positives pass + inline-SVG bar charts + severity bar).
-                 render(a,{narrative}) embeds the LLM narrative on demand;
-                 renderNarrativePage(a) is the standalone narrative.html.
+  heuristics.ts  evergreen THRESHOLDS + per-finding metadata (whyItMatters,
+                 howToVerify, remediation, optional sql, docUrl) attached to each
+                 Finding by meta(); the deterministic report's what/why/how/verify.
+  lints.ts       per-splinter-lint fix catalog keyed by bare lint name ->
+                 {plainTitle, whatToDo, sql?, howToVerify}; makes advisor findings
+                 a one-stop shop (concrete fix, not "go to the Advisor"). Kept in
+                 sync with splinter.sql by scripts/check-lints-drift.ts.
+  report/render  Analysis -> self-contained HTML: a technical + business audit
+                 pyramid (verdict + deterministic/LLM Executive summary ->
+                 Resource snapshot 30-day charts -> What's looking good ->
+                 Findings as What's happening/Why it matters/What to do (+SQL)/
+                 How to verify -> Evidence drill-down). fillTrendsFromStore joins
+                 the history store on every render path (report/pdf/emitReport).
+                 render(a,{narrative}) embeds the narrative; renderNarrativePage
+                 is the standalone narrative.html.
+  extensions/    sbperf.pi.ts - pi tool wrapper (analyze/full/report/pdf + the
+                 narrate_prompt/narrate_import copy-paste round-trip, pi as LLM).
   report/markdown minimal, HTML-escaping Markdown->HTML for the narrate subset
                  (headings/lists/bold/code/fenced/links); NOT a general parser
   brand.ts       report branding: Supabase default (official mark + green) +
