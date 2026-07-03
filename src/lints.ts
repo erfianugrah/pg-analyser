@@ -27,6 +27,13 @@ export interface LintFix {
   sql?: string;
   /** One sentence: how to confirm the fix worked. */
   howToVerify: string;
+  /**
+   * Optional link to a Supabase changelog / known-issue entry that explains a
+   * documented platform change behind this lint (e.g. a default that changed).
+   * Rendered as an extra "Changelog" reference and surfaced to the narrate pass.
+   * MUST be a real, verified URL - never a guess.
+   */
+  changelogUrl?: string;
 }
 
 export const LINT_FIXES: Record<string, LintFix> = {
@@ -189,6 +196,8 @@ export const LINT_FIXES: Record<string, LintFix> = {
       "A table is reachable by the anon role through GraphQL. Consider revoking anon access or adding row-level security.",
     sql: "REVOKE ALL ON <schema>.<table> FROM anon;",
     howToVerify: "Re-run the Security Advisor - the lint should clear.",
+    changelogUrl:
+      "https://supabase.com/changelog/45329-breaking-change-tables-not-exposed-to-data-and-graphql-api-automatically",
   },
   pg_graphql_authenticated_table_exposed: {
     plainTitle: "Table broadly exposed to authenticated GraphQL",
@@ -196,6 +205,8 @@ export const LINT_FIXES: Record<string, LintFix> = {
       "A table is reachable by every authenticated user through GraphQL with no row-level security. Consider adding RLS or restricting the grant.",
     sql: "ALTER TABLE <schema>.<table> ENABLE ROW LEVEL SECURITY;",
     howToVerify: "Re-run the Security Advisor - the lint should clear.",
+    changelogUrl:
+      "https://supabase.com/changelog/45329-breaking-change-tables-not-exposed-to-data-and-graphql-api-automatically",
   },
   anon_security_definer_function_executable: {
     plainTitle: "Anonymous users can run an owner-privileged function",

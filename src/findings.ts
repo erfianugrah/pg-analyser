@@ -24,6 +24,8 @@ export interface Finding {
   dashUrl?: string;
   /** Canonical doc/source URL for the reader and the narrate pass to cite. */
   docUrl?: string;
+  /** Optional changelog / known-issue URL (documented platform change). */
+  changelogUrl?: string;
   /** Optional measured evidence string (e.g. object name + size + %). */
   evidence?: string;
 }
@@ -104,6 +106,7 @@ function groupAdvisors(
       sql: fix?.sql,
       howToVerify: fix?.howToVerify ?? base.howToVerify,
       docUrl: g.remediation ?? base.docUrl,
+      changelogUrl: fix?.changelogUrl ?? base.changelogUrl,
     };
   });
 }
@@ -183,12 +186,17 @@ export function deriveFindings(a: Analysis): Finding[] {
     a.upgrade.latest_app_version &&
     a.upgrade.current_app_version !== a.upgrade.latest_app_version
   ) {
+    // The GitHub release tag is the bare version (e.g. 17.6.1.141); the API
+    // reports it prefixed (supabase-postgres-17.6.1.141). Extract the version
+    // and link the release notes so the reader sees what the update carries.
+    const ver = a.upgrade.latest_app_version.match(/\d+(?:\.\d+)+/)?.[0];
     out.push({
       severity: "low",
       category: "Performance",
       title: `Postgres update available (${a.upgrade.current_app_version} -> ${a.upgrade.latest_app_version})`,
       anchor: "#infra",
       ...meta("pg_update_available"),
+      ...(ver ? { changelogUrl: `https://github.com/supabase/postgres/releases/tag/${ver}` } : {}),
     });
   }
   if (set.get("idle_in_transaction_session_timeout") === "0") {
