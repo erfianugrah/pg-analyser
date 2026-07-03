@@ -342,6 +342,37 @@ function defaultOut(ref: string): string {
   return join("reports", `${ref}-${ts}`);
 }
 
+/**
+ * Nested default output dir for a single-project run: reports/<org>/<project>-<ts>/
+ * to match the `--all` layout (org -> project -> dated run). Resolves the org
+ * name + project name via the Management API; falls back to the flat
+ * `reports/<ref>-<ts>` on any lookup failure (e.g. a PAT without org scope, or
+ * a bare superuser --db-url whose ref isn't a real Supabase project).
+ */
+async function nestedOut(ref: string): Promise<string> {
+  const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  try {
+    const m = new Management(makeTransport(loadConfig()));
+    const projects = await m.projects();
+    const proj = projects.find((p) => p.id === ref);
+    if (!proj) return defaultOut(ref);
+    const projSlug = slugify(proj.name) || ref;
+    let orgSlug = "ungrouped";
+    if (proj.organization_id) {
+      orgSlug = proj.organization_id;
+      try {
+        const org = (await m.organizations()).find((o) => o.id === proj.organization_id);
+        if (org) orgSlug = slugify(org.name) || slugify(org.slug ?? "") || proj.organization_id;
+      } catch {
+        // PAT may lack org scope; group by organization_id.
+      }
+    }
+    return join("reports", orgSlug, `${projSlug}-${ts}`);
+  } catch {
+    return defaultOut(ref);
+  }
+}
+
 async function doAnalyze(
   ref: string,
   outDir: string,
@@ -606,7 +637,7 @@ async function main(): Promise<void> {
         if (!ref) usage();
         await doAnalyze(
           ref,
-          flags.out ?? defaultOut(ref),
+          flags.out ?? (await nestedOut(ref)),
           flags.prometheus,
           flags.interval,
           singleDbUrl,
@@ -646,7 +677,7 @@ async function main(): Promise<void> {
         if (!ref) usage();
         await doSnapshot(
           ref,
-          flags.out ?? defaultOut(ref),
+          flags.out ?? (await nestedOut(ref)),
           store,
           ret,
           flags.interval,
@@ -704,7 +735,7 @@ async function main(): Promise<void> {
         }
         const ref = flags.ref ?? targets[0]?.ref;
         if (!ref) usage();
-        const dir = flags.out ?? defaultOut(ref);
+        const dir = flags.out ?? (await nestedOut(ref));
         await doAnalyze(
           ref,
           dir,
