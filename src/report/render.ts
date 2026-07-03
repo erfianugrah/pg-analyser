@@ -1,3 +1,4 @@
+import { type Brand, brandVars, DEFAULT_BRAND, faviconTag } from "../brand.ts";
 import {
   deriveFindings,
   derivePositives,
@@ -8,6 +9,13 @@ import {
 import { curate } from "../metrics.ts";
 import type { Advisor, Analysis, SqlRow } from "../schemas.ts";
 import { mdToHtml } from "./markdown.ts";
+
+/** Header block: brand logo + title, shared by every rendered page. */
+function brandHead(brand: Brand, title: string): string {
+  return `<div class=brandhead><span class=logo>${brand.logoSvg}</span><h1>${esc(title)}</h1></div>`;
+}
+const BRAND_CSS =
+  ".brandhead{display:flex;align-items:center;gap:10px}.brandhead .logo svg{height:28px;width:auto;display:block}.brandhead h1{margin:0}";
 
 const esc = (s: unknown): string =>
   String(s ?? "").replace(
@@ -55,11 +63,11 @@ function sqlTable(
 }
 
 /** A single inline-SVG horizontal bar (self-contained, print-safe). */
-function barSvg(frac: number, color = "#3056d3"): string {
+function barSvg(frac: number): string {
   const w = 150;
   const h = 11;
   const bw = Math.max(1, Math.round(Math.max(0, Math.min(1, frac)) * w));
-  return `<svg class=bar width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><rect width="${w}" height="${h}" fill="#eee"/><rect width="${bw}" height="${h}" fill="${color}"/></svg>`;
+  return `<svg class=bar width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><rect width="${w}" height="${h}" fill="#eee"/><rect width="${bw}" height="${h}" class=fg/></svg>`;
 }
 
 /**
@@ -204,7 +212,7 @@ function sparkline(s: Analysis["trends"][number]): string {
   return `<figure class=spark>
     <figcaption>${esc(s.title)} <b>${esc(fmtVal(last, s.unit))}</b></figcaption>
     <svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}" preserveAspectRatio="none">
-      <path d="${path}" fill="none" stroke="#3056d3" stroke-width="1.5"/>
+      <path d="${path}" fill="none" stroke="var(--link)" stroke-width="1.5"/>
     </svg>
     <span class=note>${esc(fmtVal(min, s.unit))} - ${esc(fmtVal(max, s.unit))} over ${n} pts</span>
   </figure>`;
@@ -287,7 +295,11 @@ export interface IndexRow {
 }
 
 /** Org-level index page linking every project report. */
-export function renderIndex(rows: IndexRow[], collectedAt: string): string {
+export function renderIndex(
+  rows: IndexRow[],
+  collectedAt: string,
+  brand: Brand = DEFAULT_BRAND,
+): string {
   const body = rows
     .map((r) => {
       const healthy = r.status === "ACTIVE_HEALTHY";
@@ -309,10 +321,11 @@ export function renderIndex(rows: IndexRow[], collectedAt: string): string {
     })
     .join("");
   return `<!doctype html><html lang=en><head><meta charset=utf-8>
-<meta name=viewport content="width=device-width,initial-scale=1"><title>sbperf - org report</title>
+<meta name=viewport content="width=device-width,initial-scale=1">${faviconTag(brand)}<title>sbperf - org report</title>
 <style>
   body{font:14px/1.45 -apple-system,Segoe UI,Roboto,sans-serif;color:#1a1a1a;margin:0 auto;padding:24px;max-width:1000px}
   h1{font-size:20px;margin:0 0 4px}.meta{color:#666;font-size:12px;margin-bottom:16px}
+  ${BRAND_CSS}
   table{border-collapse:collapse;width:100%;font-size:13px}
   th,td{text-align:left;padding:5px 9px;border:1px solid #ddd}
   th{background:#f6f6f6}tbody tr:nth-child(even){background:#fafafa}
@@ -320,15 +333,16 @@ export function renderIndex(rows: IndexRow[], collectedAt: string): string {
   .badge{font-size:11px;padding:1px 6px;border-radius:3px}.badge.ok{background:#e3f4e3}.badge.bad{background:#fde2e2}
   .lvl{font-weight:700;font-size:11px;padding:1px 5px;border-radius:2px}
   .lvl.WARN{background:#fff4d6}.lvl.ERROR{background:#fde2e2}.lvl.INFO{background:#e6f0ff}
-  a{color:#3056d3}
+  a{color:${brand.ink}}
 </style></head><body>
-<h1>Supabase performance - org report</h1>
+${brandHead(brand, "Supabase performance - org report")}
 <div class=meta>${rows.length} projects &middot; collected ${esc(collectedAt)} &middot; findings shown as high / med / low</div>
 <table><thead><tr><th>project</th><th>ref</th><th>status</th><th>findings</th><th>top sev</th></tr></thead><tbody>${body}</tbody></table>
 </body></html>`;
 }
 
-export function render(a: Analysis, opts: { narrative?: boolean } = {}): string {
+export function render(a: Analysis, opts: { narrative?: boolean; brand?: Brand } = {}): string {
+  const brand = opts.brand ?? DEFAULT_BRAND;
   const m = a.meta;
   const disk = a.disk;
   const narrativeBlock =
@@ -424,9 +438,12 @@ ${a.errors.length ? `<h2>Collection notes <span class=count>${a.errors.length}</
 
   return `<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
+${faviconTag(brand)}
 <title>sbperf - ${esc(m.name)}</title>
 <style>
-  :root{--fg:#1a1a1a;--mut:#666;--line:#ddd;--bg:#fff;--accent:#3056d3;--okbg:#e3f4e3;--warnbg:#fff4d6;--errbg:#fde2e2}
+  :root{--fg:#1a1a1a;--mut:#666;--line:#ddd;--bg:#fff;${brandVars(brand)};--okbg:#e3f4e3;--warnbg:#fff4d6;--errbg:#fde2e2}
+  ${BRAND_CSS}
+  svg.bar .fg{fill:var(--accent)}
   *{box-sizing:border-box}
   body{font:14px/1.45 -apple-system,Segoe UI,Roboto,sans-serif;color:var(--fg);background:var(--bg);margin:0 auto;padding:24px;max-width:1200px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   h1{font-size:20px;margin:0 0 4px}
@@ -478,7 +495,7 @@ ${a.errors.length ? `<h2>Collection notes <span class=count>${a.errors.length}</
   .badge{display:inline-block;font-size:11px;padding:1px 6px;border-radius:3px;background:#eee}
   .badge.ok{background:var(--okbg)}.badge.warn{background:var(--warnbg)}.badge.bad{background:var(--errbg)}
   table.adv td:nth-child(3){max-width:560px}
-  a{color:var(--accent)}
+  a{color:var(--link)}
   .sparks{display:grid;grid-template-columns:repeat(2,1fr);gap:10px 18px;margin-top:8px}
   figure.spark{margin:0}
   figure.spark figcaption{font-size:12px;font-weight:600}
@@ -499,7 +516,7 @@ ${a.errors.length ? `<h2>Collection notes <span class=count>${a.errors.length}</
     a{color:var(--fg);text-decoration:none}
   }
 </style></head><body>
-<h1>Supabase performance report</h1>
+${brandHead(brand, "Supabase performance report")}
 <div class=meta>
   <code>${esc(m.name)}</code> (${esc(m.ref)}) &middot; ${esc(m.region)} &middot;
   status <code>${esc(m.status)}</code> &middot;
@@ -513,11 +530,12 @@ ${syncFooter(a.sync)}
 }
 
 /** Standalone narrative.html - the LLM narrative on its own page. */
-export function renderNarrativePage(a: Analysis): string {
+export function renderNarrativePage(a: Analysis, brand: Brand = DEFAULT_BRAND): string {
   const m = a.meta;
   const body = a.narrative ? mdToHtml(a.narrative) : "<p>No narrative generated.</p>";
   return `<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
+${faviconTag(brand)}
 <title>sbperf narrative - ${esc(m.name)}</title>
 <style>
   body{font:15px/1.6 -apple-system,Segoe UI,Roboto,sans-serif;color:#1a1a1a;background:#fff;margin:0 auto;padding:32px;max-width:80ch}
@@ -528,9 +546,10 @@ export function renderNarrativePage(a: Analysis): string {
   ul,ol{padding-left:22px}li{margin:3px 0}
   code{background:#f2f2f2;padding:1px 4px;border-radius:2px;font-size:13px}
   pre{background:#f7f7f7;padding:10px 12px;border-radius:3px;overflow:auto}pre code{background:none;padding:0}
-  a{color:#3056d3}hr{border:none;border-top:1px solid #ddd;margin:16px 0}
+  a{color:${brand.ink}}hr{border:none;border-top:1px solid #ddd;margin:16px 0}
+  ${BRAND_CSS}
 </style></head><body>
-<h1>Supabase performance - narrative</h1>
+${brandHead(brand, "Supabase performance - narrative")}
 <div class=meta><code>${esc(m.name)}</code> (${esc(m.ref)}) &middot; ${esc(m.region)} &middot; collected ${esc(m.collectedAt.slice(0, 10))} &middot; LLM synthesis over analysis.json (the deterministic report is ground truth)</div>
 ${body}
 </body></html>`;
@@ -541,7 +560,7 @@ ${body}
  * evidence tables - a plain verdict, the issues in priority order, and a few
  * vitals in everyday terms. Companion to the full technical report.
  */
-export function renderSummary(a: Analysis): string {
+export function renderSummary(a: Analysis, brand: Brand = DEFAULT_BRAND): string {
   const m = a.meta;
   const findings = deriveFindings(a);
   const positives = derivePositives(a);
@@ -605,10 +624,12 @@ export function renderSummary(a: Analysis): string {
 
   return `<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
+${faviconTag(brand)}
 <title>${esc(m.name)} - performance summary</title>
 <style>
   body{font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;color:#1a1a1a;background:#fff;margin:0 auto;padding:32px;max-width:760px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   h1{font-size:22px;margin:0 0 2px}
+  ${BRAND_CSS}
   .meta{color:#666;font-size:13px;margin-bottom:16px}
   .verdict{padding:14px 16px;border-radius:6px;font-size:17px;font-weight:600;margin:12px 0 20px}
   h2.g,ul,tr,.verdict{break-inside:avoid;page-break-inside:avoid}
@@ -622,7 +643,7 @@ export function renderSummary(a: Analysis): string {
   .foot{color:#666;font-size:12px;margin-top:28px}
   @page{size:A4;margin:16mm}
 </style></head><body>
-<h1>Performance summary</h1>
+${brandHead(brand, "Performance summary")}
 <div class=meta>${esc(m.name)} &middot; ${esc(m.region)} &middot; ${esc(m.collectedAt.slice(0, 10))}</div>
 <div class="verdict ${verdict.cls}">${esc(verdict.text)}</div>
 ${body}

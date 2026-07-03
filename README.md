@@ -281,6 +281,38 @@ the data, and requires it to caveat when collection was degraded - so the prose
 stays grounded and auditable. It sends a size-bounded digest, not the full ~850-
 sample corpus (which stays in `analysis.json`). No other command calls an LLM.
 
+## Branding (white-label)
+
+Reports carry **Supabase branding by default** - the Supabase logo mark, favicon,
+and green colourway. Deliver a client-ready report as-is, or white-label it with
+your own logo and colours.
+
+```bash
+cp sbperf.brand.json.example sbperf.brand.json   # auto-loaded from the cwd
+# ...or: --brand path/to/brand.json  /  SBPERF_BRAND=path/to/brand.json
+bun run src/index.ts report ./reports/myproject
+```
+
+Every field is optional and overrides the default:
+
+```json
+{
+  "name": "Northwind Data",
+  "accent": "#c026d3",
+  "ink": "#7e1d8a",
+  "logoPath": "./brand/logo.svg"
+}
+```
+
+- `accent` - bright fills (chart bars, borders, badges); `ink` - links + sparkline
+  strokes (pick a contrast-safe shade).
+- `logoPath`/`faviconPath` are read and inlined (reports stay self-contained), or
+  give `logoSvg`/`faviconSvg` directly. A logo with no explicit favicon is reused
+  as the favicon.
+- Precedence: `--brand` > `SBPERF_BRAND` > `./sbperf.brand.json` > Supabase default.
+- The report *title* stays "Supabase performance report" (it analyses Supabase);
+  branding controls who delivers it. `sbperf.brand.json` is gitignored.
+
 ## Troubleshooting
 
 | Symptom | Fix |
