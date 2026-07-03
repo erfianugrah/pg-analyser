@@ -81,7 +81,13 @@ export async function loadOverlay(
   const cwd = opts.cwd ?? ".";
   const home = opts.home ?? homedir();
 
+  // A path the caller named (--overlay flag or SBPERF_OVERLAY) is explicit: a
+  // parse error there is a mistake the user wants to hear about loudly. A path
+  // we auto-discovered by the ref convention is best-effort: one stray/typo'd
+  // file must not abort a `full --all` sweep, so we warn and fall back to empty
+  // (matching collect.ts's tolerant per-source ethos).
   let path = opts.file ?? env.SBPERF_OVERLAY;
+  const explicit = Boolean(path);
   if (!path && opts.ref) {
     const local = join(cwd, "sbperf.overlays", `${opts.ref}.json`);
     const global = join(home, ".sbperf", "overlays", `${opts.ref}.json`);
@@ -90,7 +96,16 @@ export async function loadOverlay(
   }
   if (!path) return { hide: new Set(), notes: {} };
 
-  const raw = OverlayFile.parse(JSON.parse(await readText(path)));
+  let raw: z.infer<typeof OverlayFile>;
+  try {
+    raw = OverlayFile.parse(JSON.parse(await readText(path)));
+  } catch (err) {
+    if (explicit) throw err;
+    warn(
+      `sbperf: ignoring malformed overlay ${path}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return { hide: new Set(), notes: {} };
+  }
   const hide = new Set<string>();
   for (const id of raw.hide ?? []) {
     if (HIDEABLE.has(id)) hide.add(id);

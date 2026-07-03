@@ -109,9 +109,18 @@ describe("loadOverlay", () => {
     expect(local.some((m) => m.includes("bogus"))).toBe(true);
   });
 
-  test("malformed JSON throws", async () => {
+  test("malformed JSON on the convention path warns and falls back to empty", async () => {
+    const local: string[] = [];
     const io = harness({ "sbperf.overlays/abc.json": "{ not json" });
-    expect(loadOverlay({ ref: "abc", cwd: ".", ...io, warn })).rejects.toThrow();
+    const o = await loadOverlay({ ref: "abc", cwd: ".", ...io, warn: (m) => local.push(m) });
+    expect(o.hide.size).toBe(0);
+    expect(o.notes).toEqual({});
+    expect(local.some((m) => m.includes("malformed"))).toBe(true);
+  });
+
+  test("malformed JSON on an explicit --overlay file throws (fail loud)", async () => {
+    const io = harness({ "/x/bad.json": "{ not json" });
+    expect(loadOverlay({ file: "/x/bad.json", ...io, warn })).rejects.toThrow();
   });
 
   test("HIDEABLE_SECTIONS contains the query sections", () => {
