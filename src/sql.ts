@@ -448,6 +448,13 @@ export const QUERIES = {
     limit 20`,
 
   // Sessions currently holding an exclusive lock (self excluded).
+  // Point-in-time strong table locks that can block others. We deliberately
+  // filter locktype = 'relation': the upstream/Heroku-derived form used only
+  // mode = 'ExclusiveLock', which also matches the virtualxid/transactionid
+  // ExclusiveLock EVERY active backend holds on its own transaction - including
+  // this tool's sibling diagnostic connections - so the section was never empty
+  // and mostly showed sbperf auditing itself. Real relation-level locks (the
+  // AccessExclusive DDL takes, or explicit LOCK TABLE) are what block queries.
   locks: /* sql */ `
     select
       a.pid,
@@ -459,7 +466,8 @@ export const QUERIES = {
     from pg_stat_activity a
     join pg_locks l on l.pid = a.pid
     left join pg_class c on l.relation = c.oid
-    where l.mode = 'ExclusiveLock'
+    where l.locktype = 'relation'
+      and l.mode in ('AccessExclusiveLock', 'ExclusiveLock', 'ShareRowExclusiveLock')
       and a.pid <> pg_backend_pid()
       and a.query <> '<insufficient privilege>'
     order by a.query_start

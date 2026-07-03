@@ -111,12 +111,40 @@ Sources: Supabase RLS Performance & Best Practices docs; agent-skills
 
 ---
 
+## Report display gating (presentation-only)
+
+Point-in-time snapshot sections carry no signal at rest, so the report gates
+them on data / thresholds rather than always rendering an empty or noise table
+(the full corpus is always in `analysis.json` regardless):
+
+- **Role connection usage** - shown only when a role reaches `roleConnShowFrac`
+  (50%) of its limit (below the `role_conn_high` finding gate of 80%, so the
+  table appears before saturation is critical).
+- **Transaction-ID wraparound** - shown only when a table's `pct_wraparound`
+  reaches `txidWarnPct` (20%).
+- **Exclusive locks** - the query filters `locktype = 'relation'` + strong modes
+  (AccessExclusive/Exclusive/ShareRowExclusive). The old `mode='ExclusiveLock'`-
+  only form also matched the `virtualxid`/`transactionid` lock every backend
+  (incl. sbperf's own diagnostic connections) holds, so it was never empty and
+  showed the tool auditing itself. Section shown only when a real relation lock
+  exists at collection.
+- **Blocking chains / long-running queries / replication slots** - shown only
+  when non-empty at collection.
+- **API request volume** - rolled up to per-service totals + the peak bucket
+  (the raw per-interval series is too granular).
+- **Infra metrics** - a scrape-status line + link to the metrics guide, not the
+  raw point-in-time table (a single scrape is not a trend).
+
+All of the above are overridable by the review overlay (`overlay.ts`); the gates
+only decide the default.
+
 ## 3. Connections & pooler (Supavisor / pgbouncer)
 
 | id | signal | threshold | sev | status |
 |---|---|---|---|---|
 | `direct_conn_high` | direct connections / `max_connections` | >= 70% | med | HAVE |
 | `role_conn_high` | a role's connections / its `conn_limit` | >= 80% | med | HAVE |
+| _(display)_ role-usage table shown | max role conn / limit >= `roleConnShowFrac` 50% | - | presentation gate |
 | `pooler_clients_waiting` | `pgbouncer_pools_client_waiting_connections` | > 0 | med | HAVE |
 | `txn_pooler_prepared_stmts` | txn-mode pool (port 6543) + prepared statements | pool_mode=transaction | low | NEW (informational) |
 

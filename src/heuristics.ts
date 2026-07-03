@@ -19,8 +19,12 @@ export const THRESHOLDS = {
   cacheHitPct: 99,
   /** Direct connections / max_connections warning fraction. */
   directConnFrac: 0.7,
-  /** A role's connections / its conn_limit warning fraction. */
+  /** A role's connections / its conn_limit warning fraction (finding). */
   roleConnFrac: 0.8,
+  /** A role's connections / its conn_limit at/above which the report shows the
+   * role-usage table at all (display gate; below the finding threshold so the
+   * table appears before saturation is critical). */
+  roleConnShowFrac: 0.5,
   /** Disk used / total warning fraction. */
   diskFullFrac: 0.8,
   /** Derived disk IOPS / provisioned warning fraction. */

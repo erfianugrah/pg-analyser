@@ -6,7 +6,7 @@ import {
   type Positive,
   type Severity,
 } from "../findings.ts";
-import { curate } from "../metrics.ts";
+import { THRESHOLDS } from "../heuristics.ts";
 import { EMPTY_OVERLAY, type Overlay } from "../overlay.ts";
 import type { Advisor, Analysis, SqlRow } from "../schemas.ts";
 import { mdToHtml } from "./markdown.ts";
@@ -180,26 +180,56 @@ function functionsSection(a: Analysis): string {
   return `${list}<p class=note>Invocation stats (last day)</p>${sqlTable(stats as unknown as SqlRow[], { mono: ["slug"] })}`;
 }
 
-function metricsTable(a: Analysis): string {
+const METRICS_GUIDE = "https://supabase.com/docs/guides/telemetry/metrics";
+
+/**
+ * Metrics are point-in-time (a single scrape), so a raw table of current values
+ * has little standalone worth. What matters is (a) whether the endpoint is
+ * actually scrapeable and (b) how to stand up real scraping for history. The
+ * full corpus is still captured in analysis.json + the history store.
+ */
+function metricsStatus(a: Analysis): string {
   if (!a.metrics.available)
-    return `<p class=empty>metrics endpoint not reachable (see collection notes)</p>`;
-  if (!a.metrics.samples.length) return `<p class=empty>no samples</p>`;
-  // The full scrape is captured in analysis.json + the history store; the HTML
-  // shows a readable key-metric slice. curate() is a DISPLAY filter only.
-  const display = curate(a.metrics.samples);
-  const note = `<p class=note>Showing ${display.length} key point-in-time metrics of ${a.metrics.samples.length} captured (full corpus in analysis.json).</p>`;
-  const rows = display
-    .map((s) => {
-      const label = Object.entries(s.labels)
-        .filter(
-          ([k]) => !["supabase_project_ref", "supabase_identifier", "service_type"].includes(k),
-        )
-        .map(([k, v]) => `${k}=${v}`)
-        .join(" ");
-      return `<tr><td class=mono>${esc(s.name)}</td><td class=mono>${esc(label)}</td><td>${esc(s.value)}</td></tr>`;
-    })
+    return `<p class="empty warn-text">Metrics endpoint not reachable at collection (see notes). <a href="${METRICS_GUIDE}">How to enable and scrape it &#8599;</a></p>`;
+  const n = a.metrics.samples.length;
+  return `<p class=note>Endpoint reachable - ${n} metric families captured this run (full point-in-time corpus in analysis.json). A single scrape is not a trend; stand up Prometheus/Grafana for history. <a href="${METRICS_GUIDE}">Supabase metrics guide &#8599;</a></p>`;
+}
+
+/**
+ * API request volume rolled up over the collected window: per-service totals
+ * plus the peak bucket. The raw per-interval series is too granular to read;
+ * the rollup answers "how much traffic, and when did it peak".
+ */
+function apiVolumeSummary(a: Analysis): string {
+  const rows = a.apiCounts;
+  if (!rows.length) return "<p class=empty>none</p>";
+  const services = [
+    ["auth", "total_auth_requests"],
+    ["realtime", "total_realtime_requests"],
+    ["rest", "total_rest_requests"],
+    ["storage", "total_storage_requests"],
+  ] as const;
+  const totals: Record<string, number> = {};
+  let peak = { ts: "", total: -1 };
+  for (const r of rows) {
+    let bucket = 0;
+    for (const [name, key] of services) {
+      const v = Number((r as Record<string, unknown>)[key]) || 0;
+      totals[name] = (totals[name] ?? 0) + v;
+      bucket += v;
+    }
+    if (bucket > peak.total) peak = { ts: r.timestamp, total: bucket };
+  }
+  const grand = services.reduce((sum, [name]) => sum + (totals[name] ?? 0), 0);
+  const cells = services
+    .filter(([name]) => (totals[name] ?? 0) > 0)
+    .map(([name]) => `<tr><td>${name}</td><td>${(totals[name] ?? 0).toLocaleString()}</td></tr>`)
     .join("");
-  return `${note}<table><thead><tr><th>metric</th><th>labels</th><th>value</th></tr></thead><tbody>${rows}</tbody></table>`;
+  const peakLine =
+    peak.total > 0
+      ? `<p class=note>Peak bucket: ${esc(peak.ts)} - ${peak.total.toLocaleString()} requests.</p>`
+      : "";
+  return `<p class=note>${grand.toLocaleString()} total requests over the collected window (${rows.length} buckets).</p><table><thead><tr><th>service</th><th>requests</th></tr></thead><tbody>${cells}</tbody></table>${peakLine}`;
 }
 
 const fmtVal = (v: number, unit: string): string =>
@@ -599,6 +629,27 @@ export function render(
       ? `<div class=narrative id="summary">${mdToHtml(a.narrative)}</div>`
       : "";
   const errored = new Set(a.errors.map((e) => e.source));
+  // Point-in-time snapshot sections carry no signal at rest, so gate them on
+  // whether there is anything worth reading (empty = omit). Errored collection
+  // still shows (so "not collected" is visible). Threshold-gated sections only
+  // appear when they approach the threshold worth acting on.
+  const show = {
+    roles:
+      errored.has("sql:roleStats") ||
+      a.sql.roleStats.some((r) => {
+        const c = Number(r.connections) || 0;
+        const l = Number(r.conn_limit) || 0;
+        return l > 0 && c / l >= THRESHOLDS.roleConnShowFrac;
+      }),
+    txid:
+      errored.has("sql:txidWraparound") ||
+      a.sql.txidWraparound.some((r) => (Number(r.pct_wraparound) || 0) >= THRESHOLDS.txidWarnPct),
+    slots: a.sql.replicationSlots.length > 0,
+    longrunning: a.sql.longRunning.length > 0,
+    locks: a.sql.locks.length > 0,
+    blocking: a.sql.blocking.length > 0,
+    apivol: errored.has("apiCounts") || a.apiCounts.length > 0,
+  };
   const findings = deriveFindings(a);
   const positives = derivePositives(a);
 
@@ -692,17 +743,17 @@ ${drill("seqscan", "Sequential-scan heavy", "seq_scan > idx_scan, >1k rows", sec
 ${drill("bloat", "Estimated bloat", "reclaimable wasted space (pg_stats estimate)", sec(a.sql.bloat, "sql:bloat", { mono: ["name"], hide: ["waste_bytes"] }))}
 ${drill("traffic", "Read/write profile", "per-table read-heavy vs write-heavy", sec(a.sql.trafficProfile, "sql:trafficProfile", { mono: ["table"] }))}
 ${drill("deadtuples", "Dead tuples / autovacuum", "overdue = dead tuples past the table's autovacuum threshold", sec(a.sql.deadTuples, "sql:deadTuples", { mono: ["table"], hide: ["schema"] }))}
-${drill("roles", "Role connection usage", "active connections vs each role's limit", sec(a.sql.roleStats, "sql:roleStats", { mono: ["role"] }))}
-${drill("txid", "Transaction-ID wraparound", "age(relfrozenxid) vs 2B ceiling; non-system tables", sec(a.sql.txidWraparound, "sql:txidWraparound", { mono: ["table"], hide: ["schema"] }))}
-${drill("slots", "Replication slots", "retained WAL; inactive slots pin disk", a.sql.replicationSlots.length ? sqlTable(a.sql.replicationSlots, { mono: ["slot_name"], hide: ["retained_wal_bytes"] }) : "<p class=empty>none</p>")}
+${show.roles ? drill("roles", "Role connection usage", "active connections vs each role's limit (shown when a role nears its limit)", sec(a.sql.roleStats, "sql:roleStats", { mono: ["role"] })) : ""}
+${show.txid ? drill("txid", "Transaction-ID wraparound", "age(relfrozenxid) vs 2B ceiling; shown when a table approaches the wraparound threshold", sec(a.sql.txidWraparound, "sql:txidWraparound", { mono: ["table"], hide: ["schema"] })) : ""}
+${show.slots ? drill("slots", "Replication slots", "retained WAL; inactive slots pin disk", sqlTable(a.sql.replicationSlots, { mono: ["slot_name"], hide: ["retained_wal_bytes"] })) : ""}
 ${drill("connections", "Connections", "by state", sec(a.sql.connections, "sql:connections"))}
-${drill("longrunning", "Long-running queries", "point-in-time snapshot: running > 5 min at collection", a.sql.longRunning.length ? sqlTable(a.sql.longRunning, { mono: ["query"] }) : "<p class=empty>none at collection time</p>")}
-${drill("locks", "Exclusive locks", "point-in-time snapshot at collection", a.sql.locks.length ? sqlTable(a.sql.locks, { mono: ["query", "relation"] }) : "<p class=empty>none at collection time</p>")}
-${drill("blocking", "Blocking chains", "point-in-time snapshot at collection", a.sql.blocking.length ? sqlTable(a.sql.blocking, { mono: ["blocked_query", "blocking_query"] }) : "<p class=empty>none at collection time</p>")}
+${show.longrunning ? drill("longrunning", "Long-running queries", "point-in-time snapshot: running > 5 min at collection", sqlTable(a.sql.longRunning, { mono: ["query"] })) : ""}
+${show.locks ? drill("locks", "Exclusive locks", "point-in-time snapshot: relation-level strong locks at collection", sqlTable(a.sql.locks, { mono: ["query", "relation"] })) : ""}
+${show.blocking ? drill("blocking", "Blocking chains", "point-in-time snapshot at collection", sqlTable(a.sql.blocking, { mono: ["blocked_query", "blocking_query"] })) : ""}
 ${drill("functions", "Edge functions", "invocation stats over the last day", functionsSection(a))}
 ${drill("storage", "Storage", "buckets + object usage", storageSection(a))}
-${drill("apivol", "API request volume", "per interval", errored.has("apiCounts") ? '<p class="empty warn-text">not collected</p>' : sqlTable(a.apiCounts as unknown as SqlRow[], { mono: ["timestamp"] }))}
-${drill("metrics", "Infra metrics", "point-in-time snapshot", metricsTable(a))}
+${show.apivol ? drill("apivol", "API request volume", "rolled up over the collected window; peak bucket noted", errored.has("apiCounts") ? '<p class="empty warn-text">not collected</p>' : apiVolumeSummary(a)) : ""}
+${drill("metrics", "Infra metrics", "scrape status + how to build history", metricsStatus(a))}
 ${a.errors.length ? `<h2>Collection notes <span class=count>${a.errors.length}</span></h2>${collectionNotes(a)}` : ""}
 `;
 

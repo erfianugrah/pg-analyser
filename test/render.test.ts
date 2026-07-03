@@ -109,7 +109,7 @@ function tagBalance(html: string): boolean {
 }
 
 describe("render", () => {
-  test("emits all section headings", () => {
+  test("emits the always-on section headings", () => {
     const html = render(fixture());
     for (const h of [
       "Findings",
@@ -120,11 +120,56 @@ describe("render", () => {
       "Index usage",
       "Estimated bloat",
       "Read/write profile",
-      "Blocking chains",
+      "Connections",
       "Infra metrics",
     ]) {
       expect(html).toContain(h);
     }
+  });
+
+  test("gates point-in-time snapshot sections on data", () => {
+    // section anchor ids (robust vs heading text, which can collide with
+    // positives like "Transaction-ID wraparound headroom is healthy")
+    const gated = [
+      'id="roles"',
+      'id="txid"',
+      'id="slots"',
+      'id="longrunning"',
+      'id="locks"',
+      'id="blocking"',
+    ];
+    // empty fixture -> none of the snapshot sections render
+    const empty = render(fixture());
+    for (const h of gated) expect(empty).not.toContain(h);
+
+    // with data / above threshold -> each renders
+    const a = fixture();
+    a.sql.locks = [
+      {
+        pid: 1,
+        relation: "public.t",
+        mode: "AccessExclusiveLock",
+        granted: true,
+        age: "00:01",
+        query: "ALTER TABLE t",
+      },
+    ];
+    a.sql.blocking = [
+      {
+        blocked_pid: 2,
+        blocked_query: "SELECT 1",
+        blocking_pid: 1,
+        blocking_query: "ALTER TABLE t",
+      },
+    ];
+    a.sql.longRunning = [{ pid: 3, age: "00:10", query: "SELECT pg_sleep(600)" }];
+    a.sql.replicationSlots = [{ slot_name: "s1", active: false, retained_wal_bytes: 1073741824 }];
+    a.sql.roleStats = [{ role: "authenticated", connections: 45, conn_limit: 60 }];
+    a.sql.txidWraparound = [
+      { schema: "public", table: "public.big", xid_age: 5e8, pct_wraparound: 25 },
+    ];
+    const full = render(a);
+    for (const h of gated) expect(full).toContain(h);
   });
 
   test("query outliers render an inline-SVG bar chart", () => {
