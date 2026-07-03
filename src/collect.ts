@@ -146,7 +146,7 @@ export async function collect(
   // later. Nothing is dropped at collection.
   const samples = metricsText ? parsePrometheus(metricsText).map((s) => MetricSample.parse(s)) : [];
   const trends = opts.prometheusUrl
-    ? await safe("trends", () => fetchTrends(opts.prometheusUrl as string), [])
+    ? await safe("trends", () => fetchTrends(opts.prometheusUrl as string, 30, ref), [])
     : [];
 
   // Per-function invocation stats depend on the functions list (need each id),
