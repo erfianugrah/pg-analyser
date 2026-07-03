@@ -129,18 +129,11 @@ describe("deriveFindings", () => {
     expect(f?.title).toContain("2 RLS policy columns lack a covering index");
   });
 
-  test("swap in use past 20% -> Capacity finding; under is ignored", () => {
+  test("swap occupancy does NOT produce a finding (static swap-used is not pressure)", () => {
     const a = base();
     a.metrics.samples = [
       { name: "node_memory_SwapTotal_bytes", labels: {}, value: 1_000_000_000 },
-      { name: "node_memory_SwapFree_bytes", labels: {}, value: 600_000_000 },
-    ];
-    const f = deriveFindings(a).find((x) => x.title.includes("Swap"));
-    expect(f?.category).toBe("Capacity");
-    expect(f?.title).toContain("40% used");
-    a.metrics.samples = [
-      { name: "node_memory_SwapTotal_bytes", labels: {}, value: 1_000_000_000 },
-      { name: "node_memory_SwapFree_bytes", labels: {}, value: 950_000_000 },
+      { name: "node_memory_SwapFree_bytes", labels: {}, value: 20_000_000 },
     ];
     expect(deriveFindings(a).some((x) => x.title.includes("Swap"))).toBe(false);
   });

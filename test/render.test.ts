@@ -183,14 +183,17 @@ describe("render", () => {
     expect(html).not.toContain("#3ECF8E");
   });
 
-  test("narrative embeds only with the flag AND when present", () => {
-    const withNar = fixture({ narrative: "## Executive summary\nLooks fine." });
-    expect(render(withNar)).not.toContain("Executive summary"); // no flag -> not embedded
+  test("executive summary always present; narrative embeds only with the flag", () => {
+    // deterministic executive summary is always rendered
+    expect(render(fixture())).toContain('id="summary"');
+    expect(render(fixture())).toContain("Executive summary");
+    const withNar = fixture({ narrative: "## Deep dive\nLooks fine." });
+    expect(render(withNar)).not.toContain("class=narrative"); // no flag -> prose not embedded
     const html = render(withNar, { narrative: true });
-    expect(html).toContain('id="narrative"');
-    expect(html).toContain("<h2>Executive summary</h2>");
-    // flag on but no narrative -> nothing
-    expect(render(fixture(), { narrative: true })).not.toContain('id="narrative"');
+    expect(html).toContain("class=narrative");
+    expect(html).toContain("Deep dive");
+    // flag on but no narrative -> deterministic summary only, no narrative div
+    expect(render(fixture(), { narrative: true })).not.toContain("class=narrative");
   });
 
   test("renders advisor finding with level badge", () => {

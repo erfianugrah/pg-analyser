@@ -318,6 +318,52 @@ function computeVerdict(findings: Finding[], degraded: boolean): { cls: string; 
   };
 }
 
+/** Join titles into a readable clause: "a, b and c". */
+function humanList(items: string[]): string {
+  if (items.length <= 1) return items[0] ?? "";
+  return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+}
+
+/**
+ * Executive summary section - always present. When the LLM narrative exists it
+ * IS the summary (richer prose); otherwise a deterministic, hedged synthesis
+ * built from the verdict + counts + top areas (conversational, conditional
+ * outcomes - never "will", never imperatives).
+ */
+function execSummarySection(
+  a: Analysis,
+  findings: Finding[],
+  positives: Positive[],
+  degraded: boolean,
+  narrativeHtml: string,
+): string {
+  const head = `<h2 id="summary">Executive summary</h2>`;
+  if (narrativeHtml)
+    return `${head}
+${narrativeHtml}`;
+  const c = { high: 0, med: 0, low: 0 };
+  for (const f of findings) c[f.severity]++;
+  const total = findings.length;
+  let opening: string;
+  if (!total)
+    opening = degraded
+      ? "Some checks could not run, so this is a partial view - but nothing was flagged in what was collected."
+      : "Overall the database is in good shape, with no issues surfaced across performance, security, and capacity checks.";
+  else if (c.high)
+    opening = `The database is largely healthy, though ${c.high} item${c.high === 1 ? "" : "s"} stand${c.high === 1 ? "s" : ""} out as worth attention sooner rather than later.`;
+  else opening = "Overall the database is in good shape, with a few areas worth a closer look.";
+  const top = findings.slice(0, 3).map((f) => f.title);
+  const areas = top.length ? ` The areas that stand out are ${esc(humanList(top))}.` : "";
+  const healthy = positives.length
+    ? ` ${positives.length} check${positives.length === 1 ? "" : "s"} came back healthy.`
+    : "";
+  const upside = total
+    ? " Addressing them could ease load on the busiest paths and improve response times, and in many cases without scaling up the database."
+    : "";
+  return `${head}
+<p class=execsum>${opening}${areas}${healthy}${upside}</p>`;
+}
+
 function severityBar(findings: Finding[]): string {
   if (!findings.length) return "";
   const c = { high: 0, med: 0, low: 0 };
@@ -358,13 +404,19 @@ function auditFindings(findings: Finding[], degraded: boolean): string {
         text
           ? `<div class=frow><span class=flabel>${label}</span><span class=ftext>${esc(text)}</span></div>`
           : "";
+      const doText = esc(
+        f.remediation ?? "See the linked evidence and the Supabase advisor detail.",
+      );
+      const sqlBlock = f.sql ? `<pre class=fsql><code>${esc(f.sql)}</code></pre>` : "";
+      const dashLink = f.dashUrl
+        ? `<div class=fadv><a href="${esc(f.dashUrl)}">Open in the ${esc(f.category)} Advisor: ${esc(f.dashUrl)}</a></div>`
+        : "";
+      const whatToDo = `<div class=frow><span class=flabel>What to do</span><span class=ftext>${doText}${sqlBlock}${dashLink}</span></div>`;
       const body =
         row("What's happening", f.evidence) +
         row("Why it matters", f.whyItMatters) +
-        row(
-          "What to do",
-          f.remediation ?? "See the linked evidence and the Supabase advisor detail.",
-        );
+        whatToDo +
+        row("How to verify", f.howToVerify);
       return `<div class="finding ${SEV_CLASS[f.severity]}" id="${fid(i)}">
   <h3><span class="lvl ${SEV_CLASS[f.severity]}">${SEV_WORD[f.severity]}</span> <span class=fcat>${esc(f.category)}</span> ${esc(f.title)}</h3>
   <div class=fbody>${body}</div>
@@ -510,10 +562,8 @@ export function render(a: Analysis, opts: { narrative?: boolean; brand?: Brand }
   const brand = opts.brand ?? DEFAULT_BRAND;
   const m = a.meta;
   const disk = a.disk;
-  const narrativeBlock =
-    opts.narrative && a.narrative
-      ? `<h2 id="narrative">Executive narrative</h2>\n<div class=narrative>${mdToHtml(a.narrative)}</div>`
-      : "";
+  const narrativeHtml =
+    opts.narrative && a.narrative ? `<div class=narrative>${mdToHtml(a.narrative)}</div>` : "";
   const errored = new Set(a.errors.map((e) => e.source));
   const findings = deriveFindings(a);
   const positives = derivePositives(a);
@@ -564,7 +614,7 @@ export function render(a: Analysis, opts: { narrative?: boolean; brand?: Brand }
     <div class=sc-vitals><div class=sc-sub>At a glance</div>${vitalsMini(a)}<p class=hbadges>${healthBadges(a)}</p></div>
   </div>
 </section>
-${narrativeBlock}
+${execSummarySection(a, findings, positives, degraded, narrativeHtml)}
 
 ${trendsSection(a)}
 
@@ -639,6 +689,7 @@ ${faviconTag(brand)}
   .banner.bad{background:var(--errbg)}.banner.ok{background:var(--okbg)}
   ul.positives{margin:6px 0;padding-left:20px;columns:2;column-gap:28px}
   ul.positives li{margin:2px 0;break-inside:avoid}
+  .execsum{font-size:14px;line-height:1.55;margin:6px 0 4px}
   .narrative{font-size:13px;line-height:1.5;border-left:3px solid var(--accent);padding:2px 0 2px 14px;margin:8px 0}
   .narrative h2{font-size:14px;margin:14px 0 4px;border:none;padding:0}
   .narrative h3{font-size:13px;font-weight:700;margin:10px 0 2px}
@@ -676,6 +727,13 @@ ${faviconTag(brand)}
   .frow{display:contents}
   .flabel{font-weight:600;color:var(--mut);white-space:nowrap;font-size:11px;text-transform:uppercase;letter-spacing:.03em;padding-top:1px}
   .ftext{min-width:0}
+  pre.fsql{background:var(--code);border:1px solid var(--line);border-radius:4px;padding:8px 10px;margin:6px 0 0;overflow-x:auto;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.45;white-space:pre;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  pre.fsql code{background:none;padding:0;white-space:inherit;font-family:inherit}
+  .fadv{margin-top:6px;font-size:12px;word-break:break-all}
+  @keyframes sbflash{from{background:rgba(120,160,255,.30)}to{background:transparent}}
+  :target{animation:sbflash 1.6s ease-out}
+  h2:target,summary:target,.finding:target{box-shadow:-6px 0 0 0 var(--accent);border-radius:2px}
+  @media print{pre.fsql{white-space:pre-wrap;word-break:break-word;overflow:visible}}
   @media (max-width:640px){.fbody{grid-template-columns:1fr;gap:1px}.flabel{padding-top:6px}}
   p.flinks{margin:8px 0 0;font-size:12px}
   table.chart{border:none;width:100%;margin:4px 0 8px;table-layout:fixed}
