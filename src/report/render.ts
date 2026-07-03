@@ -53,6 +53,50 @@ function sqlTable(
   return `<table><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table>${more}`;
 }
 
+/** A single inline-SVG horizontal bar (self-contained, print-safe). */
+function barSvg(frac: number, color = "#3056d3"): string {
+  const w = 150;
+  const h = 11;
+  const bw = Math.max(1, Math.round(Math.max(0, Math.min(1, frac)) * w));
+  return `<svg class=bar width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><rect width="${w}" height="${h}" fill="#eee"/><rect width="${bw}" height="${h}" fill="${color}"/></svg>`;
+}
+
+/**
+ * Inline-SVG horizontal bar chart from SQL rows. `label` is truncated mono text,
+ * bar width is value/max, and `display` is the formatted number at the end. No
+ * external assets - one <svg> rect per row.
+ */
+function barChart(
+  rows: SqlRow[],
+  opts: {
+    labelKey: string;
+    valueKey: string;
+    display: (r: SqlRow) => string;
+    limit?: number;
+    labelChars?: number;
+  },
+): string {
+  const top = (opts.limit ? rows.slice(0, opts.limit) : rows).filter(
+    (r) => Number(r[opts.valueKey]) > 0,
+  );
+  if (!top.length) return "";
+  const max = Math.max(...top.map((r) => Number(r[opts.valueKey]) || 0), 1);
+  const chars = opts.labelChars ?? 70;
+  const body = top
+    .map((r) => {
+      const v = Number(r[opts.valueKey]) || 0;
+      const label = String(r[opts.labelKey] ?? "").slice(0, chars);
+      return `<tr><td class=mono>${esc(label)}</td><td class=barcell>${barSvg(v / max)}</td><td class=num>${esc(opts.display(r))}</td></tr>`;
+    })
+    .join("");
+  return `<table class=chart><tbody>${body}</tbody></table>`;
+}
+
+/** barChart, but "" when the source errored (avoids a chart of stale/empty rows). */
+function chartFor(rows: SqlRow[], errored: boolean, opts: Parameters<typeof barChart>[1]): string {
+  return errored ? "" : barChart(rows, opts);
+}
+
 const LEVEL_ORDER: Record<string, number> = { ERROR: 0, WARN: 1, INFO: 2 };
 function advisorTable(list: Advisor[]): string {
   if (!list.length) return `<p class=empty>no findings</p>`;
@@ -191,6 +235,9 @@ function findingsSummary(findings: Finding[], degraded: boolean): string {
   const counts = { high: 0, med: 0, low: 0 };
   for (const f of findings) counts[f.severity]++;
   const lead = `${findings.length} finding${findings.length === 1 ? "" : "s"}: ${counts.high} high, ${counts.med} medium, ${counts.low} low`;
+  const seg = (n: number, cls: string) =>
+    n ? `<span class="segbar ${cls}" style="flex:${n}" title="${n}">${n}</span>` : "";
+  const sevBar = `<div class="sevbar">${seg(counts.high, "ERROR")}${seg(counts.med, "WARN")}${seg(counts.low, "INFO")}</div>`;
   const rows = findings
     .map(
       (f) => `<tr>
@@ -200,7 +247,7 @@ function findingsSummary(findings: Finding[], degraded: boolean): string {
     </tr>`,
     )
     .join("");
-  return `<p class=lead>${esc(lead)}</p>
+  return `<p class=lead>${esc(lead)}</p>${sevBar}
 <table class=find><thead><tr><th>sev</th><th>area</th><th>finding</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
@@ -337,8 +384,8 @@ ${drill("rls", "RLS policies", "auth.*() should be wrapped: (select auth.uid())"
 <h2 id="adv-perf">Advisors - performance <span class=count>${a.advisors.performance.length}</span></h2>${errored.has("advisors:performance") ? '<p class="empty warn-text">not collected</p>' : advisorTable(a.advisors.performance)}
 <h2 id="adv-sec">Advisors - security <span class=count>${a.advisors.security.length}</span></h2>${errored.has("advisors:security") ? '<p class="empty warn-text">not collected</p>' : advisorTable(a.advisors.security)}
 
-${drill("outliers", "Query outliers", outliersNote, sec(a.sql.topStatements, "sql:topStatements", { mono: ["query"], limit: 20 }))}
-${drill("calls", "Most-frequent queries", "by call count - chatty / hot-path (noise filtered)", sec(a.sql.topByCalls, "sql:topByCalls", { mono: ["query"], limit: 20 }))}
+${drill("outliers", "Query outliers", outliersNote, chartFor(a.sql.topStatements, errored.has("sql:topStatements"), { labelKey: "query", valueKey: "pct", display: (r) => `${r.pct}% (${r.total_ms}ms)`, limit: 10 }) + sec(a.sql.topStatements, "sql:topStatements", { mono: ["query"], limit: 20 }))}
+${drill("calls", "Most-frequent queries", "by call count - chatty / hot-path (noise filtered)", chartFor(a.sql.topByCalls, errored.has("sql:topByCalls"), { labelKey: "query", valueKey: "pct_calls", display: (r) => `${r.pct_calls}% (${r.calls} calls)`, limit: 10 }) + sec(a.sql.topByCalls, "sql:topByCalls", { mono: ["query"], limit: 20 }))}
 ${drill("tables", "Biggest tables", "", sec(a.sql.biggestTables, "sql:biggestTables", { mono: ["table"], hide: ["schema"], limit: 20 }))}
 ${drill("unused", "Index usage", "all indexes by size; unused = never scanned, non-constraint", sec(a.sql.indexStats, "sql:indexStats", { mono: ["index", "table"], hide: ["schema"] }))}
 ${drill("dupidx", "Duplicate indexes", "identical index definitions on one table - keep one, drop the rest", errored.has("sql:duplicateIndexes") ? '<p class="empty warn-text">not collected</p>' : a.sql.duplicateIndexes.length ? sqlTable(a.sql.duplicateIndexes, { mono: ["indexes"], hide: ["schema"] }) : "<p class=empty>none found</p>")}
@@ -381,6 +428,15 @@ ${a.errors.length ? `<h2>Collection notes <span class=count>${a.errors.length}</
   .banner.bad{background:var(--errbg)}.banner.ok{background:var(--okbg)}
   ul.positives{margin:6px 0;padding-left:20px;columns:2;column-gap:28px}
   ul.positives li{margin:2px 0;break-inside:avoid}
+  .sevbar{display:flex;height:16px;border-radius:3px;overflow:hidden;margin:4px 0 10px;max-width:420px;font-size:11px;font-weight:700}
+  .segbar{display:flex;align-items:center;justify-content:center;color:#3a3a3a;min-width:16px}
+  .segbar.ERROR{background:#f7b0b0}.segbar.WARN{background:#ffe08a}.segbar.INFO{background:#a9c7ff}
+  table.chart{border:none;width:auto;margin:4px 0 8px}
+  table.chart td{border:none;padding:1px 8px 1px 0;vertical-align:middle}
+  table.chart td.mono{max-width:none;white-space:nowrap;font-size:11px}
+  table.chart td.barcell{width:150px}
+  table.chart td.num{font-family:ui-monospace,Menlo,monospace;font-size:11px;white-space:nowrap;text-align:right}
+  svg.bar{display:block}
   table{border-collapse:collapse;width:100%;font-size:12.5px;margin:2px 0}
   th,td{text-align:left;padding:4px 8px;border:1px solid var(--line);vertical-align:top}
   th{background:#f6f6f6;font-weight:600;white-space:nowrap}

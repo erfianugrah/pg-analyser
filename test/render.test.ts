@@ -50,7 +50,7 @@ function fixture(overrides: Partial<Analysis> = {}): Analysis {
         { name: "max_connections", setting: "60", unit: null },
         { name: "idle_in_transaction_session_timeout", setting: "0", unit: "ms" },
       ],
-      topStatements: [{ total_ms: 50983.4, calls: 135, query: "SELECT ..." }],
+      topStatements: [{ total_ms: 50983.4, calls: 135, pct: 88.2, query: "SELECT ..." }],
       topByCalls: [],
       biggestTables: [],
       indexStats: [],
@@ -121,6 +121,17 @@ describe("render", () => {
     ]) {
       expect(html).toContain(h);
     }
+  });
+
+  test("query outliers render an inline-SVG bar chart", () => {
+    const html = render(fixture());
+    expect(html).toContain("table class=chart");
+    expect(html).toContain("<svg class=bar");
+  });
+
+  test("findings summary includes a severity bar when findings exist", () => {
+    const html = render(fixture());
+    expect(html).toContain('class="sevbar"');
   });
 
   test("renders advisor finding with level badge", () => {
