@@ -345,16 +345,31 @@ function execSummarySection(
   const c = { high: 0, med: 0, low: 0 };
   for (const f of findings) c[f.severity]++;
   const total = findings.length;
+  const named = (titles: string[]) => esc(humanList(titles));
+  // The opening's count and the items it names MUST agree - the high-severity
+  // count and a separate "top 3 areas" list previously contradicted each other
+  // ("1 item stands out ... the areas are A, B and C"). Name the urgent item(s)
+  // in the opening, then frame the remainder as an explicitly-counted bucket.
   let opening: string;
-  if (!total)
+  if (!total) {
     opening = degraded
       ? "Some checks could not run, so this is a partial view - but nothing was flagged in what was collected."
       : "Overall the database is in good shape, with no issues surfaced across performance, security, and capacity checks.";
-  else if (c.high)
-    opening = `The database is largely healthy, though ${c.high} item${c.high === 1 ? "" : "s"} stand${c.high === 1 ? "s" : ""} out as worth attention sooner rather than later.`;
-  else opening = "Overall the database is in good shape, with a few areas worth a closer look.";
-  const top = findings.slice(0, 3).map((f) => f.title);
-  const areas = top.length ? ` The areas that stand out are ${esc(humanList(top))}.` : "";
+  } else if (c.high) {
+    const highTitles = findings
+      .filter((f) => f.severity === "high")
+      .slice(0, 3)
+      .map((f) => f.title);
+    const others = total - c.high;
+    const rest =
+      others > 0
+        ? ` A further ${others} lower-severity ${others === 1 ? "item is" : "items are"} worth reviewing when convenient.`
+        : "";
+    opening = `The database is largely healthy, though ${c.high} item${c.high === 1 ? "" : "s"} ${c.high === 1 ? "stands" : "stand"} out as worth attention sooner rather than later: ${named(highTitles)}.${rest}`;
+  } else {
+    const top = findings.slice(0, 3).map((f) => f.title);
+    opening = `Overall the database is in good shape, with ${total} area${total === 1 ? "" : "s"} worth a closer look${top.length ? ` - starting with ${named(top)}` : ""}.`;
+  }
   const healthy = positives.length
     ? ` ${positives.length} check${positives.length === 1 ? "" : "s"} came back healthy.`
     : "";
@@ -362,7 +377,7 @@ function execSummarySection(
     ? " Addressing them could ease load on the busiest paths and improve response times, and in many cases without scaling up the database."
     : "";
   return `${head}
-<p class=execsum>${opening}${areas}${healthy}${upside}</p>`;
+<p class=execsum>${opening}${healthy}${upside}</p>`;
 }
 
 function severityBar(findings: Finding[]): string {
