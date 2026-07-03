@@ -15,6 +15,12 @@ export interface Finding {
   remediation?: string;
   /** The consequence: business + technical impact (from the heuristic). */
   whyItMatters?: string;
+  /** How to confirm the fix worked (from the heuristic). */
+  howToVerify?: string;
+  /** Concrete SQL/DDL command template for the fix (from the heuristic). */
+  sql?: string;
+  /** Deep-link into the project's own dashboard (e.g. the Advisor page). */
+  dashUrl?: string;
   /** Canonical doc/source URL for the reader and the narrate pass to cite. */
   docUrl?: string;
   /** Optional measured evidence string (e.g. object name + size + %). */
@@ -52,20 +58,39 @@ function groupAdvisors(
   list: Analysis["advisors"]["performance"],
   category: Category,
   anchor: string,
+  ref: string | undefined,
 ): Finding[] {
-  const byTitle = new Map<string, { level: string; count: number }>();
+  const byTitle = new Map<
+    string,
+    { level: string; count: number; description?: string; remediation?: string }
+  >();
   for (const a of list) {
-    const g = byTitle.get(a.title) ?? { level: a.level, count: 0 };
+    const g = byTitle.get(a.title) ?? {
+      level: a.level,
+      count: 0,
+      description: a.description,
+      remediation: a.remediation ?? undefined,
+    };
     g.count += 1;
     g.level = worse(g.level, a.level);
     byTitle.set(a.title, g);
   }
+  // Deep-link into the customer's own Advisor page (the '_' project redirects to
+  // the active project in their session when the ref is unknown).
+  const page = category === "Security" ? "security" : "performance";
+  const dashUrl = `https://supabase.com/dashboard/project/${ref ?? "_"}/advisors/${page}`;
+  const base = meta(category === "Security" ? "advisor_security" : "advisor_performance");
   return [...byTitle].map(([title, g]) => ({
     severity: sevFromLevel(g.level),
     category,
     title: g.count > 1 ? `${title} (${g.count}x)` : title,
     anchor,
-    ...meta(category === "Security" ? "advisor_security" : "advisor_performance"),
+    // Per-lint specifics: splinter's own description is the "what's happening",
+    // and its remediation URL is a better Reference than the generic doc.
+    evidence: g.description,
+    dashUrl,
+    ...base,
+    docUrl: g.remediation ?? base.docUrl,
   }));
 }
 
@@ -76,8 +101,8 @@ export function deriveFindings(a: Analysis): Finding[] {
   const publicRows = (rows: SqlRow[]) => rows.filter((r) => String(r.schema ?? "") === "public");
 
   // Advisors (grouped by title)
-  out.push(...groupAdvisors(a.advisors.performance, "Performance", "#adv-perf"));
-  out.push(...groupAdvisors(a.advisors.security, "Security", "#adv-sec"));
+  out.push(...groupAdvisors(a.advisors.performance, "Performance", "#adv-perf", a.meta.ref));
+  out.push(...groupAdvisors(a.advisors.security, "Security", "#adv-sec", a.meta.ref));
 
   // Performance - SQL-derived
   if (a.sql.cacheHitPct != null && a.sql.cacheHitPct < THRESHOLDS.cacheHitPct) {
@@ -320,19 +345,13 @@ export function deriveFindings(a: Analysis): Finding[] {
       ...meta("pooler_clients_waiting"),
     });
   }
-  // Swap in use = memory pressure. Gauge, meaningful from a single scrape.
-  const swapTotal = maxMetric("node_memory_SwapTotal_bytes");
-  const swapFree = maxMetric("node_memory_SwapFree_bytes");
-  const swapUsed = swapTotal - swapFree;
-  if (swapTotal > 0 && swapUsed / swapTotal >= THRESHOLDS.swapUsedFrac) {
-    out.push({
-      severity: "med",
-      category: "Capacity",
-      title: `Swap ${Math.round((swapUsed / swapTotal) * 100)}% used (memory pressure)`,
-      anchor: "#metrics",
-      ...meta("swap_active"),
-    });
-  }
+  // NOTE: no swap-occupancy finding. A static swap-used fraction is a poor
+  // memory-pressure signal on Supabase: swap is tiny (~1GB) and the kernel
+  // parks cold anonymous pages there to keep more RAM for page cache, so a
+  // full-but-idle swap is normal/healthy. The real signals are low MemAvailable
+  // (memAvailFrac) and temp-file spill (work_mem_spill), both handled elsewhere.
+  // A rate-based swap-in check (>=2 snapshots) could return, but occupancy must
+  // not. Swap metrics stay in the corpus for display, just not as a finding.
   // Deadlocks (cumulative counter since stats reset). A rate from >=2 snapshots
   // is stronger, but a nonzero cumulative count is still worth a glance.
   const deadlocks = Math.round(sumMetric("pg_stat_database_deadlocks_total"));

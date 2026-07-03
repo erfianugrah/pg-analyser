@@ -32,7 +32,7 @@ bun run src/index.ts analyze --ref <ref> --out ./reports/myproject
 bun run src/index.ts report  ./reports/myproject    # report.html (technical + business)
 bun run src/index.ts pdf     ./reports/myproject    # report.pdf
 bun run src/index.ts summary ./reports/myproject    # optional plain-language one-pager (summary.html)
-bun run src/index.ts narrate ./reports/myproject    # narrative.md (optional LLM pass)
+bun run src/index.ts narrate ./reports/myproject    # executive summary (optional LLM pass / copy-paste)
 bun run src/index.ts import-trends ./reports/myproject series.csv  # merge external trends
 ```
 
@@ -304,24 +304,36 @@ bun run src/index.ts report ./reports/myproject     # renders the imported panel
 - Timestamps may be ISO-8601 or epoch (seconds or milliseconds). Re-importing an
   updated file for the same series title replaces it (idempotent).
 
-## Narrative (optional LLM pass)
+## Narrative / executive summary (optional LLM pass)
 
-The deterministic report is ground truth. `narrate` layers a written narrative on
-top of it - an executive summary, prioritised actions, and per-finding root
-cause + fix - by feeding an LLM the ranked findings (with their catalogued
-remediation + doc URLs), the healthy positives, and a bounded evidence digest.
+The report already has a **deterministic executive summary** (a hedged synthesis
+of the verdict + top findings) with no LLM. `narrate` replaces it with a richer
+written summary by feeding an LLM the ranked findings (each with why-it-matters,
+catalogued remediation, how-to-verify, and doc URLs), the healthy positives, and
+a bounded evidence digest. The findings themselves are always deterministic; the
+LLM only writes prose and is instructed to invent nothing.
+
+Three ways to run it:
 
 ```bash
-export SBPERF_LLM_BASE_URL=http://localhost:11434/v1   # any OpenAI-compatible endpoint
-export SBPERF_LLM_MODEL=your-model-id                  # SBPERF_LLM_API_KEY if the endpoint needs one
+# 1. Auto - point at any OpenAI-compatible endpoint
+export SBPERF_LLM_BASE_URL=http://localhost:11434/v1   # OpenAI, llama-server, OpenRouter...
+export SBPERF_LLM_MODEL=your-model-id                  # SBPERF_LLM_API_KEY if needed
 bun run src/index.ts narrate ./reports/myproject       # -> narrative.md + narrative.html
-bun run src/index.ts report ./reports/myproject --narrative   # embed it in report.html
+bun run src/index.ts report ./reports/myproject --narrative
+
+# 2. Copy-paste (pi.dev / ChatGPT / Claude) - no endpoint wiring
+bun run src/index.ts narrate ./reports/myproject --print-prompt   # -> prompt.md (grounded prompt + instructions)
+#   ...paste prompt.md into the chat LLM, copy its reply, then:
+bun run src/index.ts narrate ./reports/myproject --import reply.md # (or: pbpaste | ... --import -)
+bun run src/index.ts report ./reports/myproject --narrative
+
+# 3. Skip it - the deterministic executive summary is already in report.html
 ```
 
 `narrate` writes `narrative.md`, a standalone `narrative.html`, and stores the
-text on `analysis.json`. The deterministic report stays LLM-free by default; pass
-`--narrative` to `report`/`pdf` to embed the narrative as a clearly-labelled
-section above the evidence (no re-run of the model needed).
+text on `analysis.json`, so `--narrative` on `report`/`pdf` embeds it without
+re-running the model.
 
 Works with OpenAI, a local llama-server, OpenRouter, etc. The prompt forbids the
 model from inventing thresholds, numbers, table names, or doc URLs not present in

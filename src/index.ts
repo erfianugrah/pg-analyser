@@ -9,7 +9,7 @@ import { type DbTarget, parseDbConfig, type RawEntry, REF, resolveTargets } from
 import { deriveFindings } from "./findings.ts";
 import { mergeTrends, parseTrendsFile } from "./importtrends.ts";
 import { Management } from "./management.ts";
-import { clientFromEnv, narrate } from "./narrate.ts";
+import { buildMessages, clientFromEnv, narrate } from "./narrate.ts";
 import { backfillInstructions, toOpenMetrics } from "./promexport.ts";
 import { htmlToPdf } from "./report/pdf.ts";
 import {
@@ -42,7 +42,9 @@ Usage:
   sbperf report   <dir>                       analysis.json -> report.html (technical + business)
   sbperf summary  <dir>                        analysis.json -> summary.html (optional plain-language one-pager)
   sbperf pdf      <dir>                        analysis.json -> report.pdf
-  sbperf narrate  <dir>                        analysis.json -> narrative.md (LLM pass)
+  sbperf narrate  <dir>                        analysis.json -> narrative.md (LLM pass, needs SBPERF_LLM_*)
+  sbperf narrate  <dir> --print-prompt         write prompt.md (grounded prompt) to paste into any chat LLM
+  sbperf narrate  <dir> --import <file>|-      embed a pasted LLM reply back (file or stdin); no endpoint needed
   sbperf import-trends <dir> <file...>         merge external CSV/JSON series into analysis.trends
   sbperf full     --ref <ref> [--out <dir>]    analyze + report + pdf
   sbperf full     --ref <r1>,<r2> ...          audit several projects + combined index
@@ -67,15 +69,22 @@ Flags:
                        ./sbperf.databases.json is auto-loaded when no db flag/env set.
   --prometheus <url>   trends from a scraper's Prometheus instead of the history store
   --no-sync-check      skip the on-by-default upstream sync check (offline runs)
-  --narrative          report/pdf: embed the LLM narrative (run 'narrate' first)
+  --narrative          report/pdf: embed the narrative summary (run 'narrate' first)
+  --print-prompt       narrate: write the grounded prompt to prompt.md for copy-paste
+  --import <file>|-    narrate: embed a pasted LLM reply (file, or - for stdin)
   --brand <file>       white-label branding JSON (default: Supabase; or SBPERF_BRAND
                        / ./sbperf.brand.json)
   -h, --help           show this help
   -v, --version        print version
 
-narrate: LLM synthesis over the corpus + enriched findings (analysis.json ->
-narrative.md). Set SBPERF_LLM_BASE_URL + SBPERF_LLM_MODEL (SBPERF_LLM_API_KEY if
-the endpoint needs one). Works with OpenAI, a local llama-server, OpenRouter, etc.
+narrate: writes the executive summary (analysis.json -> narrative.md), embedded
+at the top of the report with --narrative. Three ways to run it:
+  1. auto: set SBPERF_LLM_BASE_URL + SBPERF_LLM_MODEL (+ _API_KEY if needed);
+     works with OpenAI, a local llama-server, OpenRouter, etc.
+  2. copy-paste: 'narrate <dir> --print-prompt' writes prompt.md - paste it into
+     any chat LLM (pi.dev / ChatGPT / Claude), then bring the reply back with
+     'narrate <dir> --import <reply.md>' (or 'pbpaste | narrate <dir> --import -').
+  3. skip it: the report has a deterministic executive summary without any LLM.
 
 30-day trends: run 'sbperf snapshot' on a schedule (e.g. hourly cron) to
 accumulate history, then 'sbperf report <dir>' draws trends from the store.
@@ -103,6 +112,8 @@ type Flags = {
   dbConfig?: string;
   noSyncCheck?: boolean;
   narrative?: boolean;
+  printPrompt?: boolean;
+  import?: string;
   brand?: string;
 };
 
@@ -139,6 +150,8 @@ function parseFlags(argv: string[]): Flags {
     else if (a === "--all") out.all = true;
     else if (a === "--no-sync-check") out.noSyncCheck = true;
     else if (a === "--narrative") out.narrative = true;
+    else if (a === "--print-prompt") out.printPrompt = true;
+    else if (a === "--import") out.import = argv[++i];
     else if (a?.startsWith("--")) usage();
     else if (a) out._.push(a);
   }
@@ -152,6 +165,9 @@ async function emitReport(
 ): Promise<{ high: number; med: number; low: number }> {
   await mkdir(dir, { recursive: true });
   await Bun.write(join(dir, "analysis.json"), JSON.stringify(analysis, null, 2));
+  // Join with the history store so combined reports get the Resource snapshot
+  // sparklines too (analysis.json is point-in-time; trends live in the store).
+  if (await Bun.file(DEFAULT_STORE).exists()) fillTrendsFromStore(analysis, DEFAULT_STORE);
   const html = render(analysis, { brand: activeBrand });
   await Bun.write(join(dir, "report.html"), html);
   await htmlToPdf(html, join(dir, "report.pdf"));
@@ -223,6 +239,56 @@ async function doAllDbs(
   console.error(`> index: ${join(outBase, "index.html")}`);
 }
 
+/**
+ * Live progress for multi-project sweeps. On a TTY it animates a spinner + bar
+ * in place so the run never looks hung; when piped (CI/logs) it prints one plain
+ * line per completed step. Each finished step also leaves a permanent line.
+ */
+function makeProgress(total: number): {
+  step: (label: string) => void;
+  done: (result: string) => void;
+  stop: () => void;
+} {
+  const tty = process.stderr.isTTY === true;
+  const frames = ["|", "/", "-", "\\"];
+  let completed = 0;
+  let label = "";
+  let frame = 0;
+  let timer: ReturnType<typeof setInterval> | undefined;
+  const bar = () => {
+    const w = 14;
+    const f = total ? Math.round((w * completed) / total) : 0;
+    return `[${"#".repeat(f)}${"-".repeat(w - f)}]`;
+  };
+  const paint = () => {
+    process.stderr.write(
+      `\r\x1b[2K${bar()} ${completed}/${total} ${frames[frame++ % frames.length]} ${label}`,
+    );
+  };
+  return {
+    step(l) {
+      label = l;
+      if (tty) {
+        paint();
+        timer = setInterval(paint, 90);
+      }
+    },
+    done(result) {
+      completed++;
+      if (timer) {
+        clearInterval(timer);
+        timer = undefined;
+      }
+      if (tty) process.stderr.write("\r\x1b[2K");
+      console.error(`  ${bar()} ${completed}/${total}  ${label}  ${result}`);
+    },
+    stop() {
+      if (timer) clearInterval(timer);
+      if (tty) process.stderr.write("\r\x1b[2K");
+    },
+  };
+}
+
 async function doAll(
   orgFilter: string | undefined,
   outBase: string,
@@ -266,6 +332,7 @@ async function doAll(
   console.error(
     `> auditing ${projects.length} project${projects.length === 1 ? "" : "s"} across ${groups.size} org${groups.size === 1 ? "" : "s"}`,
   );
+  const progress = makeProgress(projects.length);
 
   const usedOrgDirs = new Set<string>();
   const orgRows: OrgRow[] = [];
@@ -289,7 +356,7 @@ async function doAll(
       while (usedProjDirs.has(projDir))
         projDir = `${slugify(p.name) || p.id}-${p.id.slice(0, 6)}-${date}`;
       usedProjDirs.add(projDir);
-      process.stderr.write(`  - [${orgName}] ${p.name} (${p.id}) `);
+      progress.step(`[${orgName}] ${p.name}`);
       try {
         const analysis = await collect(p.id, transport, VERSION, {
           prometheusUrl,
@@ -301,7 +368,8 @@ async function doAll(
         high += counts.high;
         med += counts.med;
         low += counts.low;
-        console.error(`ok (${counts.high + counts.med + counts.low} findings)`);
+        const n = counts.high + counts.med + counts.low;
+        progress.done(`ok - ${n} finding${n === 1 ? "" : "s"}`);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         errors++;
@@ -315,7 +383,7 @@ async function doAll(
           dir: projDir,
           error: msg,
         });
-        console.error(`FAILED: ${msg}`);
+        progress.done(`FAILED: ${msg}`);
       }
     }
     await mkdir(join(outBase, orgDir), { recursive: true });
@@ -333,6 +401,7 @@ async function doAll(
       errors,
     });
   }
+  progress.stop();
   await mkdir(outBase, { recursive: true });
   await Bun.write(
     join(outBase, "index.html"),
@@ -598,8 +667,10 @@ async function doSummary(dir: string): Promise<string> {
   return path;
 }
 
-async function doPdf(dir: string, narrative?: boolean): Promise<string> {
+async function doPdf(dir: string, narrative?: boolean, storePath?: string): Promise<string> {
   const analysis = await loadAnalysis(dir);
+  const store = storePath ?? DEFAULT_STORE;
+  if (await Bun.file(store).exists()) fillTrendsFromStore(analysis, store);
   const pdfPath = join(dir, "report.pdf");
   await htmlToPdf(render(analysis, { narrative, brand: activeBrand }), pdfPath);
   console.error(`> ${pdfPath}`);
@@ -633,15 +704,9 @@ async function doImportTrends(dir: string, files: string[]): Promise<void> {
   console.error("> run 'sbperf report' / 'pdf' to render them");
 }
 
-async function doNarrate(dir: string): Promise<string> {
-  const analysis = await loadAnalysis(dir);
-  const built = clientFromEnv();
-  if ("error" in built) throw new Error(built.error);
-  console.error(`> narrating ${dir} via ${built.client.model}`);
-  const md = await narrate(analysis, built.client);
+/** Persist a narrative markdown onto analysis.json + emit narrative.md/html. */
+async function embedNarrative(dir: string, analysis: Analysis, md: string): Promise<string> {
   analysis.narrative = md;
-  // Persist onto analysis.json so `report --narrative` can embed it without
-  // re-running the LLM, and emit the markdown + a standalone HTML page.
   await Bun.write(join(dir, "analysis.json"), JSON.stringify(analysis, null, 2));
   const path = join(dir, "narrative.md");
   await Bun.write(path, md);
@@ -650,6 +715,56 @@ async function doNarrate(dir: string): Promise<string> {
   console.error(`> ${join(dir, "narrative.html")}`);
   console.error("> embed in the report with: sbperf report " + dir + " --narrative");
   return path;
+}
+
+async function doNarrate(
+  dir: string,
+  opts: { printPrompt?: boolean; importPath?: string; storePath?: string } = {},
+): Promise<string> {
+  const analysis = await loadAnalysis(dir);
+
+  // --import: read the reply from a chat LLM (file or '-' for stdin) and embed
+  // it. No API/endpoint needed - this is the pi.dev / copy-paste round-trip.
+  if (opts.importPath) {
+    const src = opts.importPath;
+    const raw = src === "-" ? await Bun.stdin.text() : await Bun.file(src).text();
+    const md = raw.trim();
+    if (!md) throw new Error(`imported narrative is empty (${src === "-" ? "stdin" : src})`);
+    const header = `<!-- imported into sbperf from ${src === "-" ? "stdin" : src}; the deterministic report.html is ground truth -->\n\n`;
+    return embedNarrative(dir, analysis, header + md + "\n");
+  }
+
+  // Give the LLM (or the pasted prompt) the trend context too, without baking
+  // trends into the persisted analysis.json (fill a throwaway copy).
+  const forLlm = structuredClone(analysis);
+  const store = opts.storePath ?? DEFAULT_STORE;
+  if (await Bun.file(store).exists()) fillTrendsFromStore(forLlm, store);
+
+  // --print-prompt: emit the exact grounded prompt (system rules + JSON digest)
+  // so it can be pasted into any chat LLM (pi.dev, ChatGPT, Claude) by hand.
+  if (opts.printPrompt) {
+    const msgs = buildMessages(forLlm);
+    const text = `${msgs
+      .map((m) => `## ${m.role.toUpperCase()}\n\n${m.content}`)
+      .join("\n\n---\n\n")}\n`;
+    const p = join(dir, "prompt.md");
+    await Bun.write(p, text);
+    console.error(`> ${p}`);
+    console.error(
+      "> paste it into a chat LLM (pi.dev / ChatGPT / Claude), then bring the reply back:",
+    );
+    console.error(
+      `>   sbperf narrate ${dir} --import <reply.md>   (or: pbpaste | sbperf narrate ${dir} --import -)`,
+    );
+    return p;
+  }
+
+  // Default: call the configured OpenAI-compatible endpoint.
+  const built = clientFromEnv();
+  if ("error" in built) throw new Error(built.error);
+  console.error(`> narrating ${dir} via ${built.client.model}`);
+  const md = await narrate(forLlm, built.client);
+  return embedNarrative(dir, analysis, md);
 }
 
 async function main(): Promise<void> {
@@ -786,13 +901,17 @@ async function main(): Promise<void> {
       case "pdf": {
         const dir = flags._[0];
         if (!dir) usage();
-        await doPdf(dir, flags.narrative);
+        await doPdf(dir, flags.narrative, flags.store);
         break;
       }
       case "narrate": {
         const dir = flags._[0];
         if (!dir) usage();
-        await doNarrate(dir);
+        await doNarrate(dir, {
+          printPrompt: flags.printPrompt,
+          importPath: flags.import,
+          storePath: flags.store,
+        });
         break;
       }
       case "import-trends": {

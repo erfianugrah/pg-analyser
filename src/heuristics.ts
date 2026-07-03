@@ -43,8 +43,6 @@ export const THRESHOLDS = {
   fnClientErrFrac: 0.2,
   /** Memory available / total below this = pressure. */
   memAvailFrac: 0.1,
-  /** Swap used / total above this = memory pressure (each project has ~1GB swap). */
-  swapUsedFrac: 0.2,
   /** Cumulative deadlocks (since stats reset) worth surfacing point-in-time. */
   deadlockMin: 5,
   /** Sustained temp-file spill rate (bytes/s, from >=2 snapshots) worth flagging. */
@@ -84,6 +82,17 @@ export interface Heuristic {
    * "Why it matters" leg of the What/Why/How finding format. ASCII only.
    */
   whyItMatters: string;
+  /**
+   * How to confirm the fix worked: the specific inspect command / advisor lint /
+   * dashboard panel to re-check, plus the value to expect. One sentence. ASCII.
+   */
+  howToVerify: string;
+  /**
+   * Optional concrete SQL/DDL command template for the fix, rendered as a
+   * copy-pasteable code block. Placeholders in <angle> brackets for the reader
+   * to fill from the evidence. ASCII only. Omit when there is no single command.
+   */
+  sql?: string;
   /** Canonical doc/source URL for the reader (and the narrate pass to cite). */
   docUrl: string;
   /** Catalog vintage for this entry. */
@@ -98,6 +107,8 @@ export const HEURISTICS: Record<string, Heuristic> = {
   advisor_performance: {
     id: "advisor_performance",
     plane: "Advisor",
+    howToVerify:
+      "Re-open the Performance Advisor after the change - the lint should drop off the list.",
     whyItMatters:
       "Performance lints flag concrete slow-path issues (missing/unindexed FKs, RLS re-evaluation). Left alone they inflate query latency and CPU, pushing you toward a bigger, costlier compute tier.",
     remediation: "Open the Performance Advisor for the full finding + affected objects.",
@@ -107,6 +118,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
   advisor_security: {
     id: "advisor_security",
     plane: "Advisor",
+    howToVerify: "Re-open the Security Advisor - the lint should clear once the object is fixed.",
     whyItMatters:
       "Security lints (exposed data, weak RLS/auth config) are direct exposure risk. A leak or unauthorized access is far costlier - in trust and remediation - than the fix.",
     remediation: "Open the Security Advisor for the full finding + affected objects.",
@@ -118,6 +130,9 @@ export const HEURISTICS: Record<string, Heuristic> = {
   rls_initplan: {
     id: "rls_initplan",
     plane: "RLS",
+    sql: "-- rewrite the policy so the auth call runs once, not per row:\nusing ( (select auth.uid()) = <user_id_column> );",
+    howToVerify:
+      "EXPLAIN the policy query (or re-run the auth_rls_initplan lint) - the per-row auth call should be gone.",
     whyItMatters:
       "An auth.*() call in an RLS policy re-runs for every row scanned, so latency scales with table size, not result size (Supabase test: 179ms -> 9ms). It burns CPU on every authenticated read and caps throughput.",
     remediation:
@@ -131,6 +146,9 @@ export const HEURISTICS: Record<string, Heuristic> = {
   seq_scan_heavy: {
     id: "seq_scan_heavy",
     plane: "Query",
+    sql: "CREATE INDEX CONCURRENTLY ON <schema>.<table> (<filtered_or_joined_columns>);",
+    howToVerify:
+      "EXPLAIN (ANALYZE, BUFFERS) the query - the sequential scan should become an index scan.",
     whyItMatters:
       "Sequential scans read the whole table per query; as it grows, latency and IOPS grow with it - raising p99 latency and the compute/IOPS you provision to keep up.",
     remediation:
@@ -141,6 +159,9 @@ export const HEURISTICS: Record<string, Heuristic> = {
   unused_index: {
     id: "unused_index",
     plane: "Query",
+    sql: "DROP INDEX CONCURRENTLY IF EXISTS <schema>.<index>;",
+    howToVerify:
+      "Watch pg_stat_user_indexes.idx_scan over a full cycle - it should stay 0 before you drop it.",
     whyItMatters:
       "An index never scanned is still maintained on every INSERT/UPDATE/DELETE - pure write amplification plus wasted storage you pay for, with zero read benefit.",
     remediation:
@@ -151,6 +172,9 @@ export const HEURISTICS: Record<string, Heuristic> = {
   duplicate_index: {
     id: "duplicate_index",
     plane: "Query",
+    sql: "DROP INDEX CONCURRENTLY IF EXISTS <schema>.<redundant_index>; -- keep one copy",
+    howToVerify:
+      "Re-run the duplicate-index lint (or check pg_indexes) - only one definition should remain.",
     whyItMatters:
       "Identical indexes each pay full write-maintenance cost and consume storage for no additional read benefit - redundant compute and disk spend on every write.",
     remediation:
@@ -161,6 +185,9 @@ export const HEURISTICS: Record<string, Heuristic> = {
   rls_col_unindexed: {
     id: "rls_col_unindexed",
     plane: "RLS",
+    sql: "CREATE INDEX CONCURRENTLY ON <schema>.<table> (<policy_column>);",
+    howToVerify:
+      "EXPLAIN the policy-filtered query after indexing - the check should use the new index, not a seq scan.",
     whyItMatters:
       "A policy-compared column with no covering index forces a seq scan on every row check (Supabase test: 171ms -> <0.1ms once indexed) - user-facing latency and needless CPU on every authenticated read.",
     remediation:
@@ -173,6 +200,8 @@ export const HEURISTICS: Record<string, Heuristic> = {
   direct_conn_high: {
     id: "direct_conn_high",
     plane: "Connections",
+    howToVerify:
+      "Watch pg_stat_activity - direct backends should fall once traffic moves to the pooler.",
     whyItMatters:
       "Nearing max_connections risks 'too many connections' errors that surface as user-facing failures. Each backend also costs 5-10MB RAM, so unpooled connections waste the memory that sets your compute tier.",
     remediation:
@@ -183,6 +212,8 @@ export const HEURISTICS: Record<string, Heuristic> = {
   role_conn_high: {
     id: "role_conn_high",
     plane: "Connections",
+    howToVerify:
+      "Compare this role's active connections in pg_stat_activity against its limit - it should sit well below.",
     whyItMatters:
       "This role is close to its own connection ceiling; hitting it fails that role's queries while the rest of the DB looks healthy - a silent, hard-to-diagnose partial outage.",
     remediation:
@@ -193,6 +224,8 @@ export const HEURISTICS: Record<string, Heuristic> = {
   pooler_clients_waiting: {
     id: "pooler_clients_waiting",
     plane: "Connections",
+    howToVerify:
+      "Watch the pooler's clients-waiting metric - it should return to about zero after tuning pool size or transaction length.",
     whyItMatters:
       "Clients queued for a pooler slot wait before any query even runs, adding latency the DB-side metrics never show. Sustained queueing is a capacity signal.",
     remediation:
@@ -205,6 +238,8 @@ export const HEURISTICS: Record<string, Heuristic> = {
   autovacuum_overdue: {
     id: "autovacuum_overdue",
     plane: "Vacuum",
+    howToVerify:
+      "Check pg_stat_user_tables.n_dead_tup and last_autovacuum - dead tuples should fall after autovacuum runs.",
     whyItMatters:
       "Dead tuples past the autovacuum threshold accumulate as bloat: tables and indexes grow, cache hit drops, scans slow, and disk fills with dead space you pay for.",
     remediation:
@@ -215,6 +250,8 @@ export const HEURISTICS: Record<string, Heuristic> = {
   table_bloat: {
     id: "table_bloat",
     plane: "Vacuum",
+    howToVerify:
+      "Re-run the bloat estimate (supabase inspect db bloat) - the table's waste should drop after pg_repack.",
     whyItMatters:
       "Reclaimable bloat is disk you pay for that holds no live data, and bloated tables/indexes slow scans and lower cache efficiency across the board.",
     remediation:
@@ -225,6 +262,9 @@ export const HEURISTICS: Record<string, Heuristic> = {
   txid_wraparound: {
     id: "txid_wraparound",
     plane: "Vacuum",
+    sql: "-- find the oldest table, then vacuum to freeze it:\nSELECT relname, age(relfrozenxid) FROM pg_class WHERE relkind='r' ORDER BY age(relfrozenxid) DESC LIMIT 5;\nVACUUM (FREEZE, VERBOSE) <schema>.<table>;",
+    howToVerify:
+      "Check age(relfrozenxid) on the oldest table - it should fall well below the 2B ceiling after vacuum.",
     whyItMatters:
       "Transaction-ID age nearing the ~2B ceiling is existential: at the limit Postgres stops accepting writes until an unkillable anti-wraparound vacuum completes - a hard, self-inflicted outage.",
     remediation:
@@ -237,6 +277,8 @@ export const HEURISTICS: Record<string, Heuristic> = {
   disk_full: {
     id: "disk_full",
     plane: "Storage",
+    howToVerify:
+      "Re-check disk usage (Database settings in the dashboard, or pg_database_size) - it should drop after reclaiming or expanding.",
     whyItMatters:
       "A full disk forces Postgres read-only - a complete outage. Providers also cap disk changes to ~4 per rolling 24h, so you cannot always grow your way out in time.",
     remediation:
@@ -247,6 +289,8 @@ export const HEURISTICS: Record<string, Heuristic> = {
   disk_iops_high: {
     id: "disk_iops_high",
     plane: "Storage",
+    howToVerify:
+      "Re-check disk I/O after indexing or provisioning more IOPS - utilisation should sit below saturation.",
     whyItMatters:
       "Sustained IOPS near the ceiling throttles every query behind disk I/O, spiking latency. Effective IOPS is the min of compute and disk, so both must be sized - and over-provisioned IOPS is money spent on headroom you never use.",
     remediation:
@@ -257,6 +301,9 @@ export const HEURISTICS: Record<string, Heuristic> = {
   wal_retained_inactive_slot: {
     id: "wal_retained_inactive_slot",
     plane: "Storage",
+    sql: "SELECT pg_drop_replication_slot('<slot_name>'); -- only if the consumer is gone",
+    howToVerify:
+      "Check pg_replication_slots - the inactive slot should be gone and retained WAL should fall.",
     whyItMatters:
       "An inactive replication slot pins WAL indefinitely and will fill the disk - an eventual write outage caused by a consumer that no longer exists.",
     remediation:
@@ -267,6 +314,8 @@ export const HEURISTICS: Record<string, Heuristic> = {
   wal_slot_lag: {
     id: "wal_slot_lag",
     plane: "Storage",
+    howToVerify:
+      "Check retained WAL in pg_replication_slots - it should shrink once the consumer catches up.",
     whyItMatters:
       "A large WAL backlog on an active slot means a slow downstream consumer; the retained WAL grows disk use and risks the same disk-full write outage.",
     remediation:
@@ -279,6 +328,8 @@ export const HEURISTICS: Record<string, Heuristic> = {
   cache_hit_low: {
     id: "cache_hit_low",
     plane: "Config",
+    howToVerify:
+      "Re-check the cache-hit ratio (supabase inspect db cache) - it should climb toward 99% after indexing or more RAM.",
     whyItMatters:
       "Below the 99% target, reads fall through to disk - higher latency and IOPS, and a signal the working set no longer fits in RAM (a memory/compute sizing decision, not just a knob).",
     remediation:
@@ -289,6 +340,8 @@ export const HEURISTICS: Record<string, Heuristic> = {
   idle_in_txn_timeout_off: {
     id: "idle_in_txn_timeout_off",
     plane: "Config",
+    sql: "ALTER ROLE authenticator SET idle_in_transaction_session_timeout = '2min';",
+    howToVerify: "SHOW idle_in_transaction_session_timeout - it should return a non-zero value.",
     whyItMatters:
       "With no idle-in-transaction timeout, an abandoned transaction pins the xmin horizon, blocking autovacuum and driving bloat + wraparound risk across the whole database.",
     remediation:
@@ -299,6 +352,8 @@ export const HEURISTICS: Record<string, Heuristic> = {
   statement_timeout_off: {
     id: "statement_timeout_off",
     plane: "Config",
+    sql: "ALTER ROLE authenticator SET statement_timeout = '30s'; -- tune per role",
+    howToVerify: "SHOW statement_timeout (per role) - it should return a non-zero cap.",
     whyItMatters:
       "With no statement_timeout, a runaway query runs unbounded - holding locks, pinning resources, and degrading everyone until it finishes or is manually killed.",
     remediation:
@@ -311,6 +366,9 @@ export const HEURISTICS: Record<string, Heuristic> = {
   blocking_locks: {
     id: "blocking_locks",
     plane: "Query",
+    sql: "-- identify the blocker in pg_stat_activity, then if safe:\nSELECT pg_cancel_backend(<blocking_pid>);",
+    howToVerify:
+      "Re-check pg_stat_activity / the blocking view - no rows should remain blocked once the blocker clears.",
     whyItMatters:
       "A blocking lock chain stalls every waiter behind it - user-facing latency or timeouts concentrated on the locked rows/tables.",
     remediation:
@@ -321,6 +379,8 @@ export const HEURISTICS: Record<string, Heuristic> = {
   long_running: {
     id: "long_running",
     plane: "Query",
+    howToVerify:
+      "Watch pg_stat_activity for a large query_start age - nothing should exceed 5 minutes.",
     whyItMatters:
       "Queries over 5 minutes hold resources and (in a transaction) block autovacuum; they usually signal a missing index or an unbounded scan that will only get slower.",
     remediation:
@@ -333,6 +393,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
   fn_5xx: {
     id: "fn_5xx",
     plane: "Functions",
+    howToVerify: "Watch the function's invocation stats - the 5xx rate should return below 1%.",
     whyItMatters:
       "Server errors are failed user requests - direct product impact. A sustained 5xx rate is an SLA-breach signal, not a cosmetic one.",
     remediation:
@@ -342,19 +403,11 @@ export const HEURISTICS: Record<string, Heuristic> = {
   },
 
   // --- Compute / memory (metrics-derived) ---
-  swap_active: {
-    id: "swap_active",
-    plane: "Compute",
-    whyItMatters:
-      "Swap on the hot path turns memory access into disk I/O, spiking latency. It means the instance is memory-bound - either tune memory-hungry queries or move to a larger compute tier.",
-    remediation:
-      "Swap is in use - the instance is under memory pressure (each project has ~1GB swap, and swapping means disk I/O on the hot path). Check work_mem x connections, reduce memory-hungry queries, or upgrade compute. Cache-as-memory is healthy; swap is not.",
-    docUrl: "https://supabase.com/docs/guides/platform/compute-and-disk",
-    reviewed: R,
-  },
   deadlocks: {
     id: "deadlocks",
     plane: "Query",
+    howToVerify:
+      "Check pg_stat_database.deadlocks over the next window - the count should stop increasing.",
     whyItMatters:
       "Deadlocks abort a transaction outright, surfacing as errors to users. Recurring deadlocks mean inconsistent lock ordering that will keep failing writes until fixed.",
     remediation:
@@ -365,6 +418,8 @@ export const HEURISTICS: Record<string, Heuristic> = {
   work_mem_spill: {
     id: "work_mem_spill",
     plane: "Config",
+    howToVerify:
+      "Watch temp-file bytes (pg_stat_database.temp_bytes) - spill should drop after raising work_mem or indexing.",
     whyItMatters:
       "Sorts/hash joins spilling to disk are far slower than in-memory and add IOPS. Raising work_mem fixes latency, but total = max_connections x work_mem must stay within RAM or you risk OOM.",
     remediation:
@@ -375,6 +430,8 @@ export const HEURISTICS: Record<string, Heuristic> = {
   realtime_postgres_changes: {
     id: "realtime_postgres_changes",
     plane: "Realtime",
+    howToVerify:
+      "Check active logical replication slots and Realtime subscriptions - postgres_changes usage should fall after moving to Broadcast.",
     whyItMatters:
       "postgres_changes holds a logical replication slot and polls it per WAL record; it does not scale and can pin WAL. Broadcast is the scalable, cheaper-at-load path.",
     remediation:
@@ -387,6 +444,8 @@ export const HEURISTICS: Record<string, Heuristic> = {
   pg_update_available: {
     id: "pg_update_available",
     plane: "Config",
+    howToVerify:
+      "Check the platform version in the dashboard - it should match the latest after the upgrade.",
     whyItMatters:
       "Running behind the platform version misses performance, security, and stability fixes; the upgrade is brief scheduled downtime now versus carrying known issues indefinitely.",
     remediation:
@@ -401,6 +460,8 @@ export function meta(id: string): {
   heuristicId?: string;
   remediation?: string;
   whyItMatters?: string;
+  howToVerify?: string;
+  sql?: string;
   docUrl?: string;
 } {
   const h = HEURISTICS[id];
@@ -409,6 +470,8 @@ export function meta(id: string): {
     heuristicId: h.id,
     remediation: h.remediation,
     whyItMatters: h.whyItMatters,
+    howToVerify: h.howToVerify,
+    sql: h.sql,
     docUrl: h.docUrl,
   };
 }
