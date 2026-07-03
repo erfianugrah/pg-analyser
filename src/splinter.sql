@@ -1,4 +1,6 @@
--- Vendored from github.com/supabase/splinter (Apache-2.0), main branch @ 2026-07-02.
+-- Vendored from github.com/supabase/splinter (Apache-2.0), main branch @ 2026-07-03.
+-- Body is byte-identical to upstream; only this header is local (the sync check
+-- strips leading comment lines before hashing, so this note does not read as drift).
 -- Canonical Supabase lint set. sbperf runs the PERFORMANCE lints over a superuser
 -- --db-url connection as a fallback when the hosted advisors/performance endpoint
 -- fails (the multi-statement lint SQL 400s on the prepared-statement path, 42601).
