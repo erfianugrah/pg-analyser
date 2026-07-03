@@ -427,6 +427,60 @@ ${brandHead(brand, "Supabase performance - org report")}
 </body></html>`;
 }
 
+export interface OrgRow {
+  name: string;
+  dir: string;
+  projects: number;
+  high: number;
+  med: number;
+  low: number;
+  errors: number;
+}
+
+/** Top-level org overview for `--all`: one row per org, linking its own index. */
+export function renderOrgIndex(
+  rows: OrgRow[],
+  collectedAt: string,
+  brand: Brand = DEFAULT_BRAND,
+): string {
+  const totalProjects = rows.reduce((s, r) => s + r.projects, 0);
+  const body = rows
+    .map((r) => {
+      const sev =
+        r.high > 0
+          ? '<span class="lvl ERROR">high</span>'
+          : r.med > 0
+            ? '<span class="lvl WARN">med</span>'
+            : '<span class="lvl INFO">low</span>';
+      return `<tr>
+      <td><a href="${esc(r.dir)}/index.html">${esc(r.name)}</a></td>
+      <td>${r.projects}</td>
+      <td>${r.high} / ${r.med} / ${r.low}</td>
+      <td>${r.errors ? `<span class="lvl ERROR">${r.errors}</span>` : "0"}</td>
+      <td>${sev}</td>
+    </tr>`;
+    })
+    .join("");
+  return `<!doctype html><html lang=en><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">${faviconTag(brand)}<title>sbperf - all organizations</title>
+<style>
+  ${themeVars(brand)}
+  body{font:14px/1.45 -apple-system,Segoe UI,Roboto,sans-serif;color:var(--fg);background:var(--bg);margin:0 auto;padding:24px;max-width:1000px}
+  h1{font-size:20px;margin:0 0 4px}.meta{color:var(--mut);font-size:12px;margin-bottom:16px}
+  ${BRAND_CSS}
+  table{border-collapse:collapse;width:100%;font-size:13px}
+  th,td{text-align:left;padding:5px 9px;border:1px solid var(--line)}
+  th{background:var(--panel)}tbody tr:nth-child(even){background:var(--stripe)}
+  .lvl{font-weight:700;font-size:11px;padding:1px 5px;border-radius:2px;color:#1a1a1a}
+  .lvl.WARN{background:#ffe08a}.lvl.ERROR{background:#f7b0b0}.lvl.INFO{background:#a9c7ff}
+  a{color:var(--link)}
+</style></head><body>
+${brandHead(brand, "Supabase performance - all organizations")}
+<div class=meta>${rows.length} organization${rows.length === 1 ? "" : "s"} &middot; ${totalProjects} project${totalProjects === 1 ? "" : "s"} &middot; collected ${esc(collectedAt)} &middot; findings shown as high / med / low</div>
+<table><thead><tr><th>organization</th><th>projects</th><th>findings</th><th>errors</th><th>top sev</th></tr></thead><tbody>${body}</tbody></table>
+</body></html>`;
+}
+
 export function render(a: Analysis, opts: { narrative?: boolean; brand?: Brand } = {}): string {
   const brand = opts.brand ?? DEFAULT_BRAND;
   const m = a.meta;

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { render, renderIndex, renderSummary } from "../src/report/render.ts";
+import { render, renderIndex, renderOrgIndex, renderSummary } from "../src/report/render.ts";
 import type { Analysis } from "../src/schemas.ts";
 
 function fixture(overrides: Partial<Analysis> = {}): Analysis {
@@ -364,6 +364,24 @@ describe("renderSummary", () => {
     expect(html).not.toContain("pg_stat_statements");
     expect(html).not.toContain("#txid");
     expect(html).toContain("At a glance");
+  });
+});
+
+describe("renderOrgIndex", () => {
+  test("one row per org, linking its own index, with project counts + rollup", () => {
+    const html = renderOrgIndex(
+      [
+        { name: "ErfiCorp", dir: "erficorp", projects: 3, high: 1, med: 2, low: 4, errors: 0 },
+        { name: "Side Org", dir: "side-org", projects: 1, high: 0, med: 0, low: 1, errors: 1 },
+      ],
+      "2026-07-03T00:00:00Z",
+    );
+    expect(html).toContain('href="erficorp/index.html"');
+    expect(html).toContain("ErfiCorp");
+    expect(html).toContain("2 organizations");
+    expect(html).toContain("4 projects");
+    expect(html).toContain("1 / 2 / 4");
+    expect(html).toContain('class="lvl ERROR">1</span>'); // Side Org error count
   });
 });
 

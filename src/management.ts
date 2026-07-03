@@ -68,6 +68,11 @@ export class Management {
     return this.#json(`/v1/projects`).then((d) => z.array(S.Project).parse(d));
   }
 
+  /** All organizations visible to the PAT (for org-grouped `--all` output). */
+  organizations() {
+    return this.#json(`/v1/organizations`).then((d) => z.array(S.Organization).parse(d));
+  }
+
   upgrade(ref: string) {
     return this.#json(`/v1/projects/${ref}/upgrade/eligibility`).then((d) =>
       S.UpgradeEligibility.parse(d),
