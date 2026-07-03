@@ -36,6 +36,8 @@ function base(): Analysis {
       topByCalls: [],
       biggestTables: [],
       indexStats: [],
+      duplicateIndexes: [],
+      rlsUnindexed: [],
       seqScanHeavy: [],
       bloat: [],
       trafficProfile: [],
@@ -99,6 +101,80 @@ describe("deriveFindings", () => {
     ];
     const f = deriveFindings(a).find((x) => x.anchor === "#unused");
     expect(f?.title).toContain("1 unused index in public");
+  });
+
+  test("duplicate indexes in public -> med Performance finding", () => {
+    const a = base();
+    a.sql.duplicateIndexes = [
+      { schema: "public", table: "public.x", indexes: "i1, i2", copies: 2 },
+      { schema: "auth", table: "auth.y", indexes: "i3, i4", copies: 2 },
+    ];
+    const f = deriveFindings(a).find((x) => x.anchor === "#dupidx");
+    expect(f?.severity).toBe("med");
+    expect(f?.category).toBe("Performance");
+    expect(f?.title).toContain("1 public table has duplicate indexes");
+  });
+
+  test("RLS policy columns without an index -> med Performance finding", () => {
+    const a = base();
+    a.sql.rlsUnindexed = [
+      { schema: "public", table: "public.docs", column: "owner_id" },
+      { schema: "public", table: "public.docs", column: "team_id" },
+      { schema: "storage", table: "storage.objects", column: "bucket_id" },
+    ];
+    const f = deriveFindings(a).find((x) => x.anchor === "#rlsunindexed");
+    expect(f?.severity).toBe("med");
+    expect(f?.title).toContain("2 RLS policy columns lack a covering index");
+  });
+
+  test("swap in use past 20% -> Capacity finding; under is ignored", () => {
+    const a = base();
+    a.metrics.samples = [
+      { name: "node_memory_SwapTotal_bytes", labels: {}, value: 1_000_000_000 },
+      { name: "node_memory_SwapFree_bytes", labels: {}, value: 600_000_000 },
+    ];
+    const f = deriveFindings(a).find((x) => x.title.includes("Swap"));
+    expect(f?.category).toBe("Capacity");
+    expect(f?.title).toContain("40% used");
+    a.metrics.samples = [
+      { name: "node_memory_SwapTotal_bytes", labels: {}, value: 1_000_000_000 },
+      { name: "node_memory_SwapFree_bytes", labels: {}, value: 950_000_000 },
+    ];
+    expect(deriveFindings(a).some((x) => x.title.includes("Swap"))).toBe(false);
+  });
+
+  test("cumulative deadlocks past the floor -> low Performance finding", () => {
+    const a = base();
+    a.metrics.samples = [
+      { name: "pg_stat_database_deadlocks_total", labels: { datname: "postgres" }, value: 6 },
+      { name: "pg_stat_database_deadlocks_total", labels: { datname: "app" }, value: 1 },
+    ];
+    const f = deriveFindings(a).find((x) => x.title.includes("deadlocks"));
+    expect(f?.severity).toBe("low");
+    expect(f?.title).toContain("7 deadlocks");
+    a.metrics.samples = [
+      { name: "pg_stat_database_deadlocks_total", labels: { datname: "postgres" }, value: 2 },
+    ];
+    expect(deriveFindings(a).some((x) => x.title.includes("deadlocks"))).toBe(false);
+  });
+
+  test("work_mem spill from temp-file rate trend -> Performance finding", () => {
+    const a = base();
+    a.trends = [{ title: "Temp file bytes/s", unit: "bytes", points: [{ t: 1, v: 5_000_000 }] }];
+    const f = deriveFindings(a).find((x) => x.title.includes("spilling to disk"));
+    expect(f?.category).toBe("Performance");
+    a.trends = [{ title: "Temp file bytes/s", unit: "bytes", points: [{ t: 1, v: 1000 }] }];
+    expect(deriveFindings(a).some((x) => x.title.includes("spilling to disk"))).toBe(false);
+  });
+
+  test("realtime postgres_changes subscriptions -> low nudge", () => {
+    const a = base();
+    a.metrics.samples = [
+      { name: "realtime_postgres_changes_total_subscriptions", labels: {}, value: 12 },
+    ];
+    const f = deriveFindings(a).find((x) => x.title.includes("postgres_changes"));
+    expect(f?.severity).toBe("low");
+    expect(f?.title).toContain("12 active subscriptions");
   });
 
   test("connections near max -> Capacity finding", () => {

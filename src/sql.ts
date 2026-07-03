@@ -121,6 +121,71 @@ export const QUERIES = {
     order by pg_relation_size(i.indexrelid) desc
     limit 30`,
 
+  // Duplicate indexes: two or more indexes with an identical definition on the
+  // same table (normalized by stripping the index name from indexdef). Each
+  // copy is maintained on every write for zero read benefit. Derived from the
+  // Supabase splinter `duplicate_index` lint - runs over the read-only endpoint
+  // so it fires even when the hosted advisor 400s and there is no --db-url.
+  duplicateIndexes: /* sql */ `
+    select
+      n.nspname as schema,
+      n.nspname || '.' || c.relname as table,
+      array_to_string(array_agg(pi.indexname order by pi.indexname), ', ') as indexes,
+      count(*) as copies
+    from pg_indexes pi
+    join pg_namespace n on n.nspname = pi.schemaname
+    join pg_class c on pi.tablename = c.relname and n.oid = c.relnamespace
+    where n.nspname not in ('pg_catalog', 'information_schema')
+      and c.relkind in ('r', 'm')
+    group by n.nspname, c.relname, replace(pi.indexdef, pi.indexname, '')
+    having count(*) > 1
+    order by 1, 2
+    limit 30`,
+
+  // RLS policy columns without a covering index. An RLS policy filters every row
+  // by the columns in its USING/WITH CHECK expression; if such a column is not
+  // the leading column of some index, each policy check does a seq scan.
+  // Supabase's official 100K-row test: 171ms -> <0.1ms once the policy column is
+  // indexed. Referenced columns are matched by word-boundary against the table's
+  // real attributes (so auth.uid()/functions don't false-match); indexed = the
+  // column leads at least one valid index.
+  rlsUnindexed: /* sql */ `
+    with pol as (
+      select
+        c.oid as table_oid,
+        n.nspname as schema,
+        c.relname as tbl,
+        coalesce(pg_get_expr(p.polqual, p.polrelid), '') || ' ' ||
+          coalesce(pg_get_expr(p.polwithcheck, p.polrelid), '') as expr
+      from pg_policy p
+      join pg_class c on c.oid = p.polrelid
+      join pg_namespace n on n.oid = c.relnamespace
+      where n.nspname not in ('pg_catalog', 'information_schema')
+    ),
+    refs as (
+      select distinct pol.schema, pol.table_oid, pol.tbl, a.attname as col
+      from pol
+      join pg_attribute a
+        on a.attrelid = pol.table_oid and a.attnum > 0 and not a.attisdropped
+      where pol.expr ~ ('\\y' || a.attname || '\\y')
+    ),
+    indexed as (
+      select distinct i.indrelid as table_oid,
+        (select attname from pg_attribute
+         where attrelid = i.indrelid and attnum = i.indkey[0]) as col
+      from pg_index i
+      where i.indisvalid and i.indkey[0] <> 0
+    )
+    select
+      refs.schema as schema,
+      refs.schema || '.' || refs.tbl as table,
+      refs.col as column
+    from refs
+    left join indexed ix on ix.table_oid = refs.table_oid and ix.col = refs.col
+    where ix.col is null
+    order by 1, 2, 3
+    limit 50`,
+
   seqScanHeavy: /* sql */ `
     select
       schemaname as schema,

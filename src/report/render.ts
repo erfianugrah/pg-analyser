@@ -323,6 +323,8 @@ ${drill("outliers", "Query outliers", outliersNote, sec(a.sql.topStatements, "sq
 ${drill("calls", "Most-frequent queries", "by call count - chatty / hot-path (noise filtered)", sec(a.sql.topByCalls, "sql:topByCalls", { mono: ["query"], limit: 20 }))}
 ${drill("tables", "Biggest tables", "", sec(a.sql.biggestTables, "sql:biggestTables", { mono: ["table"], hide: ["schema"], limit: 20 }))}
 ${drill("unused", "Index usage", "all indexes by size; unused = never scanned, non-constraint", sec(a.sql.indexStats, "sql:indexStats", { mono: ["index", "table"], hide: ["schema"] }))}
+${drill("dupidx", "Duplicate indexes", "identical index definitions on one table - keep one, drop the rest", errored.has("sql:duplicateIndexes") ? '<p class="empty warn-text">not collected</p>' : a.sql.duplicateIndexes.length ? sqlTable(a.sql.duplicateIndexes, { mono: ["indexes"], hide: ["schema"] }) : "<p class=empty>none found</p>")}
+${drill("rlsunindexed", "RLS columns without an index", "policy-compared column with no covering index -> seq scan per row check", errored.has("sql:rlsUnindexed") ? '<p class="empty warn-text">not collected</p>' : a.sql.rlsUnindexed.length ? sqlTable(a.sql.rlsUnindexed, { mono: ["table", "column"], hide: ["schema"] }) : "<p class=empty>none found</p>")}
 ${drill("seqscan", "Sequential-scan heavy", "seq_scan > idx_scan, >1k rows", sec(a.sql.seqScanHeavy, "sql:seqScanHeavy", { mono: ["table"], hide: ["schema"] }))}
 ${drill("bloat", "Estimated bloat", "reclaimable wasted space (pg_stats estimate)", sec(a.sql.bloat, "sql:bloat", { mono: ["name"], hide: ["waste_bytes"] }))}
 ${drill("traffic", "Read/write profile", "per-table read-heavy vs write-heavy", sec(a.sql.trafficProfile, "sql:trafficProfile", { mono: ["table"] }))}

@@ -111,6 +111,26 @@ export function deriveFindings(a: Analysis): Finding[] {
       ...meta("unused_index"),
     });
   }
+  const dupIdx = publicRows(a.sql.duplicateIndexes).length;
+  if (dupIdx > 0) {
+    out.push({
+      severity: "med",
+      category: "Performance",
+      title: `${dupIdx} public ${dupIdx === 1 ? "table has" : "tables have"} duplicate indexes (drop the copies)`,
+      anchor: "#dupidx",
+      ...meta("duplicate_index"),
+    });
+  }
+  const rlsUnindexed = publicRows(a.sql.rlsUnindexed).length;
+  if (rlsUnindexed > 0) {
+    out.push({
+      severity: "med",
+      category: "Performance",
+      title: `${rlsUnindexed} RLS policy ${rlsUnindexed === 1 ? "column" : "columns"} lack a covering index (seq scan per check)`,
+      anchor: "#rlsunindexed",
+      ...meta("rls_col_unindexed"),
+    });
+  }
   if (
     a.upgrade?.current_app_version &&
     a.upgrade.latest_app_version &&
@@ -276,9 +296,13 @@ export function deriveFindings(a: Analysis): Finding[] {
       });
     }
   }
-  const waiting = a.metrics.samples
-    .filter((s) => s.name === "pgbouncer_pools_client_waiting_connections")
-    .reduce((mx, s) => Math.max(mx, s.value), 0);
+  const latestTrend = (title: string) =>
+    a.trends.find((t) => t.title === title)?.points.at(-1)?.v ?? 0;
+  const maxMetric = (name: string) =>
+    a.metrics.samples.filter((s) => s.name === name).reduce((mx, s) => Math.max(mx, s.value), 0);
+  const sumMetric = (name: string) =>
+    a.metrics.samples.filter((s) => s.name === name).reduce((sum, s) => sum + s.value, 0);
+  const waiting = maxMetric("pgbouncer_pools_client_waiting_connections");
   if (waiting > 0) {
     out.push({
       severity: "med",
@@ -288,9 +312,54 @@ export function deriveFindings(a: Analysis): Finding[] {
       ...meta("pooler_clients_waiting"),
     });
   }
+  // Swap in use = memory pressure. Gauge, meaningful from a single scrape.
+  const swapTotal = maxMetric("node_memory_SwapTotal_bytes");
+  const swapFree = maxMetric("node_memory_SwapFree_bytes");
+  const swapUsed = swapTotal - swapFree;
+  if (swapTotal > 0 && swapUsed / swapTotal >= THRESHOLDS.swapUsedFrac) {
+    out.push({
+      severity: "med",
+      category: "Capacity",
+      title: `Swap ${Math.round((swapUsed / swapTotal) * 100)}% used (memory pressure)`,
+      anchor: "#metrics",
+      ...meta("swap_active"),
+    });
+  }
+  // Deadlocks (cumulative counter since stats reset). A rate from >=2 snapshots
+  // is stronger, but a nonzero cumulative count is still worth a glance.
+  const deadlocks = Math.round(sumMetric("pg_stat_database_deadlocks_total"));
+  if (deadlocks >= THRESHOLDS.deadlockMin) {
+    out.push({
+      severity: "low",
+      category: "Performance",
+      title: `${deadlocks} deadlocks recorded (cumulative since stats reset)`,
+      anchor: "#metrics",
+      ...meta("deadlocks"),
+    });
+  }
+  // work_mem spill: sustained temp-file write rate (needs >=2 snapshots).
+  const tempRate = latestTrend("Temp file bytes/s");
+  if (tempRate >= THRESHOLDS.tempSpillBytesPerSec) {
+    out.push({
+      severity: "med",
+      category: "Performance",
+      title: "Sorts/hashes spilling to disk (raise work_mem)",
+      anchor: "#trends",
+      ...meta("work_mem_spill"),
+    });
+  }
+  // Realtime postgres_changes nudge: it does not scale like Broadcast.
+  const pgChanges = Math.round(sumMetric("realtime_postgres_changes_total_subscriptions"));
+  if (pgChanges > 0) {
+    out.push({
+      severity: "low",
+      category: "Performance",
+      title: `postgres_changes has ${pgChanges} active subscription${pgChanges === 1 ? "" : "s"} (consider Broadcast for scale)`,
+      anchor: "#metrics",
+      ...meta("realtime_postgres_changes"),
+    });
+  }
   // Disk IOPS headroom (needs a Prometheus scraper for the rate; trends-derived).
-  const latestTrend = (title: string) =>
-    a.trends.find((t) => t.title === title)?.points.at(-1)?.v ?? 0;
   const iops = latestTrend("Disk read IOPS") + latestTrend("Disk write IOPS");
   if (a.disk?.iops && iops >= a.disk.iops * THRESHOLDS.diskIopsFrac) {
     out.push({

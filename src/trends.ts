@@ -132,6 +132,8 @@ const RATES: RateDef[] = [
   { title: "Disk write (bytes/s)", unit: "bytes", name: "node_disk_written_bytes_total" },
   { title: "Network RX (bytes/s)", unit: "bytes", name: "node_network_receive_bytes_total" },
   { title: "Network TX (bytes/s)", unit: "bytes", name: "node_network_transmit_bytes_total" },
+  { title: "Temp file bytes/s", unit: "bytes", name: "pg_stat_database_temp_bytes_total" },
+  { title: "Deadlocks/s", unit: "", name: "pg_stat_database_deadlocks_total" },
 ];
 
 function rateSeries(snaps: SnapshotForTrends[], def: RateDef): TrendSeries | null {
@@ -171,6 +173,23 @@ function cpuUtilSeries(snaps: SnapshotForTrends[]): TrendSeries | null {
 }
 
 /**
+ * Swap used = SwapTotal - SwapFree, per snapshot. A computed gauge (two
+ * metrics), so it doesn't fit the single-name GaugeDef path. Swap in use is a
+ * memory-pressure signal - each project has ~1GB swap and swapping is disk I/O.
+ */
+function swapUsedSeries(snaps: SnapshotForTrends[]): TrendSeries | null {
+  const points: TrendPoint[] = [];
+  for (const snap of snaps) {
+    if (!has(snap.samples, "node_memory_SwapTotal_bytes")) continue;
+    const used =
+      sumOf(snap.samples, "node_memory_SwapTotal_bytes") -
+      sumOf(snap.samples, "node_memory_SwapFree_bytes");
+    points.push({ t: snap.ts, v: Math.max(0, used) });
+  }
+  return points.length ? { title: "Swap used", unit: "bytes", points } : null;
+}
+
+/**
  * Turn accumulated snapshots into renderable trend series. Gauges emit one
  * point per snapshot; counter-derived rates (IOPS, throughput, CPU%) emit one
  * point per consecutive interval. Series with no data are omitted entirely.
@@ -189,6 +208,7 @@ export function computeTrends(
   };
 
   push(cpuUtilSeries(snaps));
+  push(swapUsedSeries(snaps));
   for (const g of GAUGES) push(gaugeSeries(snaps, g));
   for (const r of RATES) push(rateSeries(snaps, r));
   for (const sc of SCALARS) push(scalarSeries(snaps, sc));
