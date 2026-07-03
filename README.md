@@ -46,6 +46,25 @@ Audit every project in the account (writes an `index.html` linking them all):
 bun run src/index.ts full --all [--org <slug>]
 ```
 
+Audit a **specific subset** of projects into the same combined index (PAT-only,
+no `--db-url`). `--ref` is repeatable and also accepts comma/space-delimited
+lists; `--ref-file` reads refs from a `.txt` (one per line) or `.csv`:
+
+```bash
+bun run src/index.ts full --ref <ref1> --ref <ref2>     # repeat
+bun run src/index.ts full --ref <ref1>,<ref2>,<ref3>    # comma (or space) list
+bun run src/index.ts full --ref-file refs.txt           # one ref per line
+bun run src/index.ts full --ref-file projects.csv       # any 20-char ref column
+```
+
+These write to `reports/refs-<ts>/` with the same org -> project grouping +
+combined `index.html` as `--all`, scoped to just those refs (stack `--org` on
+top to filter further). Lists + repeats + files combine and are deduped. A
+`--ref-file` with headers/name/region columns is fine - any 20-lowercase-letter
+token is picked up by shape and everything else is ignored; a file with content
+but no ref fails loud. `snapshot` also takes multiple refs (loops each into the
+history store); `analyze` does not (it writes a single `analysis.json`).
+
 Accumulate 30-day trends with no external infra (see below):
 
 ```bash
@@ -232,7 +251,7 @@ bun run src/index.ts full --ref <ref> --prometheus http://localhost:9090
 
 ### Bring your own history (CSV / JSON import)
 
-If your metrics history lives somewhere sbperf can't reach - an internal Grafana,
+If your metrics history lives somewhere sbperf can't reach - a self-hosted Grafana,
 a managed Prometheus, a spreadsheet - **export the series yourself and hand it to
 the tool**. `import-trends` merges any external time series into
 `analysis.trends`, so the report renders them as native inline-SVG panels instead
