@@ -8,7 +8,11 @@ describe("perf query set is read-only", () => {
     test(`${name} is a read-only SELECT/CTE with no write keywords`, () => {
       const head = sql.trim().toLowerCase();
       expect(head.startsWith("select") || head.startsWith("with")).toBe(true);
-      expect(sql).not.toMatch(WRITE);
+      // Strip single-quoted string literals before scanning: some queries carry
+      // DDL/txn keywords inside literals (e.g. the outliers noise-filter patterns
+      // and the NOT_APP_STATEMENT regex), which are data, not operations.
+      const withoutLiterals = sql.replace(/'(?:[^']|'')*'/g, "''");
+      expect(withoutLiterals).not.toMatch(WRITE);
     });
   }
 

@@ -246,7 +246,15 @@ compute tier, so treat these as sanity checks, not prescriptions):
 - `effective_cache_size` ~50-75% RAM (planner hint; does not allocate).
 - `work_mem`: too low -> sorts/hash joins spill to disk (temp files); too high x
   many connections -> OOM. Rough ceiling: `max_connections * (1-2MB + work_mem)`.
-  Tune per-session for heavy queries rather than globally.
+  Tune per-session for heavy queries rather than globally. Concrete starting
+  point when spilling: bump the offending role/session toward `16MB`-`64MB`.
+- `statement_timeout`: Supabase ships per-role defaults (`anon` 3s,
+  `authenticated` 8s; `postgres`/custom roles only bounded by the 2min global
+  cap). A global `0` therefore leaves postgres/custom roles uncapped. Set an
+  explicit cap: interactive/API roles `30s`-`60s`, analytics/batch `2min`-`5min`
+  (source: Supabase timeouts guide).
+- `idle_in_transaction_session_timeout`: default `2min` for most roles,
+  `5min`-`10min` for long batch/ETL roles; stops abandoned txns pinning xmin.
 - `maintenance_work_mem`: low -> slow `CREATE INDEX` / `VACUUM`.
 - Cache-hit target > 99%; below that, requests hit disk (raise via more RAM /
   better indexing, not just shared_buffers).

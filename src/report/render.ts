@@ -602,7 +602,7 @@ export function render(a: Analysis, opts: { narrative?: boolean; brand?: Brand }
         : "";
 
   const statsWindow = a.sql.statsResetAge ? ` (over ${a.sql.statsResetAge.split(".")[0]})` : "";
-  const outliersNote = `app workload; platform/introspection queries filtered${statsWindow}`;
+  const outliersNote = `top 5 by share of DB time - app workload only; platform, migration, DDL and transaction-control statements filtered out${statsWindow}`;
   const verdict = computeVerdict(findings, degraded);
   const sections = `
 <section class=tldr>
@@ -645,8 +645,8 @@ ${drill("rls", "RLS policies", "auth.*() should be wrapped: (select auth.uid())"
 <h2 id="adv-perf">Advisors - performance <span class=count>${a.advisors.performance.length}</span></h2>${errored.has("advisors:performance") ? '<p class="empty warn-text">not collected</p>' : advisorTable(a.advisors.performance)}
 <h2 id="adv-sec">Advisors - security <span class=count>${a.advisors.security.length}</span></h2>${errored.has("advisors:security") ? '<p class="empty warn-text">not collected</p>' : advisorTable(a.advisors.security)}
 
-${drill("outliers", "Query outliers", outliersNote, chartFor(a.sql.topStatements, errored.has("sql:topStatements"), { labelKey: "query", valueKey: "pct", display: (r) => `${r.pct}% (${r.total_ms}ms)`, limit: 10 }) + sec(a.sql.topStatements, "sql:topStatements", { mono: ["query"], limit: 20 }))}
-${drill("calls", "Most-frequent queries", "by call count - chatty / hot-path (noise filtered)", chartFor(a.sql.topByCalls, errored.has("sql:topByCalls"), { labelKey: "query", valueKey: "pct_calls", display: (r) => `${r.pct_calls}% (${r.calls} calls)`, limit: 10 }) + sec(a.sql.topByCalls, "sql:topByCalls", { mono: ["query"], limit: 20 }))}
+${drill("outliers", "Query outliers", outliersNote, chartFor(a.sql.topStatements, errored.has("sql:topStatements"), { labelKey: "query", valueKey: "pct", display: (r) => `${r.pct}% (${r.total_ms}ms)`, limit: 5 }) + sec(a.sql.topStatements, "sql:topStatements", { mono: ["query"], limit: 5 }))}
+${drill("calls", "Most-frequent queries", "top 5 by call count - chatty / hot-path app workload (platform/migration/DDL noise filtered)", chartFor(a.sql.topByCalls, errored.has("sql:topByCalls"), { labelKey: "query", valueKey: "pct_calls", display: (r) => `${r.pct_calls}% (${r.calls} calls)`, limit: 5 }) + sec(a.sql.topByCalls, "sql:topByCalls", { mono: ["query"], limit: 5 }))}
 ${drill("tables", "Biggest tables", "", sec(a.sql.biggestTables, "sql:biggestTables", { mono: ["table"], hide: ["schema"], limit: 20 }))}
 ${drill("unused", "Index usage", "all indexes by size; unused = never scanned, non-constraint", sec(a.sql.indexStats, "sql:indexStats", { mono: ["index", "table"], hide: ["schema"] }))}
 ${drill("dupidx", "Duplicate indexes", "identical index definitions on one table - keep one, drop the rest", errored.has("sql:duplicateIndexes") ? '<p class="empty warn-text">not collected</p>' : a.sql.duplicateIndexes.length ? sqlTable(a.sql.duplicateIndexes, { mono: ["indexes"], hide: ["schema"] }) : "<p class=empty>none found</p>")}
