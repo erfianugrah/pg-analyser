@@ -735,8 +735,17 @@ async function doNarrate(
     const src = opts.importPath;
     const raw = src === "-" ? await Bun.stdin.text() : await Bun.file(src).text();
     const md = raw.trim();
-    if (!md) throw new Error(`imported narrative is empty (${src === "-" ? "stdin" : src})`);
-    const header = `<!-- imported into sbperf from ${src === "-" ? "stdin" : src}; the deterministic report.html is ground truth -->\n\n`;
+    const where = src === "-" ? "stdin" : src;
+    if (!md) throw new Error(`imported narrative is empty (${where})`);
+    // Guard the #1 footgun: importing prompt.md (the thing you paste INTO the
+    // LLM) instead of the LLM's reply. The prompt has ## SYSTEM + ## USER;
+    // a real analysis starts with ## Executive summary.
+    if (/^##\s+SYSTEM\b/m.test(md) && /^##\s+USER\b/m.test(md))
+      throw new Error(
+        `${where} looks like the PROMPT (the sbperf --print-prompt output), not the model's reply. ` +
+          `Paste the chat LLM's ANSWER (the analysis, starting with "## Executive summary") - not prompt.md.`,
+      );
+    const header = `<!-- imported into sbperf from ${where}; the deterministic report.html is ground truth -->\n\n`;
     return embedNarrative(dir, analysis, header + md + "\n");
   }
 
@@ -756,11 +765,10 @@ async function doNarrate(
     const p = join(dir, "prompt.md");
     await Bun.write(p, text);
     console.error(`> ${p}`);
+    console.error("> 1. paste prompt.md into a chat LLM (pi.dev / ChatGPT / Claude)");
+    console.error("> 2. save the LLM's ANSWER (not the prompt) to a file, e.g. reply.md");
     console.error(
-      "> paste it into a chat LLM (pi.dev / ChatGPT / Claude), then bring the reply back:",
-    );
-    console.error(
-      `>   sbperf narrate ${dir} --import <reply.md>   (or: pbpaste | sbperf narrate ${dir} --import -)`,
+      `> 3. sbperf narrate ${dir} --import reply.md   (or: pbpaste | sbperf narrate ${dir} --import -)`,
     );
     return p;
   }
