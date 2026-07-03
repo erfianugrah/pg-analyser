@@ -65,6 +65,10 @@ function buildPanels(refMatcher: string): Array<{ title: string; unit: string; q
       query: `sum(${rate5("node_disk_writes_completed_total")})`,
     },
     { title: "Deadlocks/s", unit: "", query: `sum(${rate5("pg_stat_database_deadlocks_total")})` },
+    // Memory-pressure evidence: sustained major page faults / swap-in mean the
+    // working set doesn't fit RAM (invisible to a MemAvailable snapshot).
+    { title: "Major page faults/s", unit: "", query: `sum(${rate5("node_vmstat_pgmajfault")})` },
+    { title: "Swap-in pages/s", unit: "", query: `sum(${rate5("node_vmstat_pswpin")})` },
   ];
 }
 
@@ -84,17 +88,24 @@ export async function fetchTrends(
   baseUrl: string,
   days = 30,
   ref?: string,
+  token?: string,
 ): Promise<TrendSeries[]> {
   const end = Math.floor(Date.now() / 1000);
   const start = end - days * 86400;
   const step = Math.max(300, Math.floor((end - start) / 200)); // ~200 points max
   const base = baseUrl.replace(/\/+$/, "");
   const panels = buildPanels(ref ? `supabase_project_ref="${ref}"` : "");
+  // A bearer token lets us query a corporate datasource through Grafana's
+  // datasource proxy (/api/datasources/proxy/uid/<uid>) or any auth'd
+  // Prometheus/Prometheus endpoint - no direct datasource access needed.
+  const init: RequestInit | undefined = token
+    ? { headers: { Authorization: `Bearer ${token}` } }
+    : undefined;
 
   const out: TrendSeries[] = [];
   for (const panel of panels) {
     const url = `${base}/api/v1/query_range?query=${encodeURIComponent(panel.query)}&start=${start}&end=${end}&step=${step}`;
-    const res = await fetch(url);
+    const res = await fetch(url, init);
     if (!res.ok) throw new Error(`prometheus ${panel.query} -> ${res.status}`);
     const parsed = RangeResponse.parse(await res.json());
     const values = parsed.data.result[0]?.values ?? [];

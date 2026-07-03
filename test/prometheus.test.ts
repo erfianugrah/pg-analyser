@@ -72,4 +72,33 @@ describe("fetchTrends ref scoping", () => {
     await fetchTrends("http://prom:9090/", 30, "r1");
     expect(cap.urls.every((u) => u.startsWith("http://prom:9090/api/v1/query_range?"))).toBe(true);
   });
+
+  test("a token is sent as a Bearer Authorization header (Grafana proxy / auth'd DS)", async () => {
+    const inits: (RequestInit | undefined)[] = [];
+    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      inits.push(init);
+      return new Response(JSON.stringify({ status: "success", data: { result: [] } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    await fetchTrends("https://grafana/api/datasources/proxy/uid/abc", 30, "r1", "secret-tok");
+    expect(inits.length).toBeGreaterThan(0);
+    for (const init of inits) {
+      expect((init?.headers as Record<string, string>)?.Authorization).toBe("Bearer secret-tok");
+    }
+  });
+
+  test("no token -> no auth header (backward compatible)", async () => {
+    const inits: (RequestInit | undefined)[] = [];
+    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      inits.push(init);
+      return new Response(JSON.stringify({ status: "success", data: { result: [] } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    await fetchTrends("http://prom:9090", 30, "r1");
+    expect(inits.every((i) => i === undefined)).toBe(true);
+  });
 });

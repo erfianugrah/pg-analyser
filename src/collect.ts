@@ -18,6 +18,7 @@ export async function collect(
   version: string,
   opts: {
     prometheusUrl?: string;
+    prometheusToken?: string;
     interval?: string;
     sqlRunner?: SqlRunner;
     syncCheck?: boolean;
@@ -145,8 +146,11 @@ export async function collect(
   // the history store keeps everything so any metric is trendable / analyzable
   // later. Nothing is dropped at collection.
   const samples = metricsText ? parsePrometheus(metricsText).map((s) => MetricSample.parse(s)) : [];
+  // Token for an auth'd datasource (Grafana proxy / auth'd Prometheus or Victoria
+  // Metrics). Flag-provided (opts) wins; else SBPERF_PROMETHEUS_TOKEN from env.
+  const promToken = opts.prometheusToken ?? process.env.SBPERF_PROMETHEUS_TOKEN;
   const trends = opts.prometheusUrl
-    ? await safe("trends", () => fetchTrends(opts.prometheusUrl as string, 30, ref), [])
+    ? await safe("trends", () => fetchTrends(opts.prometheusUrl as string, 30, ref, promToken), [])
     : [];
 
   // Per-function invocation stats depend on the functions list (need each id),

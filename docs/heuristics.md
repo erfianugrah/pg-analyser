@@ -203,9 +203,16 @@ war story; dev.to 2B-XID war story; AWS XID-wraparound blog.
 | `cpu_saturated` | `node_cpu_seconds_total` derived util (needs >=2 snapshots) | sustained >= 80% | med | PARTIAL (trend) |
 | `load_high` | `node_load1/5/15` vs vCPU count | load1 > vCPUs | med | NEW |
 | `mem_pressure` | `node_memory_MemAvailable_bytes / MemTotal` | avail < ~10% | med | NEW |
-| `swap_active` | swap in use (1GB swap per project) | swap used >= 20% | med | HAVE |
+| `mem_pressure_paging` | sustained `node_vmstat_pgmajfault` / `pswpin` rate (needs >=2 snapshots / a Prometheus) | major faults >= 20/s OR swap-in >= 2 pages/s | med | HAVE (trend) |
 
 Notes:
+- **No swap-OCCUPANCY finding (deliberate).** Swap is tiny (~1GB) and the kernel
+  parks cold anon pages there, so a full-but-idle swap is normal/healthy. The
+  real memory-pressure signal is the RATE - a sustained swap-IN or major-fault
+  rate means the working set is spilling out of RAM to disk. That is
+  `mem_pressure_paging`, and it needs time series - both a MemAvailable snapshot
+  and the coarse project status can read healthy while a small instance pages
+  its working set to disk.
 - Compute sizes Nano..2XL can BURST CPU; Large and above have predictable (no
   burst) performance. High mem -> swapping -> disk I/O (each project has 1GB
   swap). Cache-as-memory is healthy; swap is not.
