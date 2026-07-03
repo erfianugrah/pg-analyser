@@ -77,6 +77,20 @@ type GaugeDef = {
 const GAUGES: GaugeDef[] = [
   { title: "DB connections", unit: "", name: "pg_stat_database_num_backends", agg: "sum" },
   { title: "Database size", unit: "bytes", name: "pg_database_size_bytes", agg: "sum" },
+  // EBS burst balance (%): a gauge; AWS gp2/gp3 throttle when credits deplete.
+  // Present only when a CloudWatch-scraping source feeds the store; absent -> omitted.
+  {
+    title: "EBS IOPS balance (%)",
+    unit: "%",
+    name: "aws_ec2_ebsiobalance_percent_minimum",
+    agg: "avg",
+  },
+  {
+    title: "EBS throughput balance (%)",
+    unit: "%",
+    name: "aws_ec2_ebsbyte_balance_percent_minimum",
+    agg: "avg",
+  },
 ];
 
 function gaugeSeries(snaps: SnapshotForTrends[], def: GaugeDef): TrendSeries | null {
@@ -132,6 +146,29 @@ const RATES: RateDef[] = [
   // Memory-pressure evidence (rate; a snapshot of MemAvailable can't see it).
   { title: "Major page faults/s", unit: "", name: "node_vmstat_pgmajfault" },
   { title: "Swap-in pages/s", unit: "", name: "node_vmstat_pswpin" },
+  // OOM killer events (rate; any nonzero = memory was exhausted and a process
+  // was killed - a stronger signal than a high memory %).
+  { title: "OOM kills/s", unit: "", name: "node_vmstat_oom_kill" },
+  // PSI stall %: rate of the *_waiting_seconds_total counter is a fraction of
+  // time (0-1); scale to a percent. Same titles as the Prometheus panels.
+  {
+    title: "CPU stall (PSI %)",
+    unit: "%",
+    name: "node_pressure_cpu_waiting_seconds_total",
+    scale: 100,
+  },
+  {
+    title: "Memory stall (PSI %)",
+    unit: "%",
+    name: "node_pressure_memory_waiting_seconds_total",
+    scale: 100,
+  },
+  {
+    title: "I/O stall (PSI %)",
+    unit: "%",
+    name: "node_pressure_io_waiting_seconds_total",
+    scale: 100,
+  },
 ];
 
 function rateSeries(snaps: SnapshotForTrends[], def: RateDef): TrendSeries | null {

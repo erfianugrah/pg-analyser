@@ -73,7 +73,8 @@ describe("fetchTrends ref scoping", () => {
     expect(cap.urls.every((u) => u.startsWith("http://prom:9090/api/v1/query_range?"))).toBe(true);
   });
 
-  test("a token is sent as a Bearer Authorization header (Grafana proxy / auth'd DS)", async () => {
+  /** Capture the RequestInit of every fetch the range loop makes. */
+  function captureInits(): (RequestInit | undefined)[] {
     const inits: (RequestInit | undefined)[] = [];
     globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
       inits.push(init);
@@ -82,10 +83,57 @@ describe("fetchTrends ref scoping", () => {
         headers: { "content-type": "application/json" },
       });
     }) as typeof fetch;
-    await fetchTrends("https://grafana/api/datasources/proxy/uid/abc", 30, "r1", "secret-tok");
+    return inits;
+  }
+
+  test("a token is sent as a Bearer Authorization header (Grafana proxy / auth'd DS)", async () => {
+    const inits = captureInits();
+    await fetchTrends("https://grafana/api/datasources/proxy/uid/abc", 30, "r1", {
+      token: "secret-tok",
+    });
     expect(inits.length).toBeGreaterThan(0);
     for (const init of inits) {
-      expect((init?.headers as Record<string, string>)?.Authorization).toBe("Bearer secret-tok");
+      const h = init?.headers as Record<string, string>;
+      expect(h?.Authorization).toBe("Bearer secret-tok");
+      expect(h?.Cookie).toBeUndefined();
+    }
+  });
+
+  test("a cookie is sent as a Cookie header (SSO-fronted Grafana)", async () => {
+    const inits = captureInits();
+    await fetchTrends("https://grafana/api/datasources/proxy/uid/abc", 30, "r1", {
+      cookie: "grafana_session=xyz",
+    });
+    expect(inits.length).toBeGreaterThan(0);
+    for (const init of inits) {
+      const h = init?.headers as Record<string, string>;
+      expect(h?.Cookie).toBe("grafana_session=xyz");
+      expect(h?.Authorization).toBeUndefined();
+    }
+  });
+
+  test("token wins when both token and cookie are set", async () => {
+    const inits = captureInits();
+    await fetchTrends("https://grafana", 30, "r1", {
+      token: "tok",
+      cookie: "grafana_session=xyz",
+    });
+    for (const init of inits) {
+      const h = init?.headers as Record<string, string>;
+      expect(h?.Authorization).toBe("Bearer tok");
+      expect(h?.Cookie).toBeUndefined();
+    }
+  });
+
+  test("a matcher template overrides the default project label", async () => {
+    const cap = captureQueries();
+    // synthetic template - the {ref} placeholder is substituted with the ref
+    await fetchTrends("http://prom:9090", 30, "abcref", { matcher: 'node_name="host-{ref}"' });
+    const queries = decodedQueries(cap.urls);
+    expect(queries.length).toBeGreaterThan(0);
+    for (const q of queries) {
+      expect(q).toContain('node_name="host-abcref"');
+      expect(q).not.toContain("supabase_project_ref");
     }
   });
 

@@ -54,6 +54,13 @@ export const THRESHOLDS = {
   /** Sustained swap-in pages/s: the box is actively paging anon memory back
    * from swap - real memory pressure, not benign cold-page parking. */
   swapInPagesPerSec: 2,
+  /** Sustained PSI stall % (Linux /proc/pressure; fraction of time tasks waited
+   * on a resource, from >=2 snapshots / a Prometheus). A truer saturation
+   * signal than a utilization snapshot - work can stall while idle% looks fine. */
+  psiStallPct: 20,
+  /** EBS burst-balance % at/below which AWS gp2/gp3 throttling is imminent
+   * (I/O or throughput credit depletion - a latency cliff in-guest metrics miss). */
+  ebsBalancePct: 20,
   /** Cumulative deadlocks (since stats reset) worth surfacing point-in-time. */
   deadlockMin: 5,
   /** Sustained temp-file spill rate (bytes/s, from >=2 snapshots) worth flagging. */
@@ -312,6 +319,42 @@ export const HEURISTICS: Record<string, Heuristic> = {
       "Sustained major page faults / swap-in mean the working set no longer fits in RAM, so the OS and Postgres keep reading pages back from disk. That is real query latency and disk I/O the instance cannot see as 'memory' - and a point-in-time MemAvailable reading can look perfectly healthy while it is happening (a swap-occupancy snapshot is NOT a reliable signal; the RATE over time is).",
     remediation:
       "Give the working set more RAM: bump the compute tier (the most direct fix on a small instance), or cut memory demand - lower work_mem / max_connections, shrink the hot set, add indexes so scans touch fewer pages. Occupancy alone is not the trigger; a sustained swap-IN or major-fault rate is.",
+    docUrl: "https://supabase.com/docs/guides/platform/compute-and-disk",
+    reviewed: R,
+  },
+  psi_saturation: {
+    id: "psi_saturation",
+    plane: "Compute",
+    howToVerify:
+      "After sizing up / reducing load, re-check the PSI stall % (node_pressure_{cpu,memory,io}_waiting_seconds_total rate) over a window - sustained stall should fall well below the threshold.",
+    whyItMatters:
+      "Pressure Stall Information is the fraction of time runnable tasks were stalled waiting for CPU, memory, or I/O. Unlike a utilization snapshot (idle% / MemAvailable can read healthy at the instant you look), sustained PSI is direct evidence that work is queueing behind a saturated resource - i.e. real, ongoing latency.",
+    remediation:
+      "Identify the stalled resource (CPU / memory / I/O) and relieve it: size up the compute tier, cut concurrency (max_connections / work_mem), or reduce I/O via indexing + cache hit. PSI names the bottleneck so you size the right axis instead of over-provisioning everything.",
+    docUrl: "https://supabase.com/docs/guides/platform/compute-and-disk",
+    reviewed: R,
+  },
+  oom_kill: {
+    id: "oom_kill",
+    plane: "Compute",
+    howToVerify:
+      "After adding RAM / cutting memory demand, confirm node_vmstat_oom_kill stops incrementing over a window (rate returns to 0).",
+    whyItMatters:
+      "The kernel OOM killer only fires when memory is genuinely exhausted - it terminates a process (often a Postgres backend) to survive. That is a far stronger signal than a high memory %: it means requests were killed, connections dropped, and possibly a crash-recovery cycle. Even a single event over the window is worth acting on.",
+    remediation:
+      "Give the instance more memory headroom: bump the compute tier, and/or cut demand - lower work_mem and max_connections, shrink the hot working set, add indexes so scans touch fewer pages. Recurrent OOM kills almost always mean the tier is undersized for the workload.",
+    docUrl: "https://supabase.com/docs/guides/platform/compute-and-disk",
+    reviewed: R,
+  },
+  ebs_balance_low: {
+    id: "ebs_balance_low",
+    plane: "Storage",
+    howToVerify:
+      "After provisioning steady IOPS/throughput (or reducing burst demand), confirm the EBS balance % (aws_ec2_ebsiobalance_percent_minimum / aws_ec2_ebsbyte_balance_percent_minimum) climbs back toward 100 and stops depleting.",
+    whyItMatters:
+      "AWS gp2/gp3 volumes serve burst I/O from a credit balance. When the balance depletes, throughput and IOPS are throttled HARD to the baseline - a sudden latency cliff that in-guest disk metrics cannot explain (the disk isn't full or busy by its own numbers; the cloud is throttling it). A depleting balance is an early warning before the cliff hits.",
+    remediation:
+      "Provision baseline IOPS/throughput to cover sustained demand (gp3 lets you buy IOPS/throughput independently of size), or reduce burst I/O via indexing, cache hit, and batching. Sizing to the sustained rate stops the credit balance from draining.",
     docUrl: "https://supabase.com/docs/guides/platform/compute-and-disk",
     reviewed: R,
   },

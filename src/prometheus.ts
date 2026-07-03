@@ -69,6 +69,40 @@ function buildPanels(refMatcher: string): Array<{ title: string; unit: string; q
     // working set doesn't fit RAM (invisible to a MemAvailable snapshot).
     { title: "Major page faults/s", unit: "", query: `sum(${rate5("node_vmstat_pgmajfault")})` },
     { title: "Swap-in pages/s", unit: "", query: `sum(${rate5("node_vmstat_pswpin")})` },
+    // PSI (Linux /proc/pressure): fraction of time tasks stalled waiting on a
+    // resource, as a %. The truest saturation signal - a CPU-idle or
+    // MemAvailable snapshot can read healthy while work is stalling.
+    {
+      title: "CPU stall (PSI %)",
+      unit: "%",
+      query: `avg(${rate5("node_pressure_cpu_waiting_seconds_total")}) * 100`,
+    },
+    {
+      title: "Memory stall (PSI %)",
+      unit: "%",
+      query: `avg(${rate5("node_pressure_memory_waiting_seconds_total")}) * 100`,
+    },
+    {
+      title: "I/O stall (PSI %)",
+      unit: "%",
+      query: `avg(${rate5("node_pressure_io_waiting_seconds_total")}) * 100`,
+    },
+    // OOM killer firing means memory was genuinely exhausted (a far stronger
+    // signal than a high memory %); any nonzero rate = kills happened.
+    { title: "OOM kills/s", unit: "", query: `sum(${rate5("node_vmstat_oom_kill")})` },
+    // EBS burst balance (%): AWS gp2/gp3 throttle HARD when I/O or throughput
+    // credits deplete - a latency cliff invisible to in-guest metrics. Lower =
+    // worse; min() picks the worst instance.
+    {
+      title: "EBS IOPS balance (%)",
+      unit: "%",
+      query: `min(${sel("aws_ec2_ebsiobalance_percent_minimum")})`,
+    },
+    {
+      title: "EBS throughput balance (%)",
+      unit: "%",
+      query: `min(${sel("aws_ec2_ebsbyte_balance_percent_minimum")})`,
+    },
   ];
 }
 
@@ -88,19 +122,30 @@ export async function fetchTrends(
   baseUrl: string,
   days = 30,
   ref?: string,
-  token?: string,
+  opts: { token?: string; cookie?: string; matcher?: string } = {},
 ): Promise<TrendSeries[]> {
   const end = Math.floor(Date.now() / 1000);
   const start = end - days * 86400;
   const step = Math.max(300, Math.floor((end - start) / 200)); // ~200 points max
   const base = baseUrl.replace(/\/+$/, "");
-  const panels = buildPanels(ref ? `supabase_project_ref="${ref}"` : "");
-  // A bearer token lets us query a corporate datasource through Grafana's
-  // datasource proxy (/api/datasources/proxy/uid/<uid>) or any auth'd
-  // Prometheus/Prometheus endpoint - no direct datasource access needed.
-  const init: RequestInit | undefined = token
-    ? { headers: { Authorization: `Bearer ${token}` } }
-    : undefined;
+  // Project matcher template. Default = the self-scrape schema
+  // (`supabase_project_ref="<ref>"`, one label per project). A scraper that
+  // relabels series under a different project-identifying label overrides via
+  // `matcher` (--prometheus-matcher / SBPERF_PROMETHEUS_MATCHER); "{ref}" is
+  // substituted with the project ref. No ref -> unscoped (single-project scraper).
+  const template = opts.matcher ?? 'supabase_project_ref="{ref}"';
+  const refMatcher = ref ? template.replaceAll("{ref}", ref) : "";
+  const panels = buildPanels(refMatcher);
+  // Auth for a datasource fronted by Grafana. A service-account bearer TOKEN is
+  // the documented path (Grafana proxy /api/datasources/proxy/uid/<uid>, or any
+  // auth'd Prometheus/Prometheus). When Grafana sits behind an SSO /
+  // SSO proxy that a token can't traverse, the browser session COOKIE (the
+  // same auth the dashboard uses) is the only header that gets through. Token
+  // wins if both are set. No auth -> no header (backward compatible).
+  const headers: Record<string, string> = {};
+  if (opts.token) headers.Authorization = `Bearer ${opts.token}`;
+  else if (opts.cookie) headers.Cookie = opts.cookie;
+  const init: RequestInit | undefined = Object.keys(headers).length > 0 ? { headers } : undefined;
 
   const out: TrendSeries[] = [];
   for (const panel of panels) {

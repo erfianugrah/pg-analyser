@@ -204,6 +204,8 @@ war story; dev.to 2B-XID war story; AWS XID-wraparound blog.
 | `load_high` | `node_load1/5/15` vs vCPU count | load1 > vCPUs | med | NEW |
 | `mem_pressure` | `node_memory_MemAvailable_bytes / MemTotal` | avail < ~10% | med | NEW |
 | `mem_pressure_paging` | sustained `node_vmstat_pgmajfault` / `pswpin` rate (needs >=2 snapshots / a Prometheus) | major faults >= 20/s OR swap-in >= 2 pages/s | med | HAVE (trend) |
+| `psi_saturation` | sustained `node_pressure_{cpu,memory,io}_waiting_seconds_total` rate as a stall % (needs >=2 snapshots / a Prometheus) | sustained stall >= 20% on any resource | med | HAVE (trend) |
+| `oom_kill` | `node_vmstat_oom_kill` rate | any nonzero over the window | high | HAVE (trend) |
 
 Notes:
 - **No swap-OCCUPANCY finding (deliberate).** Swap is tiny (~1GB) and the kernel
@@ -232,6 +234,7 @@ Sources: Supabase Compute & Disk docs; Supabase High Disk I/O docs.
 | `disk_iops_high` | derived read+write IOPS / provisioned | >= 80% | med | HAVE (trend) |
 | `disk_throughput_high` | derived MB/s / provisioned | >= 80% | med | NEW (trend) |
 | `disk_io_budget_depleted` | small instance bursting then throttled to baseline | sustained at baseline under load | med | NEW |
+| `ebs_balance_low` | `aws_ec2_ebsiobalance_percent_minimum` / `aws_ec2_ebsbyte_balance_percent_minimum` (CloudWatch-backed source only) | worst point <= 20% | high | HAVE (trend) |
 | `wal_retained_inactive_slot` | inactive replication slot retaining WAL | any | high | HAVE |
 | `wal_slot_lag` | active slot retained WAL | >= 1GB | med | HAVE |
 
