@@ -158,6 +158,30 @@ describe("render", () => {
     expect(render(fixture())).not.toContain("Heuristics sync:");
   });
 
+  test("default report carries Supabase branding (favicon + logo + green accent)", () => {
+    const html = render(fixture());
+    expect(html).toContain("data:image/svg+xml,");
+    expect(html).toContain("class=brandhead");
+    expect(html).toContain("--accent:#3ECF8E");
+    expect(html).not.toContain("#3056d3"); // old hardcoded blue gone
+  });
+
+  test("a custom brand overrides accent + logo (white-label)", () => {
+    const html = render(fixture(), {
+      brand: {
+        name: "Acme",
+        accent: "#ff00aa",
+        ink: "#880055",
+        logoSvg: "<svg id=acmelogo></svg>",
+        faviconSvg: "<svg id=acmelogo></svg>",
+      },
+    });
+    expect(html).toContain("--accent:#ff00aa");
+    expect(html).toContain("--link:#880055");
+    expect(html).toContain("<svg id=acmelogo></svg>");
+    expect(html).not.toContain("#3ECF8E");
+  });
+
   test("narrative embeds only with the flag AND when present", () => {
     const withNar = fixture({ narrative: "## Executive summary\nLooks fine." });
     expect(render(withNar)).not.toContain("Executive summary"); // no flag -> not embedded

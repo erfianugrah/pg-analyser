@@ -2,6 +2,7 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import pkg from "../package.json" with { type: "json" };
+import { type Brand, DEFAULT_BRAND, loadBrand } from "./brand.ts";
 import { collect } from "./collect.ts";
 import { ConfigError, loadConfig } from "./config.ts";
 import { type DbTarget, parseDbConfig, type RawEntry, resolveTargets } from "./dbtargets.ts";
@@ -26,6 +27,10 @@ import { makeTransport } from "./transport.ts";
 import { computeTrends } from "./trends.ts";
 
 const VERSION = pkg.version;
+
+// Report branding, resolved once at startup (Supabase default; --brand /
+// SBPERF_BRAND / ./sbperf.brand.json override). Read by the render call sites.
+let activeBrand: Brand = DEFAULT_BRAND;
 
 function usage(code = 1): never {
   console.log(`sbperf ${VERSION} - Supabase performance analysis
@@ -57,6 +62,8 @@ Flags:
   --prometheus <url>   trends from a scraper's Prometheus instead of the history store
   --no-sync-check      skip the on-by-default upstream sync check (offline runs)
   --narrative          report/pdf: embed the LLM narrative (run 'narrate' first)
+  --brand <file>       white-label branding JSON (default: Supabase; or SBPERF_BRAND
+                       / ./sbperf.brand.json)
   -h, --help           show this help
   -v, --version        print version
 
@@ -88,6 +95,7 @@ type Flags = {
   dbConfig?: string;
   noSyncCheck?: boolean;
   narrative?: boolean;
+  brand?: string;
 };
 
 /** Analytics-endpoint timeframe enum (verified live 2026-07; iso ranges are clamped). */
@@ -107,6 +115,7 @@ function parseFlags(argv: string[]): Flags {
     else if (a === "--interval") out.interval = argv[++i];
     else if (a === "--db-url") out.dbUrls.push(argv[++i]!);
     else if (a === "--db-config") out.dbConfig = argv[++i];
+    else if (a === "--brand") out.brand = argv[++i];
     else if (a === "--all") out.all = true;
     else if (a === "--no-sync-check") out.noSyncCheck = true;
     else if (a === "--narrative") out.narrative = true;
@@ -123,8 +132,8 @@ async function emitReport(
 ): Promise<{ high: number; med: number; low: number }> {
   await mkdir(dir, { recursive: true });
   await Bun.write(join(dir, "analysis.json"), JSON.stringify(analysis, null, 2));
-  const html = render(analysis);
-  const summaryHtml = renderSummary(analysis);
+  const html = render(analysis, { brand: activeBrand });
+  const summaryHtml = renderSummary(analysis, activeBrand);
   await Bun.write(join(dir, "report.html"), html);
   await Bun.write(join(dir, "summary.html"), summaryHtml);
   await htmlToPdf(html, join(dir, "report.pdf"));
@@ -190,7 +199,10 @@ async function doAllDbs(
     }
   }
   await mkdir(outBase, { recursive: true });
-  await Bun.write(join(outBase, "index.html"), renderIndex(rows, new Date().toISOString()));
+  await Bun.write(
+    join(outBase, "index.html"),
+    renderIndex(rows, new Date().toISOString(), activeBrand),
+  );
   console.error(`> index: ${join(outBase, "index.html")}`);
 }
 
@@ -237,7 +249,10 @@ async function doAll(
     }
   }
   await mkdir(outBase, { recursive: true });
-  await Bun.write(join(outBase, "index.html"), renderIndex(rows, new Date().toISOString()));
+  await Bun.write(
+    join(outBase, "index.html"),
+    renderIndex(rows, new Date().toISOString(), activeBrand),
+  );
   console.error(`> index: ${join(outBase, "index.html")}`);
 }
 
@@ -404,9 +419,9 @@ async function doReport(dir: string, storePath?: string, narrative?: boolean): P
   if (narrative && !analysis.narrative)
     console.error("> --narrative given but analysis.json has none; run 'sbperf narrate' first");
   const htmlPath = join(dir, "report.html");
-  await Bun.write(htmlPath, render(analysis, { narrative }));
+  await Bun.write(htmlPath, render(analysis, { narrative, brand: activeBrand }));
   const summaryPath = join(dir, "summary.html");
-  await Bun.write(summaryPath, renderSummary(analysis));
+  await Bun.write(summaryPath, renderSummary(analysis, activeBrand));
   console.error(`> ${htmlPath}`);
   console.error(`> ${summaryPath}`);
   return htmlPath;
@@ -415,7 +430,7 @@ async function doReport(dir: string, storePath?: string, narrative?: boolean): P
 async function doSummary(dir: string): Promise<string> {
   const analysis = await loadAnalysis(dir);
   const path = join(dir, "summary.html");
-  await Bun.write(path, renderSummary(analysis));
+  await Bun.write(path, renderSummary(analysis, activeBrand));
   console.error(`> ${path}`);
   return path;
 }
@@ -423,10 +438,10 @@ async function doSummary(dir: string): Promise<string> {
 async function doPdf(dir: string, narrative?: boolean): Promise<string> {
   const analysis = await loadAnalysis(dir);
   const pdfPath = join(dir, "report.pdf");
-  await htmlToPdf(render(analysis, { narrative }), pdfPath);
+  await htmlToPdf(render(analysis, { narrative, brand: activeBrand }), pdfPath);
   console.error(`> ${pdfPath}`);
   const summaryPdf = join(dir, "summary.pdf");
-  await htmlToPdf(renderSummary(analysis), summaryPdf);
+  await htmlToPdf(renderSummary(analysis, activeBrand), summaryPdf);
   console.error(`> ${summaryPdf}`);
   return pdfPath;
 }
@@ -470,7 +485,7 @@ async function doNarrate(dir: string): Promise<string> {
   await Bun.write(join(dir, "analysis.json"), JSON.stringify(analysis, null, 2));
   const path = join(dir, "narrative.md");
   await Bun.write(path, md);
-  await Bun.write(join(dir, "narrative.html"), renderNarrativePage(analysis));
+  await Bun.write(join(dir, "narrative.html"), renderNarrativePage(analysis, activeBrand));
   console.error(`> ${path}`);
   console.error(`> ${join(dir, "narrative.html")}`);
   console.error("> embed in the report with: sbperf report " + dir + " --narrative");
@@ -490,6 +505,7 @@ async function main(): Promise<void> {
     console.error(`error: --interval must be one of ${INTERVALS.join(" | ")}`);
     process.exit(1);
   }
+  activeBrand = await loadBrand({ file: flags.brand });
 
   try {
     // Resolve superuser DB targets: repeatable --db-url / --db-config / SBPERF_DB_URL.

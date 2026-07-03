@@ -93,6 +93,12 @@ src/
                  renderNarrativePage(a) is the standalone narrative.html.
   report/markdown minimal, HTML-escaping Markdown->HTML for the narrate subset
                  (headings/lists/bold/code/fenced/links); NOT a general parser
+  brand.ts       report branding: Supabase default (official mark + green) +
+                 loadBrand precedence (--brand > SBPERF_BRAND > ./sbperf.brand.json
+                 > default); partial-override merge, logoPath/faviconPath inlined.
+                 render(a,{brand}) / renderSummary/Index/NarrativePage(...,brand)
+                 apply the favicon, header logo, and --accent/--link colours.
+                 sbperf.brand.json is gitignored (keep the .example).
   report/pdf     HTML -> PDF via headless Chromium --print-to-pdf (no Playwright
                  dep; system Chrome discovered on PATH or SBPERF_CHROME)
   narrate.ts     LLM pass over the corpus + enriched findings -> narrative.md.
