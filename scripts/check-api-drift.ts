@@ -37,6 +37,7 @@ const warn = (msg: string): void => console.error(IN_GHA ? `::warning::${msg}` :
 /** Single source of truth: (method, path) pairs sbperf calls in management.ts. */
 const ENDPOINTS: ReadonlyArray<{ method: string; path: string; used: string }> = [
   { method: "get", path: "/v1/projects", used: "org-wide project iteration (--all)" },
+  { method: "get", path: "/v1/organizations", used: "org grouping for --all output" },
   { method: "get", path: "/v1/projects/{ref}", used: "project meta (required)" },
   { method: "get", path: "/v1/projects/{ref}/health", used: "service health" },
   { method: "get", path: "/v1/projects/{ref}/config/disk", used: "disk spec" },

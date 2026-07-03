@@ -14,9 +14,11 @@ import { backfillInstructions, toOpenMetrics } from "./promexport.ts";
 import { htmlToPdf } from "./report/pdf.ts";
 import {
   type IndexRow,
+  type OrgRow,
   render,
   renderIndex,
   renderNarrativePage,
+  renderOrgIndex,
   renderSummary,
 } from "./report/render.ts";
 import type { Analysis } from "./schemas.ts";
@@ -218,42 +220,113 @@ async function doAll(
   let projects = await m.projects();
   if (orgFilter) projects = projects.filter((p) => p.organization_id === orgFilter);
   if (!projects.length) throw new Error("no projects found");
-  console.error(`> auditing ${projects.length} projects via the Management API`);
 
-  const rows: IndexRow[] = [];
+  // Org metadata for grouping (best-effort: the PAT may lack org scope, in which
+  // case we group by organization_id and name the dir by that id).
+  const orgMeta = new Map<string, { name: string; slug: string }>();
+  try {
+    for (const o of await m.organizations())
+      orgMeta.set(o.id, { name: o.name, slug: o.slug ?? o.id });
+  } catch (err) {
+    console.error(
+      `> could not list organizations (${err instanceof Error ? err.message : err}); grouping by org id`,
+    );
+  }
+
+  // Group projects by org.
+  const groups = new Map<string, typeof projects>();
   for (const p of projects) {
-    const dir = join(outBase, p.id);
-    process.stderr.write(`  - ${p.name} (${p.id}) `);
-    try {
-      const analysis = await collect(p.id, transport, VERSION, {
-        prometheusUrl,
-        interval,
-        syncCheck,
-      });
-      const counts = await emitReport(analysis, dir);
-      rows.push({ name: p.name, ref: p.id, status: p.status, ...counts, dir: p.id });
-      console.error(`ok (${counts.high + counts.med + counts.low} findings)`);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      rows.push({
-        name: p.name,
-        ref: p.id,
-        status: p.status,
-        high: 0,
-        med: 0,
-        low: 0,
-        dir: p.id,
-        error: msg,
-      });
-      console.error(`FAILED: ${msg}`);
+    const key = p.organization_id ?? "ungrouped";
+    const g = groups.get(key);
+    if (g) g.push(p);
+    else groups.set(key, [p]);
+  }
+  const date = new Date().toISOString().slice(0, 10);
+  console.error(
+    `> auditing ${projects.length} project${projects.length === 1 ? "" : "s"} across ${groups.size} org${groups.size === 1 ? "" : "s"}`,
+  );
+
+  const usedOrgDirs = new Set<string>();
+  const orgRows: OrgRow[] = [];
+  for (const [orgId, orgProjects] of groups) {
+    const meta = orgMeta.get(orgId);
+    const orgName = meta?.name ?? (orgId === "ungrouped" ? "Ungrouped" : orgId);
+    // Prefer the readable org NAME for the dir (the API slug is often the id).
+    let orgDir = slugify(orgName) || slugify(meta?.slug ?? "") || orgId;
+    while (usedOrgDirs.has(orgDir)) orgDir = `${orgDir}-${orgId.slice(0, 6)}`;
+    usedOrgDirs.add(orgDir);
+
+    const rows: IndexRow[] = [];
+    let high = 0;
+    let med = 0;
+    let low = 0;
+    let errors = 0;
+    const usedProjDirs = new Set<string>();
+    for (const p of orgProjects) {
+      // project dir: <name>-<date>, deduped with the ref if names collide.
+      let projDir = `${slugify(p.name) || p.id}-${date}`;
+      while (usedProjDirs.has(projDir))
+        projDir = `${slugify(p.name) || p.id}-${p.id.slice(0, 6)}-${date}`;
+      usedProjDirs.add(projDir);
+      process.stderr.write(`  - [${orgName}] ${p.name} (${p.id}) `);
+      try {
+        const analysis = await collect(p.id, transport, VERSION, {
+          prometheusUrl,
+          interval,
+          syncCheck,
+        });
+        const counts = await emitReport(analysis, join(outBase, orgDir, projDir));
+        rows.push({ name: p.name, ref: p.id, status: p.status, ...counts, dir: projDir });
+        high += counts.high;
+        med += counts.med;
+        low += counts.low;
+        console.error(`ok (${counts.high + counts.med + counts.low} findings)`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        errors++;
+        rows.push({
+          name: p.name,
+          ref: p.id,
+          status: p.status,
+          high: 0,
+          med: 0,
+          low: 0,
+          dir: projDir,
+          error: msg,
+        });
+        console.error(`FAILED: ${msg}`);
+      }
     }
+    await mkdir(join(outBase, orgDir), { recursive: true });
+    await Bun.write(
+      join(outBase, orgDir, "index.html"),
+      renderIndex(rows, new Date().toISOString(), activeBrand),
+    );
+    orgRows.push({
+      name: orgName,
+      dir: orgDir,
+      projects: orgProjects.length,
+      high,
+      med,
+      low,
+      errors,
+    });
   }
   await mkdir(outBase, { recursive: true });
   await Bun.write(
     join(outBase, "index.html"),
-    renderIndex(rows, new Date().toISOString(), activeBrand),
+    renderOrgIndex(orgRows, new Date().toISOString(), activeBrand),
   );
   console.error(`> index: ${join(outBase, "index.html")}`);
+}
+
+/** Slug for a filesystem dir: lowercase, alnum + dashes, collapsed. */
+function slugify(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
 }
 
 /** Load config and print a one-line notice when the CLI token is the source. */
