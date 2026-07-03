@@ -20,6 +20,19 @@ jobs:
       - run: bun run typecheck
       - run: bun test
 
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      # Verify the standalone binary compiles and runs (the release matrix
+      # cross-compiles the same entrypoint; catch breakage before a tag).
+      - run: bun build ./src/index.ts --compile --outfile sbperf
+      - run: ./sbperf --version
+
   api-drift:
     runs-on: ubuntu-latest
     steps:
