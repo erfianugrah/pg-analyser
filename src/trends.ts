@@ -129,6 +129,9 @@ const RATES: RateDef[] = [
   { title: "Network TX (bytes/s)", unit: "bytes", name: "node_network_transmit_bytes_total" },
   { title: "Temp file bytes/s", unit: "bytes", name: "pg_stat_database_temp_bytes_total" },
   { title: "Deadlocks/s", unit: "", name: "pg_stat_database_deadlocks_total" },
+  // Memory-pressure evidence (rate; a snapshot of MemAvailable can't see it).
+  { title: "Major page faults/s", unit: "", name: "node_vmstat_pgmajfault" },
+  { title: "Swap-in pages/s", unit: "", name: "node_vmstat_pswpin" },
 ];
 
 function rateSeries(snaps: SnapshotForTrends[], def: RateDef): TrendSeries | null {

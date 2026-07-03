@@ -47,6 +47,13 @@ export const THRESHOLDS = {
   fnClientErrFrac: 0.2,
   /** Memory available / total below this = pressure. */
   memAvailFrac: 0.1,
+  /** Sustained major page faults/s (from >=2 snapshots): working set spilling
+   * out of RAM to disk. A MemAvailable snapshot can look healthy while this
+   * happens, so this is a rate-only signal. */
+  majorFaultsPerSec: 20,
+  /** Sustained swap-in pages/s: the box is actively paging anon memory back
+   * from swap - real memory pressure, not benign cold-page parking. */
+  swapInPagesPerSec: 2,
   /** Cumulative deadlocks (since stats reset) worth surfacing point-in-time. */
   deadlockMin: 5,
   /** Sustained temp-file spill rate (bytes/s, from >=2 snapshots) worth flagging. */
@@ -294,6 +301,18 @@ export const HEURISTICS: Record<string, Heuristic> = {
     remediation:
       "Reclaim bloat (pg_repack), drop unused indexes, or expand the disk. Note cloud providers limit disk modifications to ~4 per rolling 24h.",
     docUrl: "https://supabase.com/docs/guides/platform/database-size",
+    reviewed: R,
+  },
+  mem_pressure_paging: {
+    id: "mem_pressure_paging",
+    plane: "Compute",
+    howToVerify:
+      "After sizing up, re-check the major-fault / swap-in rate (node_vmstat_pgmajfault, node_vmstat_pswpin) over a window - sustained paging should fall to ~0.",
+    whyItMatters:
+      "Sustained major page faults / swap-in mean the working set no longer fits in RAM, so the OS and Postgres keep reading pages back from disk. That is real query latency and disk I/O the instance cannot see as 'memory' - and a point-in-time MemAvailable reading can look perfectly healthy while it is happening (a swap-occupancy snapshot is NOT a reliable signal; the RATE over time is).",
+    remediation:
+      "Give the working set more RAM: bump the compute tier (the most direct fix on a small instance), or cut memory demand - lower work_mem / max_connections, shrink the hot set, add indexes so scans touch fewer pages. Occupancy alone is not the trigger; a sustained swap-IN or major-fault rate is.",
+    docUrl: "https://supabase.com/docs/guides/platform/compute-and-disk",
     reviewed: R,
   },
   disk_iops_high: {

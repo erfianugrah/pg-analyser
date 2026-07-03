@@ -353,6 +353,12 @@ export function deriveFindings(a: Analysis): Finding[] {
   }
   const latestTrend = (title: string) =>
     a.trends.find((t) => t.title === title)?.points.at(-1)?.v ?? 0;
+  // Mean over the trend window - a "sustained" signal, robust to a single-point
+  // lull/spike (unlike latestTrend, which is the last point only).
+  const avgTrend = (title: string) => {
+    const pts = a.trends.find((t) => t.title === title)?.points ?? [];
+    return pts.length ? pts.reduce((sum, p) => sum + p.v, 0) / pts.length : 0;
+  };
   const maxMetric = (name: string) =>
     a.metrics.samples.filter((s) => s.name === name).reduce((mx, s) => Math.max(mx, s.value), 0);
   const sumMetric = (name: string) =>
@@ -367,13 +373,26 @@ export function deriveFindings(a: Analysis): Finding[] {
       ...meta("pooler_clients_waiting"),
     });
   }
-  // NOTE: no swap-occupancy finding. A static swap-used fraction is a poor
-  // memory-pressure signal on Supabase: swap is tiny (~1GB) and the kernel
-  // parks cold anonymous pages there to keep more RAM for page cache, so a
-  // full-but-idle swap is normal/healthy. The real signals are low MemAvailable
-  // (memAvailFrac) and temp-file spill (work_mem_spill), both handled elsewhere.
-  // A rate-based swap-in check (>=2 snapshots) could return, but occupancy must
-  // not. Swap metrics stay in the corpus for display, just not as a finding.
+  // Memory pressure from sustained PAGING (rate; needs >=2 snapshots / a
+  // Prometheus). Deliberately NOT swap occupancy: swap is tiny (~1GB) and the
+  // kernel parks cold anon pages there, so a full-but-idle swap is normal. The
+  // real signal is a sustained swap-IN or major-fault RATE - the working set
+  // spilling out of RAM to disk - which a MemAvailable snapshot cannot see.
+  const majorFaults = avgTrend("Major page faults/s");
+  const swapIn = avgTrend("Swap-in pages/s");
+  if (majorFaults >= THRESHOLDS.majorFaultsPerSec || swapIn >= THRESHOLDS.swapInPagesPerSec) {
+    const bits: string[] = [];
+    if (majorFaults >= THRESHOLDS.majorFaultsPerSec)
+      bits.push(`${Math.round(majorFaults)} major faults/s`);
+    if (swapIn >= THRESHOLDS.swapInPagesPerSec) bits.push(`${Math.round(swapIn)} swap-ins/s`);
+    out.push({
+      severity: "med",
+      category: "Capacity",
+      title: `Memory pressure: working set paging to disk (${bits.join(", ")})`,
+      anchor: "#trends",
+      ...meta("mem_pressure_paging"),
+    });
+  }
   // Deadlocks (cumulative counter since stats reset). A rate from >=2 snapshots
   // is stronger, but a nonzero cumulative count is still worth a glance.
   const deadlocks = Math.round(sumMetric("pg_stat_database_deadlocks_total"));

@@ -426,4 +426,30 @@ describe("deriveFindings", () => {
       [...sev].sort((x, y) => ({ high: 0, med: 1, low: 2 })[x] - { high: 0, med: 1, low: 2 }[y]),
     );
   });
+
+  test("memory-pressure finding fires on sustained major-fault / swap-in rate", () => {
+    const pts = (v: number) => [
+      { t: 1, v },
+      { t: 2, v },
+      { t: 3, v },
+    ];
+    // below threshold -> no finding (avg 5 faults/s, 0 swap-in)
+    const calm = base();
+    calm.trends = [
+      { title: "Major page faults/s", unit: "", points: pts(5) },
+      { title: "Swap-in pages/s", unit: "", points: pts(0) },
+    ];
+    expect(deriveFindings(calm).some((f) => f.title.includes("Memory pressure"))).toBe(false);
+
+    // sustained above threshold -> med Capacity finding, names the rate
+    const hot = base();
+    hot.trends = [
+      { title: "Major page faults/s", unit: "", points: pts(34) },
+      { title: "Swap-in pages/s", unit: "", points: pts(7) },
+    ];
+    const f = deriveFindings(hot).find((x) => x.title.includes("Memory pressure"));
+    expect(f).toBeDefined();
+    expect(f?.severity).toBe("med");
+    expect(f?.title).toContain("major faults/s");
+  });
 });
