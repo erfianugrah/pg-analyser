@@ -115,6 +115,13 @@ src/
                  render(a,{brand}) / renderSummary/Index/NarrativePage(...,brand)
                  apply the favicon, header logo, and --accent/--link colours.
                  sbperf.brand.json is gitignored (keep the .example).
+  overlay.ts     ref-keyed review overlay (hide drill sections + append markdown
+                 notes), loaded with loadBrand-style precedence (--overlay >
+                 SBPERF_OVERLAY > ./sbperf.overlays/<ref>.json >
+                 ~/.sbperf/overlays/<ref>.json > empty) and merged at render
+                 time via the drill() choke-point. Presentation-only: never
+                 touches analysis.json or the narrate input. Hideable ids are
+                 the drill() section ids. Overlays gitignored (keep .example).
   report/pdf     HTML -> PDF via headless Chromium --print-to-pdf (no Playwright
                  dep; system Chrome discovered on PATH or SBPERF_CHROME)
   narrate.ts     LLM pass over the corpus + enriched findings -> narrative.md.

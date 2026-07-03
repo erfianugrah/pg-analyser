@@ -1,0 +1,7 @@
+{
+  "hide": ["outliers", "calls"],
+  "notes": {
+    "top": "Reviewed 2026-07-03. Query outlier sections omitted - this project's workload is entirely pg_cron scheduled jobs, not user-facing.",
+    "infra": "Provisioned at this tier deliberately for the nightly batch window."
+  }
+}
