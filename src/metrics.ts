@@ -72,6 +72,8 @@ const ALLOW = [
   "node_memory_MemTotal_bytes",
   "node_memory_MemAvailable_bytes",
   "node_memory_Active_bytes",
+  "node_memory_SwapTotal_bytes",
+  "node_memory_SwapFree_bytes",
   "node_filesystem_size_bytes",
   "node_filesystem_avail_bytes",
   // node_exporter - host COUNTERS (meaningless from one scrape, but rate-able

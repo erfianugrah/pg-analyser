@@ -208,6 +208,8 @@ export const Analysis = z.object({
     topByCalls: SqlRows,
     biggestTables: SqlRows,
     indexStats: SqlRows,
+    duplicateIndexes: SqlRows,
+    rlsUnindexed: SqlRows,
     seqScanHeavy: SqlRows,
     bloat: SqlRows,
     trafficProfile: SqlRows,

@@ -1,5 +1,28 @@
 # TODO
 
+## Shipped 2026-07-03 (new checks batch)
+- [x] duplicate-index check (SQL, splinter-derived) - fires over the read-only
+      endpoint even when the hosted advisor 400s and there is no --db-url
+- [x] RLS-column-unindexed check (SQL) - policy-compared columns with no covering
+      index (word-boundary match against real attributes; leading-index-col aware)
+- [x] swap-in-use finding (node_memory_Swap* gauge; >=20% used) + "Swap used"
+      trend series
+- [x] cumulative-deadlocks finding (pg_stat_database_deadlocks_total >=5) +
+      "Deadlocks/s" trend rate
+- [x] work_mem-spill finding (temp-file rate >=1MB/s from trends) + "Temp file
+      bytes/s" trend rate
+- [x] realtime postgres_changes nudge (subscriptions > 0 -> prefer Broadcast)
+- catalog entries + thresholds grounded in docs/heuristics.md; new findings unit-
+  tested. NB: duplicate_index / rls_col_unindexed derive from splinter, not the
+  CLI inspect set, so the inspect-drift baseline is unchanged (CLI-inspect-only).
+
+## Remaining
+- [ ] Positive-findings pass ("what's looking good")
+- [ ] Inline-SVG charts in the report (beyond the existing trend sparklines)
+- [ ] Professional print CSS polish
+- [ ] On-by-default soft-fail upstream sync check, annotated in the report
+- [ ] narrate command (LLM pass over corpus + enriched findings)
+
 ## Done
 - [x] PAT-only collector across Management API + read-only SQL + metrics
 - [x] zod schemas at every boundary (advisors `lints` shape caught + fixed)

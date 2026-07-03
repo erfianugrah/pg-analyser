@@ -43,6 +43,12 @@ export const THRESHOLDS = {
   fnClientErrFrac: 0.2,
   /** Memory available / total below this = pressure. */
   memAvailFrac: 0.1,
+  /** Swap used / total above this = memory pressure (each project has ~1GB swap). */
+  swapUsedFrac: 0.2,
+  /** Cumulative deadlocks (since stats reset) worth surfacing point-in-time. */
+  deadlockMin: 5,
+  /** Sustained temp-file spill rate (bytes/s, from >=2 snapshots) worth flagging. */
+  tempSpillBytesPerSec: 1_048_576,
   /** Realtime usage vs plan cap warning fraction. */
   realtimeNearFrac: 0.8,
   /** Realtime channels per connection cap. */
@@ -124,6 +130,22 @@ export const HEURISTICS: Record<string, Heuristic> = {
     remediation:
       "Confirm the index does not back an occasional feature, then DROP INDEX CONCURRENTLY IF EXISTS ... (no table lock). Each unused index is write overhead for zero read benefit.",
     docUrl: "https://supabase.com/docs/guides/database/database-advisors",
+    reviewed: R,
+  },
+  duplicate_index: {
+    id: "duplicate_index",
+    plane: "Query",
+    remediation:
+      "Two+ indexes have an identical definition on the same table - each copy is maintained on every write for zero read benefit. Keep one and DROP INDEX CONCURRENTLY IF EXISTS the rest (no table lock).",
+    docUrl: "https://supabase.com/docs/guides/database/database-linter?lint=0009_duplicate_index",
+    reviewed: R,
+  },
+  rls_col_unindexed: {
+    id: "rls_col_unindexed",
+    plane: "RLS",
+    remediation:
+      "A column compared in an RLS policy has no covering index, so each policy check seq-scans. Add a btree index on it: CREATE INDEX CONCURRENTLY ON <table> (<col>). Official test: 171ms -> <0.1ms once indexed.",
+    docUrl: "https://supabase.com/docs/guides/database/postgres/row-level-security#add-indexes",
     reviewed: R,
   },
 
@@ -264,6 +286,40 @@ export const HEURISTICS: Record<string, Heuristic> = {
     remediation:
       "Investigate the function logs for the 5xx cause. Track p95 latency > 1s and error rate > 1% as SLA triggers.",
     docUrl: "https://supabase.com/docs/guides/functions",
+    reviewed: R,
+  },
+
+  // --- Compute / memory (metrics-derived) ---
+  swap_active: {
+    id: "swap_active",
+    plane: "Compute",
+    remediation:
+      "Swap is in use - the instance is under memory pressure (each project has ~1GB swap, and swapping means disk I/O on the hot path). Check work_mem x connections, reduce memory-hungry queries, or upgrade compute. Cache-as-memory is healthy; swap is not.",
+    docUrl: "https://supabase.com/docs/guides/platform/compute-and-disk",
+    reviewed: R,
+  },
+  deadlocks: {
+    id: "deadlocks",
+    plane: "Query",
+    remediation:
+      "Deadlocks have occurred (pg_stat_database_deadlocks). Order writes consistently across transactions, keep transactions short, and take row locks in a fixed order. Investigate the involved statements in the logs.",
+    docUrl: "https://www.postgresql.org/docs/current/explicit-locking.html#LOCKING-DEADLOCKS",
+    reviewed: R,
+  },
+  work_mem_spill: {
+    id: "work_mem_spill",
+    plane: "Config",
+    remediation:
+      "Sorts/hash joins are spilling to disk (temp files). Raise work_mem (per-role or per-session for the offending queries), or reduce the sort/hash volume with better indexing. Watch total = max_connections x work_mem so you don't OOM.",
+    docUrl: "https://www.postgresql.org/docs/current/runtime-config-resource.html",
+    reviewed: R,
+  },
+  realtime_postgres_changes: {
+    id: "realtime_postgres_changes",
+    plane: "Realtime",
+    remediation:
+      "postgres_changes has active subscriptions. It acquires a logical replication slot and polls it (appending subscription IDs per WAL record) and does not scale as well as Broadcast. For scale/security, migrate to realtime.broadcast_changes() triggers.",
+    docUrl: "https://supabase.com/docs/guides/realtime/subscribing-to-database-changes",
     reviewed: R,
   },
 

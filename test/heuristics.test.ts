@@ -37,6 +37,8 @@ function base(): Analysis {
       topByCalls: [],
       biggestTables: [],
       indexStats: [],
+      duplicateIndexes: [],
+      rlsUnindexed: [],
       seqScanHeavy: [],
       bloat: [],
       trafficProfile: [],

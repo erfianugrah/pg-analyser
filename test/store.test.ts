@@ -42,6 +42,8 @@ function makeAnalysis(opts: {
       topByCalls: [],
       biggestTables: [],
       indexStats: [],
+      duplicateIndexes: [],
+      rlsUnindexed: [],
       seqScanHeavy: [],
       bloat: [],
       trafficProfile: [],

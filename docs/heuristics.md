@@ -52,7 +52,7 @@ date tracks when we last confirmed them against upstream.
 |---|---|---|---|---|
 | `seq_scan_heavy` | `pg_stat_user_tables` seq_scan >> idx_scan on a public table | seq-scan dominant | med | HAVE |
 | `unused_index` | `pg_stat_user_indexes.idx_scan = 0`, non-constraint | idx_scan 0 | low | HAVE |
-| `duplicate_index` | two indexes with identical column set on a table | any pair | med | NEW |
+| `duplicate_index` | two indexes with identical column set on a table | any pair | med | HAVE |
 | `top_time_query` | `pg_stat_statements` top by total_exec_time | >= 10% of DB time | med | PARTIAL |
 | `functional_predicate` | WHERE wraps an indexed col in a function (e.g. `left(id::text,n)`) defeats the index -> seq scan | any on large table | med | NEW (best-effort; narrate diagnoses root cause) |
 
@@ -76,7 +76,7 @@ Sources: Supabase Query Optimization docs; `supabase/cli` inspect queries.
 | id | signal | threshold | sev | status |
 |---|---|---|---|---|
 | `rls_initplan` | policy `USING/WITH CHECK` calls `auth.uid()`/`auth.jwt()`/`auth.role()`/`current_setting()` bare (not wrapped in a subselect) | any policy | med | HAVE |
-| `rls_col_unindexed` | column compared in an RLS policy has no btree index | any RLS table | med | NEW |
+| `rls_col_unindexed` | column compared in an RLS policy has no btree index | any RLS table | med | HAVE |
 | `multiple_permissive_policies` | 2+ permissive policies for the same role + action on a table | any table | med | HAVE (via advisor) |
 | `policy_exists_rls_disabled` | policy defined but RLS not enabled on the table | any | high | HAVE (via advisor) |
 | `rls_no_role_target` | policy uses no `TO authenticated` (anon pays the RLS cost) | any | low | NEW |
@@ -172,7 +172,7 @@ war story; dev.to 2B-XID war story; AWS XID-wraparound blog.
 | `cpu_saturated` | `node_cpu_seconds_total` derived util (needs >=2 snapshots) | sustained >= 80% | med | PARTIAL (trend) |
 | `load_high` | `node_load1/5/15` vs vCPU count | load1 > vCPUs | med | NEW |
 | `mem_pressure` | `node_memory_MemAvailable_bytes / MemTotal` | avail < ~10% | med | NEW |
-| `swap_active` | swap in use (1GB swap per project) | swap used > 0 sustained | med | NEW |
+| `swap_active` | swap in use (1GB swap per project) | swap used >= 20% | med | HAVE |
 
 Notes:
 - Compute sizes Nano..2XL can BURST CPU; Large and above have predictable (no
@@ -233,9 +233,9 @@ High Disk I/O troubleshooting.
 | `cache_hit_low` | `blks_hit / (blks_hit + blks_read)` | < 99% | med | HAVE |
 | `idle_in_txn_timeout_off` | `idle_in_transaction_session_timeout = 0` | =0 | low | HAVE |
 | `statement_timeout_off` | `statement_timeout = 0` | =0 | low | HAVE |
-| `work_mem_spill` | `pg_stat_database_temp_bytes_total` rising (sorts/hashes spill to disk) | growing temp bytes | med | NEW |
+| `work_mem_spill` | `pg_stat_database_temp_bytes_total` rising (sorts/hashes spill to disk) | rate >= 1MB/s (trend) | med | HAVE |
 | `shared_buffers_ratio` | `shared_buffers` vs RAM | not ~25% (warn > 40%) | low | NEW |
-| `deadlocks` | `pg_stat_database_deadlocks_total` | > 0 rising | med | NEW |
+| `deadlocks` | `pg_stat_database_deadlocks_total` | >= 5 cumulative | low | HAVE |
 
 Config guidance (general Postgres tuning; Supabase sets sane defaults per
 compute tier, so treat these as sanity checks, not prescriptions):
@@ -289,7 +289,7 @@ Signing Keys.
 | `realtime_conns_near_limit` | concurrent connections vs plan cap | >= 80% | med | NEW |
 | `realtime_msgs_near_limit` | messages/sec vs plan cap | >= 80% | med | NEW |
 | `realtime_channels_per_conn` | channels on one connection | >= 80 (cap 100) | low | NEW |
-| `realtime_postgres_changes` | `realtime_postgres_changes_total_subscriptions` > 0 | any at scale | low | NEW (nudge) |
+| `realtime_postgres_changes` | `realtime_postgres_changes_total_subscriptions` > 0 | any at scale | low | HAVE (nudge) |
 
 Plan caps (Supabase Realtime Limits docs):
 
