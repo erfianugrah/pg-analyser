@@ -20,30 +20,51 @@ function buildPanels(refMatcher: string): Array<{ title: string; unit: string; q
     const inner = [...extra, refMatcher].filter(Boolean).join(", ");
     return inner ? `${metric}{${inner}}` : metric;
   };
+  const rate5 = (metric: string, ...extra: string[]): string =>
+    `rate(${sel(metric, ...extra)}[5m])`;
+  // Utilization %/rates - what Supabase's own supabase-grafana dashboard charts
+  // - not raw values: a 30-day view of "load 0.4" / "7.4GB free" reads far worse
+  // than "CPU 26%" / "disk 4% full". Titles + semantics match the store-backed
+  // computeTrends (trends.ts) so the report looks the same from either source.
   return [
-    { title: "CPU load (1m)", unit: "", query: `avg(${sel("node_load1")})` },
     {
-      title: "Memory available",
-      unit: "bytes",
-      query: `avg(${sel("node_memory_MemAvailable_bytes")})`,
+      title: "CPU utilization (%)",
+      unit: "%",
+      query: `clamp_min(100 - (avg(${rate5("node_cpu_seconds_total", 'mode="idle"')}) * 100), 0)`,
     },
+    {
+      title: "Memory used (%)",
+      unit: "%",
+      query: `(1 - avg(${sel("node_memory_MemAvailable_bytes")}) / avg(${sel("node_memory_MemTotal_bytes")})) * 100`,
+    },
+    {
+      title: "Disk used (%)",
+      unit: "%",
+      query: `100 - (avg(${sel("node_filesystem_avail_bytes", 'mountpoint="/data"')}) * 100 / avg(${sel("node_filesystem_size_bytes", 'mountpoint="/data"')}))`,
+    },
+    { title: "Database size", unit: "bytes", query: `sum(${sel("pg_database_size_bytes")})` },
     { title: "DB connections", unit: "", query: `sum(${sel("pg_stat_database_num_backends")})` },
     {
-      title: "Disk free (/data)",
-      unit: "bytes",
-      query: `avg(${sel("node_filesystem_avail_bytes", 'mountpoint="/data"')})`,
+      title: "Transaction rate (/s)",
+      unit: "",
+      query: `sum(${rate5("pg_stat_database_xact_commit_total")})`,
+    },
+    {
+      title: "Cache hit (%)",
+      unit: "%",
+      query: `sum(${rate5("pg_stat_database_blks_hit_total")}) / (sum(${rate5("pg_stat_database_blks_hit_total")}) + sum(${rate5("pg_stat_database_blks_read_total")})) * 100`,
     },
     {
       title: "Disk read IOPS",
       unit: "",
-      query: `sum(rate(${sel("node_disk_reads_completed_total")}[5m]))`,
+      query: `sum(${rate5("node_disk_reads_completed_total")})`,
     },
     {
       title: "Disk write IOPS",
       unit: "",
-      query: `sum(rate(${sel("node_disk_writes_completed_total")}[5m]))`,
+      query: `sum(${rate5("node_disk_writes_completed_total")})`,
     },
-    { title: "Deadlocks", unit: "", query: `sum(${sel("pg_stat_database_deadlocks")})` },
+    { title: "Deadlocks/s", unit: "", query: `sum(${rate5("pg_stat_database_deadlocks_total")})` },
   ];
 }
 

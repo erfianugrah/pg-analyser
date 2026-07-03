@@ -50,7 +50,21 @@ describe("fetchTrends ref scoping", () => {
       expect(q).not.toContain("supabase_project_ref");
     }
     // unscoped aggregates keep the bare metric form
-    expect(queries).toContain("avg(node_load1)");
+    expect(queries).toContain("sum(pg_database_size_bytes)");
+  });
+
+  test("charts utilization %/rates, not raw values", async () => {
+    const cap = captureQueries();
+    await fetchTrends("http://prom:9090", 30, "r1");
+    const queries = decodedQueries(cap.urls);
+    // CPU as an idle-rate utilization %, not raw node_load1
+    expect(
+      queries.some((q) => q.includes("node_cpu_seconds_total") && q.includes('mode="idle"')),
+    ).toBe(true);
+    expect(queries.some((q) => q.includes("node_load1"))).toBe(false);
+    // cache-hit ratio + transaction rate present
+    expect(queries.some((q) => q.includes("pg_stat_database_blks_hit_total"))).toBe(true);
+    expect(queries.some((q) => q.includes("pg_stat_database_xact_commit_total"))).toBe(true);
   });
 
   test("trailing slash on baseUrl is normalised", async () => {

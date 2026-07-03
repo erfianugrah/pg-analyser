@@ -71,16 +71,10 @@ type GaugeDef = {
   agg: "sum" | "avg";
 };
 
+// Raw node_load1 / MemAvailable / DiskFree gauges were retired in favour of the
+// utilization-% series below (memUsedPct / diskUsedPct / cpuUtil) so the store
+// path charts the same readable panels as the Prometheus path (prometheus.ts).
 const GAUGES: GaugeDef[] = [
-  { title: "CPU load (1m)", unit: "", name: "node_load1", agg: "avg" },
-  { title: "Memory available", unit: "bytes", name: "node_memory_MemAvailable_bytes", agg: "avg" },
-  {
-    title: "Disk free (/data)",
-    unit: "bytes",
-    name: "node_filesystem_avail_bytes",
-    filter: { mountpoint: "/data" },
-    agg: "avg",
-  },
   { title: "DB connections", unit: "", name: "pg_stat_database_num_backends", agg: "sum" },
   { title: "Database size", unit: "bytes", name: "pg_database_size_bytes", agg: "sum" },
 ];
@@ -126,6 +120,7 @@ function scalarSeries(snaps: SnapshotForTrends[], def: ScalarDef): TrendSeries |
 type RateDef = { title: string; unit: string; name: string; scale?: number };
 
 const RATES: RateDef[] = [
+  { title: "Transaction rate (/s)", unit: "", name: "pg_stat_database_xact_commit_total" },
   { title: "Disk read IOPS", unit: "", name: "node_disk_reads_completed_total" },
   { title: "Disk write IOPS", unit: "", name: "node_disk_writes_completed_total" },
   { title: "Disk read (bytes/s)", unit: "bytes", name: "node_disk_read_bytes_total" },
@@ -173,6 +168,39 @@ function cpuUtilSeries(snaps: SnapshotForTrends[]): TrendSeries | null {
 }
 
 /**
+ * Memory used % = (1 - MemAvailable/MemTotal) * 100 per snapshot. Computed gauge
+ * (two metrics); mirrors the Prometheus panel of the same title.
+ */
+function memUsedPctSeries(snaps: SnapshotForTrends[]): TrendSeries | null {
+  const points: TrendPoint[] = [];
+  for (const snap of snaps) {
+    if (!has(snap.samples, "node_memory_MemTotal_bytes")) continue;
+    const total = sumOf(snap.samples, "node_memory_MemTotal_bytes");
+    const avail = sumOf(snap.samples, "node_memory_MemAvailable_bytes");
+    if (total <= 0) continue;
+    points.push({ t: snap.ts, v: Math.max(0, Math.min(100, (1 - avail / total) * 100)) });
+  }
+  return points.length ? { title: "Memory used (%)", unit: "%", points } : null;
+}
+
+/**
+ * Disk used % on /data = (1 - avail/size) * 100 per snapshot. Computed gauge;
+ * mirrors the Prometheus panel of the same title.
+ */
+function diskUsedPctSeries(snaps: SnapshotForTrends[]): TrendSeries | null {
+  const f = { mountpoint: "/data" };
+  const points: TrendPoint[] = [];
+  for (const snap of snaps) {
+    if (!has(snap.samples, "node_filesystem_size_bytes", f)) continue;
+    const size = sumOf(snap.samples, "node_filesystem_size_bytes", f);
+    const avail = sumOf(snap.samples, "node_filesystem_avail_bytes", f);
+    if (size <= 0) continue;
+    points.push({ t: snap.ts, v: Math.max(0, Math.min(100, (1 - avail / size) * 100)) });
+  }
+  return points.length ? { title: "Disk used (%)", unit: "%", points } : null;
+}
+
+/**
  * Swap used = SwapTotal - SwapFree, per snapshot. A computed gauge (two
  * metrics), so it doesn't fit the single-name GaugeDef path. Swap in use is a
  * memory-pressure signal - each project has ~1GB swap and swapping is disk I/O.
@@ -208,6 +236,8 @@ export function computeTrends(
   };
 
   push(cpuUtilSeries(snaps));
+  push(memUsedPctSeries(snaps));
+  push(diskUsedPctSeries(snaps));
   push(swapUsedSeries(snaps));
   for (const g of GAUGES) push(gaugeSeries(snaps, g));
   for (const r of RATES) push(rateSeries(snaps, r));

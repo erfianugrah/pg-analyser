@@ -22,13 +22,13 @@ const find = (out: ReturnType<typeof computeTrends>, title: string) =>
 describe("computeTrends", () => {
   test("gauge series: one point per snapshot with matching samples", () => {
     const out = computeTrends([
-      snap(1000, [s("node_load1", 0.5, { cpu: "0" })]),
-      snap(1300, [s("node_load1", 0.7, { cpu: "0" })]),
+      snap(1000, [s("pg_database_size_bytes", 500)]),
+      snap(1300, [s("pg_database_size_bytes", 700)]),
     ]);
-    const load = find(out, "CPU load (1m)");
-    expect(load?.points).toEqual([
-      { t: 1000, v: 0.5 },
-      { t: 1300, v: 0.7 },
+    const size = find(out, "Database size");
+    expect(size?.points).toEqual([
+      { t: 1000, v: 500 },
+      { t: 1300, v: 700 },
     ]);
   });
 
@@ -42,14 +42,32 @@ describe("computeTrends", () => {
     expect(find(out, "DB connections")?.points).toEqual([{ t: 1000, v: 5 }]);
   });
 
-  test("gauge series filters by label (disk free /data only)", () => {
+  test("disk used % computed from /data avail vs size only", () => {
     const out = computeTrends([
       snap(1000, [
-        s("node_filesystem_avail_bytes", 1000, { mountpoint: "/data" }),
-        s("node_filesystem_avail_bytes", 9999, { mountpoint: "/" }),
+        s("node_filesystem_size_bytes", 1000, { mountpoint: "/data" }),
+        s("node_filesystem_avail_bytes", 250, { mountpoint: "/data" }),
+        s("node_filesystem_size_bytes", 5000, { mountpoint: "/" }),
+        s("node_filesystem_avail_bytes", 4000, { mountpoint: "/" }),
       ]),
     ]);
-    expect(find(out, "Disk free (/data)")?.points).toEqual([{ t: 1000, v: 1000 }]);
+    // /data: (1 - 250/1000)*100 = 75; the root mount is ignored
+    expect(find(out, "Disk used (%)")?.points).toEqual([{ t: 1000, v: 75 }]);
+  });
+
+  test("memory used % from MemAvailable vs MemTotal", () => {
+    const out = computeTrends([
+      snap(1000, [s("node_memory_MemTotal_bytes", 1000), s("node_memory_MemAvailable_bytes", 400)]),
+    ]);
+    expect(find(out, "Memory used (%)")?.points).toEqual([{ t: 1000, v: 60 }]);
+  });
+
+  test("transaction rate from xact_commit delta / dt", () => {
+    const out = computeTrends([
+      snap(0, [s("pg_stat_database_xact_commit_total", 100, { datname: "postgres" })]),
+      snap(100, [s("pg_stat_database_xact_commit_total", 600, { datname: "postgres" })]),
+    ]);
+    expect(find(out, "Transaction rate (/s)")?.points).toEqual([{ t: 100, v: 5 }]);
   });
 
   test("counter rate: reads_completed delta / dt -> IOPS", () => {
@@ -113,7 +131,7 @@ describe("computeTrends", () => {
   });
 
   test("omits series that have no data at all", () => {
-    const out = computeTrends([snap(1000, [s("node_load1", 0.4)])]);
+    const out = computeTrends([snap(1000, [s("pg_database_size_bytes", 400)])]);
     expect(find(out, "Disk read IOPS")).toBeUndefined();
     expect(find(out, "Cache hit (%)")).toBeUndefined();
   });
@@ -121,42 +139,46 @@ describe("computeTrends", () => {
   test("single snapshot: gauges emit, counter rates do not", () => {
     const out = computeTrends([
       snap(1000, [
-        s("node_load1", 0.4),
+        s("pg_database_size_bytes", 400),
         s("node_disk_reads_completed_total", 1000, { device: "d" }),
       ]),
     ]);
-    expect(find(out, "CPU load (1m)")?.points).toHaveLength(1);
+    expect(find(out, "Database size")?.points).toHaveLength(1);
     expect(find(out, "Disk read IOPS")).toBeUndefined();
   });
 
   test("read-time downsampling caps points to maxPoints (Grafana-style)", () => {
     const snaps = [];
-    for (let i = 0; i < 1000; i++) snaps.push(snap(1000 + i * 60, [s("node_load1", i)]));
+    for (let i = 0; i < 1000; i++)
+      snaps.push(snap(1000 + i * 60, [s("pg_database_size_bytes", i)]));
     const out = computeTrends(snaps, { maxPoints: 100 });
-    const load = find(out, "CPU load (1m)");
-    expect(load?.points.length).toBeLessThanOrEqual(100);
-    expect(load?.points.length).toBeGreaterThan(1);
+    const size = find(out, "Database size");
+    expect(size?.points.length).toBeLessThanOrEqual(100);
+    expect(size?.points.length).toBeGreaterThan(1);
   });
 
   test("no downsampling when points are under the cap", () => {
     const out = computeTrends(
-      [snap(1000, [s("node_load1", 0.5)]), snap(2000, [s("node_load1", 0.7)])],
+      [
+        snap(1000, [s("pg_database_size_bytes", 500)]),
+        snap(2000, [s("pg_database_size_bytes", 700)]),
+      ],
       { maxPoints: 100 },
     );
-    expect(find(out, "CPU load (1m)")?.points).toEqual([
-      { t: 1000, v: 0.5 },
-      { t: 2000, v: 0.7 },
+    expect(find(out, "Database size")?.points).toEqual([
+      { t: 1000, v: 500 },
+      { t: 2000, v: 700 },
     ]);
   });
 
   test("downsampling averages value and time within each bucket", () => {
     const snaps = [
-      snap(0, [s("node_load1", 0)]),
-      snap(10, [s("node_load1", 2)]),
-      snap(20, [s("node_load1", 10)]),
-      snap(30, [s("node_load1", 20)]),
+      snap(0, [s("pg_database_size_bytes", 0)]),
+      snap(10, [s("pg_database_size_bytes", 2)]),
+      snap(20, [s("pg_database_size_bytes", 10)]),
+      snap(30, [s("pg_database_size_bytes", 20)]),
     ];
-    const pts = find(computeTrends(snaps, { maxPoints: 2 }), "CPU load (1m)")?.points;
+    const pts = find(computeTrends(snaps, { maxPoints: 2 }), "Database size")?.points;
     // span 30, bucket width 15: [t0,t10]->avg (t5,v1); [t20,t30]->avg (t25,v15)
     expect(pts).toEqual([
       { t: 5, v: 1 },
@@ -166,12 +188,12 @@ describe("computeTrends", () => {
 
   test("sorts snapshots by ts defensively", () => {
     const out = computeTrends([
-      snap(3000, [s("node_load1", 0.9)]),
-      snap(1000, [s("node_load1", 0.1)]),
+      snap(3000, [s("pg_database_size_bytes", 900)]),
+      snap(1000, [s("pg_database_size_bytes", 100)]),
     ]);
-    expect(find(out, "CPU load (1m)")?.points).toEqual([
-      { t: 1000, v: 0.1 },
-      { t: 3000, v: 0.9 },
+    expect(find(out, "Database size")?.points).toEqual([
+      { t: 1000, v: 100 },
+      { t: 3000, v: 900 },
     ]);
   });
 });
