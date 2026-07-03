@@ -19,6 +19,12 @@ export interface Finding {
   evidence?: string;
 }
 
+/** A confirmed-healthy observation - the "what's looking good" counterweight. */
+export interface Positive {
+  category: Category;
+  title: string;
+}
+
 const SEV_RANK: Record<Severity, number> = { high: 0, med: 1, low: 2 };
 const CAT_RANK: Record<Category, number> = { Performance: 0, Security: 1, Capacity: 2 };
 
@@ -375,5 +381,102 @@ export function deriveFindings(a: Analysis): Finding[] {
     (x, y) =>
       SEV_RANK[x.severity] - SEV_RANK[y.severity] || CAT_RANK[x.category] - CAT_RANK[y.category],
   );
+  return out;
+}
+
+/**
+ * Confirmed-healthy observations - the counterweight to findings. Only emitted
+ * when the underlying signal was actually COLLECTED and is genuinely good; on a
+ * degraded/unreachable project we assert nothing (absence of data is not
+ * health). Each positive mirrors a finding's threshold, so a positive and its
+ * corresponding finding are mutually exclusive by construction.
+ */
+export function derivePositives(a: Analysis): Positive[] {
+  const out: Positive[] = [];
+  const errored = new Set(a.errors.map((e) => e.source));
+  const set = settingsMap(a.sql.pgSettings);
+  const publicRows = (rows: SqlRow[]) => rows.filter((r) => String(r.schema ?? "") === "public");
+
+  // Never claim health when diagnostics were incomplete.
+  if (a.meta.status !== "ACTIVE_HEALTHY" || errored.has("sql:dbSize")) return out;
+
+  if (a.sql.cacheHitPct != null && a.sql.cacheHitPct >= THRESHOLDS.cacheHitPct) {
+    out.push({
+      category: "Performance",
+      title: `Cache hit ratio ${a.sql.cacheHitPct}% (>= ${THRESHOLDS.cacheHitPct}% target)`,
+    });
+  }
+  const totalPolicies = a.sql.rlsPolicies.length;
+  const unwrapped = a.sql.rlsPolicies.filter((r) => r.unwrapped_auth === true).length;
+  if (totalPolicies > 0 && unwrapped === 0) {
+    out.push({
+      category: "Performance",
+      title: `All ${totalPolicies} RLS ${totalPolicies === 1 ? "policy wraps" : "policies wrap"} auth in a subselect`,
+    });
+  }
+  if (
+    totalPolicies > 0 &&
+    !errored.has("sql:rlsUnindexed") &&
+    publicRows(a.sql.rlsUnindexed).length === 0
+  ) {
+    out.push({ category: "Performance", title: "All RLS policy columns are indexed" });
+  }
+  if (
+    !errored.has("sql:indexStats") &&
+    publicRows(a.sql.indexStats).length > 0 &&
+    publicRows(a.sql.indexStats).filter((r) => r.unused === true).length === 0
+  ) {
+    out.push({ category: "Performance", title: "No unused indexes in public" });
+  }
+  if (
+    a.upgrade?.current_app_version &&
+    a.upgrade.latest_app_version &&
+    a.upgrade.current_app_version === a.upgrade.latest_app_version
+  ) {
+    out.push({ category: "Performance", title: "Postgres is on the latest platform version" });
+  }
+  if (set.get("statement_timeout") !== "0" && set.get("statement_timeout") != null) {
+    out.push({ category: "Performance", title: "statement_timeout is configured" });
+  }
+  // Capacity
+  if (a.disk?.usedBytes != null && a.disk.availBytes != null) {
+    const total = a.disk.usedBytes + a.disk.availBytes;
+    if (total > 0 && a.disk.usedBytes / total < THRESHOLDS.diskFullFrac) {
+      out.push({
+        category: "Capacity",
+        title: `Disk ${Math.round((a.disk.usedBytes / total) * 100)}% full (headroom available)`,
+      });
+    }
+  }
+  const conns = a.sql.connections.reduce((s, r) => s + num(r.connections), 0);
+  const maxConn = num(set.get("max_connections"));
+  if (
+    !errored.has("sql:connections") &&
+    maxConn > 0 &&
+    conns / maxConn < THRESHOLDS.directConnFrac
+  ) {
+    out.push({
+      category: "Capacity",
+      title: `Connections at ${Math.round((conns / maxConn) * 100)}% of max (${conns}/${maxConn})`,
+    });
+  }
+  const maxXidPct = a.sql.txidWraparound.reduce((mx, r) => Math.max(mx, num(r.pct_wraparound)), 0);
+  if (!errored.has("sql:txidWraparound") && maxXidPct < THRESHOLDS.txidWarnPct) {
+    out.push({ category: "Capacity", title: "Transaction-ID wraparound headroom is healthy" });
+  }
+  if (a.backups?.pitr_enabled) {
+    out.push({ category: "Capacity", title: "Point-in-time recovery (PITR) is enabled" });
+  }
+  // Edge functions all healthy (only when there are functions with real traffic).
+  const fnsWithTraffic = a.functionStats.filter((f) => f.requests >= THRESHOLDS.fnMinRequests);
+  if (
+    fnsWithTraffic.length > 0 &&
+    fnsWithTraffic.every((f) => f.serverErr / f.requests < THRESHOLDS.fnErrWarnFrac)
+  ) {
+    out.push({
+      category: "Performance",
+      title: `All ${fnsWithTraffic.length} active edge ${fnsWithTraffic.length === 1 ? "function is" : "functions are"} within the 5xx budget`,
+    });
+  }
   return out;
 }

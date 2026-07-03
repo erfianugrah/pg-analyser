@@ -1,4 +1,10 @@
-import { deriveFindings, type Finding, type Severity } from "../findings.ts";
+import {
+  deriveFindings,
+  derivePositives,
+  type Finding,
+  type Positive,
+  type Severity,
+} from "../findings.ts";
 import { curate } from "../metrics.ts";
 import type { Advisor, Analysis, SqlRow } from "../schemas.ts";
 
@@ -198,6 +204,16 @@ function findingsSummary(findings: Finding[], degraded: boolean): string {
 <table class=find><thead><tr><th>sev</th><th>area</th><th>finding</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
+/** "What's looking good" - confirmed-healthy observations, only when present. */
+function positivesSection(positives: Positive[]): string {
+  if (!positives.length) return "";
+  const items = positives
+    .map((p) => `<li><b>${esc(p.category)}:</b> ${esc(p.title)}</li>`)
+    .join("");
+  return `<h2 id="healthy">What's looking good <span class=count>${positives.length}</span></h2>
+<ul class="positives">${items}</ul>`;
+}
+
 /** Collapsible evidence section (open by default so PDF shows everything). */
 function drill(id: string, title: string, note: string, body: string): string {
   return `<details open id="${id}"><summary><span class=h2>${esc(title)}</span>${note ? ` <span class=note>${esc(note)}</span>` : ""}</summary>${body}</details>`;
@@ -261,6 +277,7 @@ export function render(a: Analysis): string {
   const disk = a.disk;
   const errored = new Set(a.errors.map((e) => e.source));
   const findings = deriveFindings(a);
+  const positives = derivePositives(a);
 
   // "not collected" (source errored) vs "none found" (collected, empty).
   // Key off the trivial dbSize probe: if that fails, the DB is unreachable;
@@ -298,6 +315,7 @@ export function render(a: Analysis): string {
   const sections = `
 <h2>Findings</h2>
 ${findingsSummary(findings, degraded)}
+${positivesSection(positives)}
 
 <h2>Service health</h2><p>${healthBadges(a)}</p>
 ${trendsSection(a)}
@@ -361,6 +379,8 @@ ${a.errors.length ? `<h2>Collection notes <span class=count>${a.errors.length}</
   .lead{font-weight:600;margin:6px 0}
   .banner{padding:8px 12px;border-radius:4px;font-size:13px;margin:8px 0}
   .banner.bad{background:var(--errbg)}.banner.ok{background:var(--okbg)}
+  ul.positives{margin:6px 0;padding-left:20px;columns:2;column-gap:28px}
+  ul.positives li{margin:2px 0;break-inside:avoid}
   table{border-collapse:collapse;width:100%;font-size:12.5px;margin:2px 0}
   th,td{text-align:left;padding:4px 8px;border:1px solid var(--line);vertical-align:top}
   th{background:#f6f6f6;font-weight:600;white-space:nowrap}
@@ -408,6 +428,7 @@ ${sections}
 export function renderSummary(a: Analysis): string {
   const m = a.meta;
   const findings = deriveFindings(a);
+  const positives = derivePositives(a);
   const degraded = a.meta.status !== "ACTIVE_HEALTHY" || !a.metrics.available;
   const counts = { high: 0, med: 0, low: 0 };
   for (const f of findings) counts[f.severity]++;
@@ -455,9 +476,16 @@ export function renderSummary(a: Analysis): string {
     .map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`)
     .join("");
 
-  const body = findings.length
-    ? groups
-    : `<p>All performance, security, and capacity checks passed${degraded ? ", though some data could not be collected (the project may be paused or unreachable)" : ""}.</p>`;
+  const goodBlock = positives.length
+    ? `<h2 class="g INFO">What's working well</h2><ul>${positives
+        .map((p) => `<li>${esc(p.title)}</li>`)
+        .join("")}</ul>`
+    : "";
+  const body =
+    (findings.length
+      ? groups
+      : `<p>All performance, security, and capacity checks passed${degraded ? ", though some data could not be collected (the project may be paused or unreachable)" : ""}.</p>`) +
+    goodBlock;
 
   return `<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">

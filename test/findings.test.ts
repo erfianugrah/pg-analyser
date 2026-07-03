@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { deriveFindings } from "../src/findings.ts";
+import { deriveFindings, derivePositives } from "../src/findings.ts";
 import type { Analysis } from "../src/schemas.ts";
 
 function base(): Analysis {
@@ -379,6 +379,41 @@ describe("deriveFindings", () => {
     const a = base();
     a.sql.pgSettings = [{ name: "idle_in_transaction_session_timeout", setting: "0", unit: "ms" }];
     expect(deriveFindings(a).some((f) => f.title.includes("idle_in_transaction"))).toBe(true);
+  });
+
+  test("positives: healthy cache + wrapped+indexed RLS + PITR emitted", () => {
+    const a = base();
+    a.sql.cacheHitPct = 99.6;
+    a.sql.rlsPolicies = [
+      { table: "public.x", policyname: "p1", cmd: "SELECT", unwrapped_auth: false },
+    ];
+    a.sql.rlsUnindexed = [];
+    a.sql.indexStats = [{ schema: "public", table: "public.x", index: "public.i", unused: false }];
+    a.backups = { pitr_enabled: true };
+    const p = derivePositives(a).map((x) => x.title);
+    expect(p.some((t) => t.includes("Cache hit ratio 99.6%"))).toBe(true);
+    expect(p.some((t) => t.includes("All 1 RLS policy wraps auth"))).toBe(true);
+    expect(p.some((t) => t.includes("All RLS policy columns are indexed"))).toBe(true);
+    expect(p.some((t) => t.includes("No unused indexes"))).toBe(true);
+    expect(p.some((t) => t.includes("PITR"))).toBe(true);
+  });
+
+  test("positives: nothing asserted on a degraded/unreachable project", () => {
+    const a = base();
+    a.sql.cacheHitPct = 99.9;
+    a.meta.status = "INACTIVE";
+    expect(derivePositives(a)).toHaveLength(0);
+    const b = base();
+    b.sql.cacheHitPct = 99.9;
+    b.errors = [{ source: "sql:dbSize", message: "unreachable" }];
+    expect(derivePositives(b)).toHaveLength(0);
+  });
+
+  test("positives: a finding and its positive are mutually exclusive", () => {
+    const a = base();
+    a.sql.cacheHitPct = 92; // below target -> finding, not a positive
+    expect(deriveFindings(a).some((f) => f.title.includes("Cache hit ratio 92%"))).toBe(true);
+    expect(derivePositives(a).some((p) => p.title.includes("Cache hit"))).toBe(false);
   });
 
   test("findings sorted high -> low severity", () => {
