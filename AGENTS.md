@@ -20,6 +20,7 @@ HTML + PDF report. No superuser `--db-url`, no manual Grafana screenshots.
 | `bun run src/index.ts report <dir>` | `analysis.json` -> `report.html` + `summary.html` |
 | `bun run src/index.ts summary <dir>` | `analysis.json` -> `summary.html` (non-technical) |
 | `bun run src/index.ts pdf <dir>` | `analysis.json` -> `report.pdf` + `summary.pdf` |
+| `bun run src/index.ts narrate <dir>` | `analysis.json` -> `narrative.md` (LLM pass; needs `SBPERF_LLM_*`) |
 | `bun run src/index.ts full --ref <ref>` | analyze + report + summary + pdf |
 | `bun run src/index.ts snapshot --ref <ref>` | collect + append to the SQLite history store (cron this) |
 | `bun run src/index.ts scrape-init --ref <ref>` | write the (alternate) Prometheus+Grafana stack |
@@ -86,6 +87,15 @@ src/
                  families, no curation) - the corpus is the product
   report/render  Analysis -> self-contained HTML (utilitarian, print CSS)
   report/pdf     HTML -> PDF via Playwright
+  narrate.ts     LLM pass over the corpus + enriched findings -> narrative.md.
+                 Grounded: hands the model the ranked findings (with catalogued
+                 remediation + doc URL), positives, and a BOUNDED evidence digest
+                 (not the whole corpus); system prompt forbids inventing facts.
+                 OpenAI-compatible client (OpenAI / local llama-server / ...),
+                 injectable for tests; SBPERF_LLM_BASE_URL + _MODEL (+ _API_KEY).
+  sync.ts        on-by-default soft-fail upstream sync check -> analysis.sync:
+                 catalog vintage/age + vendored splinter.sql vs upstream hash;
+                 rendered in the report footer. --no-sync-check to skip.
   store.ts       SQLite history store (bun:sqlite): `snapshot` appends full
                  Analysis + denormalized metric_samples/sql_scalars; keyed by
                  ref at ~/.sbperf/history.db; prune to retention
