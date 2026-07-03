@@ -337,10 +337,11 @@ function execSummarySection(
   degraded: boolean,
   narrativeHtml: string,
 ): string {
+  // The LLM narrative carries its own "## Executive summary" + section headings
+  // and the #summary anchor, so render it as-is. Only the deterministic fallback
+  // needs the wrapping h2.
+  if (narrativeHtml) return narrativeHtml;
   const head = `<h2 id="summary">Executive summary</h2>`;
-  if (narrativeHtml)
-    return `${head}
-${narrativeHtml}`;
   const c = { high: 0, med: 0, low: 0 };
   for (const f of findings) c[f.severity]++;
   const total = findings.length;
@@ -562,7 +563,9 @@ export function render(a: Analysis, opts: { narrative?: boolean; brand?: Brand }
   const m = a.meta;
   const disk = a.disk;
   const narrativeHtml =
-    opts.narrative && a.narrative ? `<div class=narrative>${mdToHtml(a.narrative)}</div>` : "";
+    opts.narrative && a.narrative
+      ? `<div class=narrative id="summary">${mdToHtml(a.narrative)}</div>`
+      : "";
   const errored = new Set(a.errors.map((e) => e.source));
   const findings = deriveFindings(a);
   const positives = derivePositives(a);
