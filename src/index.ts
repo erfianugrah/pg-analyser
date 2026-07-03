@@ -10,6 +10,7 @@ import { deriveFindings } from "./findings.ts";
 import { mergeTrends, parseTrendsFile } from "./importtrends.ts";
 import { Management } from "./management.ts";
 import { buildMessages, clientFromEnv, narrate } from "./narrate.ts";
+import { loadOverlay } from "./overlay.ts";
 import { backfillInstructions, toOpenMetrics } from "./promexport.ts";
 import { htmlToPdf } from "./report/pdf.ts";
 import {
@@ -74,6 +75,8 @@ Flags:
   --import <file>|-    narrate: embed a pasted LLM reply (file, or - for stdin)
   --brand <file>       white-label branding JSON (default: Supabase; or SBPERF_BRAND
                        / ./sbperf.brand.json)
+  --overlay <file>     per-project review overlay JSON (hide sections + notes;
+                       default: ./sbperf.overlays/<ref>.json or ~/.sbperf/overlays/<ref>.json)
   -h, --help           show this help
   -v, --version        print version
 
@@ -115,6 +118,7 @@ type Flags = {
   printPrompt?: boolean;
   import?: string;
   brand?: string;
+  overlay?: string;
 };
 
 /** Analytics-endpoint timeframe enum (verified live 2026-07; iso ranges are clamped). */
@@ -147,6 +151,7 @@ function parseFlags(argv: string[]): Flags {
     else if (a === "--db-url") out.dbUrls.push(argv[++i]!);
     else if (a === "--db-config") out.dbConfig = argv[++i];
     else if (a === "--brand") out.brand = argv[++i];
+    else if (a === "--overlay") out.overlay = argv[++i];
     else if (a === "--all") out.all = true;
     else if (a === "--no-sync-check") out.noSyncCheck = true;
     else if (a === "--narrative") out.narrative = true;
@@ -174,7 +179,8 @@ async function emitReport(
   // Join with the history store so combined reports get the Resource snapshot
   // sparklines too (analysis.json is point-in-time; trends live in the store).
   if (await Bun.file(DEFAULT_STORE).exists()) fillTrendsFromStore(analysis, DEFAULT_STORE);
-  const html = render(analysis, { brand: activeBrand });
+  const overlay = await loadOverlay({ ref: analysis.meta.ref });
+  const html = render(analysis, { brand: activeBrand, overlay });
   await Bun.write(join(dir, "report.html"), html);
   await htmlToPdf(html, join(dir, "report.pdf"));
   const f = deriveFindings(analysis);
@@ -653,14 +659,20 @@ async function doExportPrometheus(
   }
 }
 
-async function doReport(dir: string, storePath?: string, narrative?: boolean): Promise<string> {
+async function doReport(
+  dir: string,
+  storePath?: string,
+  narrative?: boolean,
+  overlayFile?: string,
+): Promise<string> {
   const analysis = await loadAnalysis(dir);
   const path = storePath ?? DEFAULT_STORE;
   if (await Bun.file(path).exists()) fillTrendsFromStore(analysis, path);
   if (narrative && !analysis.narrative)
     console.error("> --narrative given but analysis.json has none; run 'sbperf narrate' first");
+  const overlay = await loadOverlay({ ref: analysis.meta.ref, file: overlayFile });
   const htmlPath = join(dir, "report.html");
-  await Bun.write(htmlPath, render(analysis, { narrative, brand: activeBrand }));
+  await Bun.write(htmlPath, render(analysis, { narrative, brand: activeBrand, overlay }));
   console.error(`> ${htmlPath}`);
   return htmlPath;
 }
@@ -673,12 +685,18 @@ async function doSummary(dir: string): Promise<string> {
   return path;
 }
 
-async function doPdf(dir: string, narrative?: boolean, storePath?: string): Promise<string> {
+async function doPdf(
+  dir: string,
+  narrative?: boolean,
+  storePath?: string,
+  overlayFile?: string,
+): Promise<string> {
   const analysis = await loadAnalysis(dir);
   const store = storePath ?? DEFAULT_STORE;
   if (await Bun.file(store).exists()) fillTrendsFromStore(analysis, store);
+  const overlay = await loadOverlay({ ref: analysis.meta.ref, file: overlayFile });
   const pdfPath = join(dir, "report.pdf");
-  await htmlToPdf(render(analysis, { narrative, brand: activeBrand }), pdfPath);
+  await htmlToPdf(render(analysis, { narrative, brand: activeBrand, overlay }), pdfPath);
   console.error(`> ${pdfPath}`);
   return pdfPath;
 }
@@ -855,7 +873,7 @@ async function main(): Promise<void> {
       case "report": {
         const dir = flags._[0];
         if (!dir) usage();
-        await doReport(dir, flags.store, flags.narrative);
+        await doReport(dir, flags.store, flags.narrative, flags.overlay);
         break;
       }
       case "export-prometheus": {
@@ -915,7 +933,7 @@ async function main(): Promise<void> {
       case "pdf": {
         const dir = flags._[0];
         if (!dir) usage();
-        await doPdf(dir, flags.narrative, flags.store);
+        await doPdf(dir, flags.narrative, flags.store, flags.overlay);
         break;
       }
       case "narrate": {
@@ -982,8 +1000,8 @@ async function main(): Promise<void> {
           singleDbUrl,
           !flags.noSyncCheck,
         );
-        await doReport(dir);
-        await doPdf(dir);
+        await doReport(dir, undefined, undefined, flags.overlay);
+        await doPdf(dir, undefined, undefined, flags.overlay);
         console.error(`> done: ${dir}`);
         break;
       }
