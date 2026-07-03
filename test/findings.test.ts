@@ -83,15 +83,20 @@ describe("deriveFindings", () => {
     expect(deriveFindings(a).some((f) => f.title.includes("Cache hit ratio 92%"))).toBe(true);
   });
 
-  test("advisors grouped by title with counts", () => {
+  test("advisors grouped: plain-English title, scale in evidence, catalogued fix", () => {
     const a = base();
     a.advisors.performance = [
       { name: "unindexed_foreign_keys", title: "Unindexed foreign keys", level: "INFO" },
       { name: "unindexed_foreign_keys", title: "Unindexed foreign keys", level: "INFO" },
     ];
-    const f = deriveFindings(a).find((x) => x.title.startsWith("Unindexed foreign keys"));
-    expect(f?.title).toContain("(2x)");
-    expect(f?.category).toBe("Performance");
+    const f = deriveFindings(a).find((x) => x.category === "Performance" && x.sql);
+    // plain-English title from the lint catalog (not the raw lint title)
+    expect(f?.title).toBe("Foreign keys without a covering index");
+    // the group count is surfaced as scale in "what's happening"
+    expect(f?.evidence).toContain("Affects 2 objects");
+    // concrete, copy-pasteable fix instead of "open the advisor"
+    expect(f?.sql).toContain("CREATE INDEX CONCURRENTLY");
+    expect(f?.dashUrl).toContain("/advisors/performance");
   });
 
   test("only public-schema unused indexes counted", () => {
