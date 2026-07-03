@@ -9,6 +9,10 @@
 
 // Platform / Studio / introspection queries that swamp pg_stat_statements but
 // are not the user's workload. Excluded from the outliers view (footnoted).
+// Two layers: substring matches (catalog/introspection/dashboard reads) here,
+// and a statement-type prefix filter (DDL / transaction-control / migrations)
+// in NOT_APP_STATEMENT below - together they keep the outliers view to actual
+// application SELECT/INSERT/UPDATE/DELETE workload.
 const PLATFORM_NOISE = [
   "%pg_timezone_names%",
   "%pg_available_extensions%",
@@ -22,9 +26,43 @@ const PLATFORM_NOISE = [
   "%pg_proc%",
   "%pg_catalog%",
   "%pg_get_%",
+  // Migrations (Supabase's own tracking schema + generic migration tables).
+  "%supabase_migrations%",
+  "%schema_migrations%",
+  // Dashboard / Studio / ORM introspection reads of the system catalogs.
+  "%pg_stat_%",
+  "%pg_roles%",
+  "%pg_database%",
+  "%pg_settings%",
+  "%pg_indexes%",
+  "%pg_tables%",
+  "%pg_type%",
+  "%pg_index%",
+  "%pg_constraint%",
+  "%pg_description%",
+  "%pg_depend%",
+  "%pg_enum%",
+  "%current_setting%",
+  "%set_config%",
+  // Supabase-internal service schemas (not the user's app tables).
+  "%realtime.%",
+  "%_realtime.%",
+  "%graphql.%",
+  "%pgrst%",
 ]
   .map((p) => `'${p}'`)
   .join(",");
+
+// Statement types that are not ongoing application workload: transaction
+// control, DDL, migrations, session/admin commands. A POSIX regex anchored at
+// the statement start, so it matches the verb without false-flagging a table
+// whose name merely contains one of these words. Kept as a single string so it
+// reads as one exclusion; the words appear only inside this quoted literal, not
+// as operations (the read-only-query test strips literals before scanning).
+const NOT_APP_STATEMENT =
+  "^\\s*(begin|commit|rollback|savepoint|release|set|show|reset|discard|" +
+  "create|alter|drop|comment|grant|revoke|truncate|vacuum|analyze|reindex|" +
+  "cluster|copy|explain|deallocate|listen|notify|prepare|checkpoint|lock)\\M";
 
 export const QUERIES = {
   dbSize: /* sql */ `
@@ -70,6 +108,7 @@ export const QUERIES = {
       left(regexp_replace(query, '\\s+', ' ', 'g'), 160) as query
     from extensions.pg_stat_statements
     where query not ilike all (array[${PLATFORM_NOISE}])
+      and query !~* '${NOT_APP_STATEMENT}'
     order by total_exec_time desc
     limit 20`,
 
@@ -84,6 +123,7 @@ export const QUERIES = {
       left(regexp_replace(query, '\\s+', ' ', 'g'), 160) as query
     from extensions.pg_stat_statements
     where query not ilike all (array[${PLATFORM_NOISE}])
+      and query !~* '${NOT_APP_STATEMENT}'
     order by calls desc
     limit 20`,
 

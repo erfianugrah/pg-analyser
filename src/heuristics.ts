@@ -205,7 +205,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "Nearing max_connections risks 'too many connections' errors that surface as user-facing failures. Each backend also costs 5-10MB RAM, so unpooled connections waste the memory that sets your compute tier.",
     remediation:
-      "Route app traffic through the connection pooler (Supavisor). For serverless use transaction mode (6543) with a small connection_limit.",
+      "Route app traffic through the connection pooler (Supavisor). For serverless/edge use transaction mode (port 6543) with a small per-client pool (e.g. connection_limit=1-3 per function instance); reserve direct/session connections (5432) for migrations and long transactions.",
     docUrl: "https://supabase.com/docs/guides/database/connecting-to-postgres",
     reviewed: R,
   },
@@ -333,32 +333,33 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "Below the 99% target, reads fall through to disk - higher latency and IOPS, and a signal the working set no longer fits in RAM (a memory/compute sizing decision, not just a knob).",
     remediation:
-      "Below the 99% target, reads hit disk. Improve via better indexing and more RAM (compute upgrade) rather than only raising shared_buffers.",
+      "Below the 99% target, reads hit disk. Aim for >= 99%: improve via better indexing on hot tables and more RAM (a compute-tier upgrade sizes shared_buffers/effective_cache_size for you) rather than only raising shared_buffers - a working set larger than RAM is a sizing decision, not a knob.",
     docUrl: "https://supabase.com/docs/guides/platform/performance",
     reviewed: R,
   },
   idle_in_txn_timeout_off: {
     id: "idle_in_txn_timeout_off",
     plane: "Config",
-    sql: "ALTER ROLE authenticator SET idle_in_transaction_session_timeout = '2min';",
+    sql: "-- per role (fine to tune the value):\nALTER ROLE authenticator SET idle_in_transaction_session_timeout = '2min';\n-- or globally, then reload:\nALTER DATABASE postgres SET idle_in_transaction_session_timeout = '2min';",
     howToVerify: "SHOW idle_in_transaction_session_timeout - it should return a non-zero value.",
     whyItMatters:
       "With no idle-in-transaction timeout, an abandoned transaction pins the xmin horizon, blocking autovacuum and driving bloat + wraparound risk across the whole database.",
     remediation:
-      "Set idle_in_transaction_session_timeout so abandoned transactions cannot pin the xmin horizon and block autovacuum.",
+      "Set a concrete bound so abandoned transactions cannot pin the xmin horizon: '2min' is a safe default for most roles (raise to '5min'-'10min' for long batch/ETL roles). Set it per role (authenticator/postgres/custom) or on the database.",
     docUrl: "https://www.postgresql.org/docs/current/runtime-config-client.html",
     reviewed: R,
   },
   statement_timeout_off: {
     id: "statement_timeout_off",
     plane: "Config",
-    sql: "ALTER ROLE authenticator SET statement_timeout = '30s'; -- tune per role",
-    howToVerify: "SHOW statement_timeout (per role) - it should return a non-zero cap.",
+    sql: "-- per role (recommended - matches Supabase's own per-role defaults):\nALTER ROLE authenticator SET statement_timeout = '30s';\n-- or set the global cap for any role without its own:\nALTER DATABASE postgres SET statement_timeout = '60s';",
+    howToVerify:
+      "Query pg_roles.rolconfig for the role (per-role settings don't show via SHOW), or SHOW statement_timeout for the global cap - it should return a non-zero value.",
     whyItMatters:
-      "With no statement_timeout, a runaway query runs unbounded - holding locks, pinning resources, and degrading everyone until it finishes or is manually killed.",
+      "With no statement_timeout, a runaway query runs unbounded - holding locks, pinning resources, and degrading everyone until it finishes or is manually killed. Supabase ships per-role defaults (anon 3s, authenticated 8s), but the postgres role and any custom roles are only bounded by the 2min global cap, so a global 0 leaves them uncapped.",
     remediation:
-      "Set a statement_timeout (per-role is fine) so runaway queries are capped instead of running unbounded.",
-    docUrl: "https://www.postgresql.org/docs/current/runtime-config-client.html",
+      "Set a concrete cap. Good starting values: interactive/API roles '30s'-'60s', analytics/batch roles '2min'-'5min'. Supabase's own defaults are anon 3s and authenticated 8s; set the postgres role and any custom roles explicitly (they otherwise inherit only the 2min global cap). Per-role: ALTER ROLE <role> SET statement_timeout = '30s'; global: ALTER DATABASE postgres SET statement_timeout = '60s'.",
+    docUrl: "https://supabase.com/docs/guides/database/postgres/timeouts",
     reviewed: R,
   },
 
@@ -423,7 +424,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "Sorts/hash joins spilling to disk are far slower than in-memory and add IOPS. Raising work_mem fixes latency, but total = max_connections x work_mem must stay within RAM or you risk OOM.",
     remediation:
-      "Sorts/hash joins are spilling to disk (temp files). Raise work_mem (per-role or per-session for the offending queries), or reduce the sort/hash volume with better indexing. Watch total = max_connections x work_mem so you don't OOM.",
+      "Sorts/hash joins are spilling to disk (temp files). Raise work_mem for the offending queries - the Supabase default is small (usually a few MB), so try '16MB'-'64MB' per-role or per-session (SET work_mem = '32MB'), or reduce the sort/hash volume with better indexing. Keep the ceiling max_connections x work_mem within RAM so you don't OOM - tune per-session, not globally.",
     docUrl: "https://www.postgresql.org/docs/current/runtime-config-resource.html",
     reviewed: R,
   },
