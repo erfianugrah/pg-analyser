@@ -27,7 +27,7 @@ export function parseDbConfig(json: string): RawEntry[] {
 }
 
 /** Supabase project refs are exactly 20 lowercase letters. */
-const REF = /^[a-z]{20}$/;
+export const REF = /^[a-z]{20}$/;
 
 /**
  * Derive the Supabase project ref from a connection string:
