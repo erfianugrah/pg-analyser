@@ -111,7 +111,8 @@ describe("render", () => {
   test("emits all section headings", () => {
     const html = render(fixture());
     for (const h of [
-      "Service health",
+      "Findings",
+      "Evidence",
       "Infrastructure",
       "Advisors - performance",
       "Query outliers",
@@ -203,13 +204,25 @@ describe("render", () => {
     expect(html).toContain("none found");
   });
 
-  test("leads with a findings summary (pyramid apex)", () => {
+  test("audit flow: TL;DR verdict -> findings -> evidence (pyramid)", () => {
     const html = render(fixture());
-    const findIdx = html.indexOf("<h2>Findings</h2>");
+    const tldrIdx = html.indexOf("class=tldr");
+    const findIdx = html.indexOf('id="findings"');
+    const evidenceIdx = html.indexOf('id="evidence"');
     const outlierIdx = html.indexOf("Query outliers");
-    expect(findIdx).toBeGreaterThan(-1);
-    expect(findIdx).toBeLessThan(outlierIdx); // findings before detail
+    expect(tldrIdx).toBeGreaterThan(-1);
+    expect(tldrIdx).toBeLessThan(findIdx); // TL;DR leads
+    expect(findIdx).toBeLessThan(evidenceIdx); // then findings
+    expect(evidenceIdx).toBeLessThan(outlierIdx); // then substantiating evidence
     expect(html).toContain("RLS"); // the unwrapped-auth finding surfaces
+    expect(html).toContain("class=priorities"); // top-priority links present
+    expect(html).toContain('class="finding'); // per-finding deep-dive blocks
+  });
+
+  test("findings deep-dive shows how-to-fix (remediation) + evidence link", () => {
+    const html = render(fixture());
+    expect(html).toContain("class=fix"); // remediation rendered
+    expect(html).toContain("Evidence &#8595;"); // evidence jump link
   });
 
   test("degraded banner shows for non-healthy status", () => {

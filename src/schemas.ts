@@ -20,6 +20,13 @@ export const Project = z.object({
 });
 export type Project = z.infer<typeof Project>;
 
+export const Organization = z.object({
+  id: z.string(),
+  name: z.string(),
+  slug: z.string().optional(),
+});
+export type Organization = z.infer<typeof Organization>;
+
 export const ServiceHealth = z.object({
   name: z.string(),
   healthy: z.boolean(),

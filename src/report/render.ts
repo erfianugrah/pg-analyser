@@ -235,30 +235,6 @@ function healthBadges(a: Analysis): string {
 }
 
 const SEV_CLASS: Record<Severity, string> = { high: "ERROR", med: "WARN", low: "INFO" };
-function findingsSummary(findings: Finding[], degraded: boolean): string {
-  if (!findings.length) {
-    return degraded
-      ? `<p class="banner">No findings - but diagnostics were incomplete (see status banner). Absence of findings here does not mean the project is clean.</p>`
-      : `<p class="banner ok">No issues detected across performance, security, and capacity checks.</p>`;
-  }
-  const counts = { high: 0, med: 0, low: 0 };
-  for (const f of findings) counts[f.severity]++;
-  const lead = `${findings.length} finding${findings.length === 1 ? "" : "s"}: ${counts.high} high, ${counts.med} medium, ${counts.low} low`;
-  const seg = (n: number, cls: string) =>
-    n ? `<span class="segbar ${cls}" style="flex:${n}" title="${n}">${n}</span>` : "";
-  const sevBar = `<div class="sevbar">${seg(counts.high, "ERROR")}${seg(counts.med, "WARN")}${seg(counts.low, "INFO")}</div>`;
-  const rows = findings
-    .map(
-      (f) => `<tr>
-      <td><span class="lvl ${SEV_CLASS[f.severity]}">${f.severity.toUpperCase()}</span></td>
-      <td>${esc(f.category)}</td>
-      <td><a href="${f.anchor}">${esc(f.title)}</a></td>
-    </tr>`,
-    )
-    .join("");
-  return `<p class=lead>${esc(lead)}</p>${sevBar}
-<table class=find><thead><tr><th>sev</th><th>area</th><th>finding</th></tr></thead><tbody>${rows}</tbody></table>`;
-}
 
 /** Upstream sync annotation for the footer - advisor lints are live regardless. */
 function syncFooter(sync: Analysis["sync"]): string {
@@ -281,6 +257,94 @@ function positivesSection(positives: Positive[]): string {
 /** Collapsible evidence section (open by default so PDF shows everything). */
 function drill(id: string, title: string, note: string, body: string): string {
   return `<details open id="${id}"><summary><span class=h2>${esc(title)}</span>${note ? ` <span class=note>${esc(note)}</span>` : ""}</summary>${body}</details>`;
+}
+
+// --- Audit front-page + deep-dive (TL;DR -> per-finding -> evidence) ---
+
+const SEV_WORD: Record<Severity, string> = { high: "HIGH", med: "MED", low: "LOW" };
+/** Stable id linking a TL;DR priority to its deep-dive block. */
+const fid = (i: number) => `f${i + 1}`;
+
+function computeVerdict(findings: Finding[], degraded: boolean): { cls: string; text: string } {
+  const c = { high: 0, med: 0, low: 0 };
+  for (const f of findings) c[f.severity]++;
+  if (!findings.length)
+    return degraded
+      ? { cls: "warn", text: "No issues found, but some checks could not run" }
+      : { cls: "ok", text: "Healthy - no issues found" };
+  if (c.high)
+    return {
+      cls: "bad",
+      text: `${c.high} issue${c.high === 1 ? " needs" : "s need"} attention now`,
+    };
+  return {
+    cls: "warn",
+    text: `${findings.length} issue${findings.length === 1 ? "" : "s"} worth reviewing`,
+  };
+}
+
+function severityBar(findings: Finding[]): string {
+  if (!findings.length) return "";
+  const c = { high: 0, med: 0, low: 0 };
+  for (const f of findings) c[f.severity]++;
+  const seg = (n: number, cls: string, lbl: string) =>
+    n ? `<span class="segbar ${cls}" style="flex:${n}">${n} ${lbl}</span>` : "";
+  return `<div class="sevbar">${seg(c.high, "ERROR", "high")}${seg(c.med, "WARN", "med")}${seg(c.low, "INFO", "low")}</div>`;
+}
+
+/** Numbered top-priority list; each entry jumps to its deep-dive block. */
+function topPriorities(findings: Finding[]): string {
+  if (!findings.length) return "";
+  const li = findings
+    .slice(0, 6)
+    .map(
+      (f, i) =>
+        `<li><a href="#${fid(i)}"><span class="lvl ${SEV_CLASS[f.severity]}">${SEV_WORD[f.severity]}</span> ${esc(f.title)}</a></li>`,
+    )
+    .join("");
+  return `<ol class=priorities>${li}</ol>`;
+}
+
+/** Per-finding deep-dive: what it is, how to fix (remediation + doc), evidence link. */
+function auditFindings(findings: Finding[], degraded: boolean): string {
+  if (!findings.length)
+    return degraded
+      ? `<p class="banner">No findings - but diagnostics were incomplete (see the status banner). Absence of findings is not proof the project is clean.</p>`
+      : `<p class="banner ok">No issues detected across performance, security, and capacity checks.</p>`;
+  return findings
+    .map((f, i) => {
+      const links = [
+        f.docUrl ? `<a href="${esc(f.docUrl)}">Reference &#8599;</a>` : "",
+        f.anchor ? `<a href="${esc(f.anchor)}">Evidence &#8595;</a>` : "",
+      ]
+        .filter(Boolean)
+        .join(" &middot; ");
+      return `<div class="finding ${SEV_CLASS[f.severity]}" id="${fid(i)}">
+  <h3><span class="lvl ${SEV_CLASS[f.severity]}">${SEV_WORD[f.severity]}</span> <span class=fcat>${esc(f.category)}</span> ${esc(f.title)}</h3>
+  ${f.remediation ? `<p class=fix>${esc(f.remediation)}</p>` : `<p class="fix empty">See the linked evidence and the Supabase advisor detail.</p>`}
+  ${links ? `<p class=flinks>${links}</p>` : ""}
+</div>`;
+    })
+    .join("");
+}
+
+/** Compact vitals for the front page (full detail stays in Infrastructure). */
+function vitalsMini(a: Analysis): string {
+  const d = a.disk;
+  const rows: [string, string][] = [
+    ["Postgres", esc(a.meta.pgVersion ?? "-")],
+    ["DB size", esc(a.sql.dbSize ?? "-")],
+    ["Cache hit", a.sql.cacheHitPct == null ? "-" : `${a.sql.cacheHitPct}%`],
+    [
+      "Disk used",
+      d?.usedBytes != null
+        ? `${bytes(d.usedBytes)} / ${bytes((d.usedBytes ?? 0) + (d.availBytes ?? 0))}`
+        : "-",
+    ],
+  ];
+  return `<table class=vitals><tbody>${rows
+    .map(([k, v]) => `<tr><td>${k}</td><td class=mono>${v}</td></tr>`)
+    .join("")}</tbody></table>`;
 }
 
 export interface IndexRow {
@@ -386,13 +450,27 @@ export function render(a: Analysis, opts: { narrative?: boolean; brand?: Brand }
 
   const statsWindow = a.sql.statsResetAge ? ` (over ${a.sql.statsResetAge.split(".")[0]})` : "";
   const outliersNote = `app workload; platform/introspection queries filtered${statsWindow}`;
+  const verdict = computeVerdict(findings, degraded);
   const sections = `
-<h2>Findings</h2>
-${findingsSummary(findings, degraded)}
+<section class=tldr>
+  <div class="verdict ${verdict.cls}">${esc(verdict.text)}</div>
+  <div class=scorecard>
+    <div class=sc-main>
+      <div class=sc-label>${findings.length} finding${findings.length === 1 ? "" : "s"} &middot; ${positives.length} healthy check${positives.length === 1 ? "" : "s"}</div>
+      ${severityBar(findings)}
+      ${findings.length ? `<div class=sc-sub>Top priorities</div>${topPriorities(findings)}` : ""}
+    </div>
+    <div class=sc-vitals><div class=sc-sub>At a glance</div>${vitalsMini(a)}<p class=hbadges>${healthBadges(a)}</p></div>
+  </div>
+</section>
+
+<h2 id="findings">Findings <span class=count>${findings.length}</span></h2>
+${auditFindings(findings, degraded)}
 ${positivesSection(positives)}
 ${narrativeBlock}
 
-<h2>Service health</h2><p>${healthBadges(a)}</p>
+<h2 id="evidence">Evidence</h2>
+<p class=note>Substantiating data for the findings above - each finding's "Evidence" link lands in one of these sections.</p>
 ${trendsSection(a)}
 
 <h2 id="infra">Infrastructure</h2>
@@ -466,9 +544,32 @@ ${faviconTag(brand)}
   .narrative code{background:#f2f2f2;padding:1px 4px;border-radius:2px;font-size:12px}
   .narrative pre{background:#f7f7f7;padding:8px 10px;border-radius:3px;overflow:auto}
   .narrative pre code{background:none;padding:0}
-  .sevbar{display:flex;height:16px;border-radius:3px;overflow:hidden;margin:4px 0 10px;max-width:420px;font-size:11px;font-weight:700}
-  .segbar{display:flex;align-items:center;justify-content:center;color:#3a3a3a;min-width:16px}
+  .sevbar{display:flex;height:20px;border-radius:3px;overflow:hidden;margin:6px 0 12px;max-width:460px;font-size:11px;font-weight:700}
+  .segbar{display:flex;align-items:center;justify-content:center;color:#3a3a3a;padding:0 8px;white-space:nowrap}
   .segbar.ERROR{background:#f7b0b0}.segbar.WARN{background:#ffe08a}.segbar.INFO{background:#a9c7ff}
+  /* --- audit front page (TL;DR) --- */
+  section.tldr{margin:10px 0 26px}
+  .verdict{padding:14px 18px;border-radius:6px;font-size:18px;font-weight:700;margin:0 0 16px}
+  .verdict.ok{background:var(--okbg)}.verdict.warn{background:var(--warnbg)}.verdict.bad{background:var(--errbg)}
+  .scorecard{display:grid;grid-template-columns:1fr 320px;gap:28px;align-items:start}
+  .sc-label{font-size:13px;font-weight:600;color:var(--mut);margin-bottom:2px}
+  .sc-sub{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:var(--mut);margin:14px 0 6px}
+  ol.priorities{margin:0;padding-left:22px;font-size:14px}
+  ol.priorities li{margin:5px 0}
+  ol.priorities a{color:var(--fg);text-decoration:none}
+  ol.priorities a:hover{text-decoration:underline}
+  table.vitals{width:100%;border-collapse:collapse;font-size:13px}
+  table.vitals td{padding:4px 8px;border:1px solid var(--line)}
+  table.vitals td:first-child{color:var(--mut);width:90px}
+  .hbadges{margin:12px 0 0;line-height:2}
+  /* --- per-finding deep dive --- */
+  .finding{border:1px solid var(--line);border-left-width:4px;border-radius:5px;padding:10px 14px;margin:10px 0;break-inside:avoid;page-break-inside:avoid}
+  .finding.ERROR{border-left-color:#d64545}.finding.WARN{border-left-color:#d9a400}.finding.INFO{border-left-color:#5a7fd6}
+  .finding h3{font-size:14px;margin:0 0 6px;font-weight:700;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .fcat{font-size:11px;font-weight:600;color:var(--mut);text-transform:uppercase;letter-spacing:.03em}
+  p.fix{margin:0;font-size:13px;line-height:1.5}
+  p.fix.empty{color:var(--mut)}
+  p.flinks{margin:8px 0 0;font-size:12px}
   table.chart{border:none;width:auto;margin:4px 0 8px}
   table.chart td{border:none;padding:1px 8px 1px 0;vertical-align:middle}
   table.chart td.mono{max-width:none;white-space:nowrap;font-size:11px}
@@ -567,19 +668,7 @@ export function renderSummary(a: Analysis, brand: Brand = DEFAULT_BRAND): string
   const counts = { high: 0, med: 0, low: 0 };
   for (const f of findings) counts[f.severity]++;
 
-  const verdict = !findings.length
-    ? degraded
-      ? { cls: "warn", text: "No issues found, but some checks could not run" }
-      : { cls: "ok", text: "Healthy - no issues found" }
-    : counts.high > 0
-      ? {
-          cls: "bad",
-          text: `${counts.high} issue${counts.high === 1 ? " needs" : "s need"} attention now`,
-        }
-      : {
-          cls: "warn",
-          text: `${findings.length} issue${findings.length === 1 ? "" : "s"} worth reviewing`,
-        };
+  const verdict = computeVerdict(findings, degraded);
 
   const label: Record<Severity, string> = {
     high: "Needs attention now",
@@ -590,7 +679,12 @@ export function renderSummary(a: Analysis, brand: Brand = DEFAULT_BRAND): string
     .map((sev) => {
       const items = findings.filter((f) => f.severity === sev);
       if (!items.length) return "";
-      const li = items.map((f) => `<li><b>${esc(f.category)}:</b> ${esc(f.title)}</li>`).join("");
+      const li = items
+        .map(
+          (f) =>
+            `<li><b>${esc(f.category)}:</b> ${esc(f.title)}${f.remediation ? `<div class=sfix>${esc(f.remediation)}</div>` : ""}</li>`,
+        )
+        .join("");
       return `<h2 class="g ${SEV_CLASS[sev]}">${label[sev]}</h2><ul>${li}</ul>`;
     })
     .join("");
@@ -636,7 +730,8 @@ ${faviconTag(brand)}
   .verdict.ok{background:#e3f4e3}.verdict.warn{background:#fff4d6}.verdict.bad{background:#fde2e2}
   h2.g{font-size:14px;margin:20px 0 4px;padding:2px 8px;border-radius:3px;display:inline-block}
   h2.g.ERROR{background:#fde2e2}h2.g.WARN{background:#fff4d6}h2.g.INFO{background:#e6f0ff}
-  ul{margin:4px 0 0;padding-left:22px}li{margin:3px 0}
+  ul{margin:4px 0 0;padding-left:22px}li{margin:7px 0}
+  .sfix{color:#555;font-size:13px;margin-top:2px}
   table{border-collapse:collapse;width:100%;margin-top:8px;font-size:14px}
   td{padding:6px 10px;border:1px solid #ddd}td:first-child{font-weight:600;width:180px}
   .foot{color:#666;font-size:12px;margin-top:28px}
