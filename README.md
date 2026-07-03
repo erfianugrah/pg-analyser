@@ -121,9 +121,10 @@ bun run src/index.ts report <dir>            # draws trends from accumulated sna
 - **RLS policy audit** - flags policies re-evaluating `auth.*()` per row (should
   be wrapped in `(select ...)`; 94-99% latency win per Supabase's guide) and RLS
   policy columns without a covering index (seq scan per row check)
-- **Metrics-derived signals** - swap in use (memory pressure), cumulative
-  deadlocks, work_mem spill to disk (temp-file rate), and a `postgres_changes`
-  -> Broadcast nudge for realtime at scale
+- **Metrics-derived signals** - cumulative deadlocks, work_mem spill to disk
+  (temp-file rate), and a `postgres_changes` -> Broadcast nudge for realtime at
+  scale (swap is kept as a trend series, not a finding - static swap occupancy
+  is not a memory-pressure signal)
 - **Config** - Postgres version + upgrade drift, disk spec/util, pooler mode, PG tuning params (`pg_settings`)
 - **Inventory** - edge functions (with per-function invocation stats: request
   volume, 5xx rate, execution time), storage buckets + object usage

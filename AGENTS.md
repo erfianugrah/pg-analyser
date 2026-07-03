@@ -22,7 +22,7 @@ HTML + PDF report. No superuser `--db-url`, no manual Grafana screenshots.
 | `bun run src/index.ts pdf <dir>` | `analysis.json` -> `report.pdf` |
 | `bun run src/index.ts narrate <dir>` | `analysis.json` -> `narrative.md` (LLM pass; needs `SBPERF_LLM_*`) |
 | `bun run src/index.ts import-trends <dir> <file...>` | merge external CSV/JSON series into `analysis.trends` (vendor-neutral; no dashboard coupling) |
-| `bun run src/index.ts full --ref <ref>` | analyze + report + summary + pdf |
+| `bun run src/index.ts full --ref <ref>` | analyze + report + pdf |
 | `bun run src/index.ts full --ref <r1>,<r2> ...` / `--ref-file <f>` | audit a subset of projects -> combined org/project index (PAT-only). `--ref` repeatable + comma/space lists; `--ref-file` reads a .txt/.csv (ref-shaped tokens only) |
 | `bun run src/index.ts full --all [--org <slug>]` | audit every project -> `index.html` |
 | `bun run src/index.ts snapshot --ref <ref>` | collect + append to the SQLite history store (cron this) |
@@ -105,8 +105,8 @@ src/
                  the history store on every render path (report/pdf/emitReport).
                  render(a,{narrative}) embeds the narrative; renderNarrativePage
                  is the standalone narrative.html.
-  extensions/    sbperf.pi.ts - pi tool wrapper (analyze/full/report/pdf + the
-                 narrate_prompt/narrate_import copy-paste round-trip, pi as LLM).
+  extensions/    sbperf.pi.ts - pi tool wrapper (analyze/full/report/pdf/summary
+                 + narrate_prompt/narrate_import copy-paste round-trip, pi as LLM).
   report/markdown minimal, HTML-escaping Markdown->HTML for the narrate subset
                  (headings/lists/bold/code/fenced/links); NOT a general parser
   brand.ts       report branding: Supabase default (official mark + green) +
