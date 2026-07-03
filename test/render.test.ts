@@ -77,6 +77,7 @@ function fixture(overrides: Partial<Analysis> = {}): Analysis {
       samples: [{ name: "node_load1", labels: { service_type: "db" }, value: 0.42 }],
     },
     trends: [],
+    sync: null,
     errors: [],
   };
   return { ...base, ...overrides };
@@ -132,6 +133,28 @@ describe("render", () => {
   test("findings summary includes a severity bar when findings exist", () => {
     const html = render(fixture());
     expect(html).toContain('class="sevbar"');
+  });
+
+  test("sync footer renders the catalog vintage + drift note when present", () => {
+    const html = render(
+      fixture({
+        sync: {
+          catalogReviewed: "2026-07",
+          ageDays: 2,
+          stale: false,
+          upstreamChecked: true,
+          advisorSqlDrifted: true,
+          note: "Heuristics catalog vintage 2026-07 (current). Upstream advisor lint SQL changed since it was vendored - re-review src/splinter.sql.",
+        },
+      }),
+    );
+    expect(html).toContain("Heuristics sync:");
+    expect(html).toContain("vintage 2026-07");
+    expect(html).toContain("always current");
+  });
+
+  test("sync footer omitted when no sync status recorded (back-compat)", () => {
+    expect(render(fixture())).not.toContain("Heuristics sync:");
   });
 
   test("renders advisor finding with level badge", () => {

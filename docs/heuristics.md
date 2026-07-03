@@ -30,9 +30,12 @@ realtime/auth planes the advisors do not cover. Those can go stale, so:
    are live.
 2. **CI drift check** (`scripts/check-inspect-drift.ts` family) fingerprints the
    upstream sources and warns when they move.
-3. **Report-time sync check** runs on by default and soft-fails offline: it
-   annotates staleness when it can reach upstream, and silently skips (with a
-   note) when it cannot, so report generation stays reproducible.
+3. **Report-time sync check** (`src/sync.ts`, on by default; `--no-sync-check`
+   to skip) soft-fails offline: it hashes the vendored advisor lint SQL
+   (`src/splinter.sql`) against upstream `supabase/splinter` and reports the
+   catalog vintage + age. It annotates staleness when it can reach upstream, and
+   silently skips (with a note) when it cannot, so collection stays reproducible.
+   The result is stored on `analysis.sync` and rendered in the report footer.
 
 Catalog reviewed: **2026-07**. Thresholds below are stable facts; the review
 date tracks when we last confirmed them against upstream.

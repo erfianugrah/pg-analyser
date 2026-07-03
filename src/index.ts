@@ -45,6 +45,7 @@ Flags:
   --db-config <file>   JSON list of {name?,ref?,dbUrl} targets (gitignored); an
                        alternative to repeated --db-url. ref auto-derived if omitted.
   --prometheus <url>   trends from a scraper's Prometheus instead of the history store
+  --no-sync-check      skip the on-by-default upstream sync check (offline runs)
   -h, --help           show this help
   -v, --version        print version
 
@@ -70,6 +71,7 @@ type Flags = {
   interval?: string;
   dbUrls: string[];
   dbConfig?: string;
+  noSyncCheck?: boolean;
 };
 
 /** Analytics-endpoint timeframe enum (verified live 2026-07; iso ranges are clamped). */
@@ -90,6 +92,7 @@ function parseFlags(argv: string[]): Flags {
     else if (a === "--db-url") out.dbUrls.push(argv[++i]!);
     else if (a === "--db-config") out.dbConfig = argv[++i];
     else if (a === "--all") out.all = true;
+    else if (a === "--no-sync-check") out.noSyncCheck = true;
     else if (a?.startsWith("--")) usage();
     else if (a) out._.push(a);
   }
@@ -127,6 +130,7 @@ async function doAllDbs(
   outBase: string,
   prometheusUrl?: string,
   interval?: string,
+  syncCheck?: boolean,
 ): Promise<void> {
   const transport = makeTransport(loadCfg());
   console.error(
@@ -142,6 +146,7 @@ async function doAllDbs(
         prometheusUrl,
         interval,
         sqlRunner: runner,
+        syncCheck,
       }).finally(() => runner.close());
       const counts = await emitReport(analysis, join(outBase, t.ref));
       rows.push({
@@ -177,6 +182,7 @@ async function doAll(
   outBase: string,
   prometheusUrl?: string,
   interval?: string,
+  syncCheck?: boolean,
 ): Promise<void> {
   const transport = makeTransport(loadCfg());
   const m = new Management(transport);
@@ -190,7 +196,11 @@ async function doAll(
     const dir = join(outBase, p.id);
     process.stderr.write(`  - ${p.name} (${p.id}) `);
     try {
-      const analysis = await collect(p.id, transport, VERSION, { prometheusUrl, interval });
+      const analysis = await collect(p.id, transport, VERSION, {
+        prometheusUrl,
+        interval,
+        syncCheck,
+      });
       const counts = await emitReport(analysis, dir);
       rows.push({ name: p.name, ref: p.id, status: p.status, ...counts, dir: p.id });
       console.error(`ok (${counts.high + counts.med + counts.low} findings)`);
@@ -233,6 +243,7 @@ async function doAnalyze(
   prometheusUrl?: string,
   interval?: string,
   dbUrl?: string,
+  syncCheck?: boolean,
 ): Promise<string> {
   const transport = makeTransport(loadCfg());
   const runner = dbUrl ? new DirectSqlRunner(dbUrl) : undefined;
@@ -242,6 +253,7 @@ async function doAnalyze(
     prometheusUrl,
     interval,
     sqlRunner: runner,
+    syncCheck,
   }).finally(() => runner?.close());
   await mkdir(outDir, { recursive: true });
   const jsonPath = join(outDir, "analysis.json");
@@ -275,6 +287,7 @@ async function doSnapshot(
   retentionDays: number,
   interval?: string,
   dbUrl?: string,
+  syncCheck?: boolean,
 ): Promise<void> {
   const transport = makeTransport(loadCfg());
   const runner = dbUrl ? new DirectSqlRunner(dbUrl) : undefined;
@@ -283,6 +296,7 @@ async function doSnapshot(
   const analysis = await collect(ref, transport, VERSION, {
     interval,
     sqlRunner: runner,
+    syncCheck,
   }).finally(() => runner?.close());
   await mkdir(outDir, { recursive: true });
   await Bun.write(join(outDir, "analysis.json"), JSON.stringify(analysis, null, 2));
@@ -442,6 +456,7 @@ async function main(): Promise<void> {
           flags.prometheus,
           flags.interval,
           singleDbUrl,
+          !flags.noSyncCheck,
         );
         break;
       }
@@ -469,6 +484,7 @@ async function main(): Promise<void> {
               ret,
               flags.interval,
               t.dbUrl,
+              !flags.noSyncCheck,
             );
           break;
         }
@@ -481,6 +497,7 @@ async function main(): Promise<void> {
           ret,
           flags.interval,
           singleDbUrl,
+          !flags.noSyncCheck,
         );
         break;
       }
@@ -504,6 +521,7 @@ async function main(): Promise<void> {
             flags.out ?? join("reports", `all-${ts}`),
             flags.prometheus,
             flags.interval,
+            !flags.noSyncCheck,
           );
           break;
         }
@@ -514,13 +532,21 @@ async function main(): Promise<void> {
             flags.out ?? join("reports", `all-dbs-${ts}`),
             flags.prometheus,
             flags.interval,
+            !flags.noSyncCheck,
           );
           break;
         }
         const ref = flags.ref ?? targets[0]?.ref;
         if (!ref) usage();
         const dir = flags.out ?? defaultOut(ref);
-        await doAnalyze(ref, dir, flags.prometheus, flags.interval, singleDbUrl);
+        await doAnalyze(
+          ref,
+          dir,
+          flags.prometheus,
+          flags.interval,
+          singleDbUrl,
+          !flags.noSyncCheck,
+        );
         await doReport(dir);
         await doPdf(dir);
         console.error(`> done: ${dir}`);
