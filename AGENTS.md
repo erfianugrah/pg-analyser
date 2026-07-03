@@ -24,6 +24,7 @@ HTML + PDF report. No superuser `--db-url`, no manual Grafana screenshots.
 | `bun run src/index.ts import-trends <dir> <file...>` | merge external CSV/JSON series into `analysis.trends` (vendor-neutral; no dashboard coupling) |
 | `bun run src/index.ts full --ref <ref>` | analyze + report + summary + pdf |
 | `bun run src/index.ts snapshot --ref <ref>` | collect + append to the SQLite history store (cron this) |
+| `bun run src/index.ts export-prometheus <dir> [--ref <ref>]` | history store -> OpenMetrics for promtool backfill |
 | `bun run src/index.ts scrape-init --ref <ref>` | write the (alternate) Prometheus+Grafana stack |
 | `bun run check` | biome format + lint (write) |
 | `bun run typecheck` | `tsc --noEmit` |

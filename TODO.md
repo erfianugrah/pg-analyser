@@ -1,32 +1,42 @@
 # TODO
 
-## Shipped 2026-07-03 (new checks batch)
+## Shipped 2026-07-03
+New checks (grounded in docs/heuristics.md, unit-tested):
 - [x] duplicate-index check (SQL, splinter-derived) - fires over the read-only
       endpoint even when the hosted advisor 400s and there is no --db-url
 - [x] RLS-column-unindexed check (SQL) - policy-compared columns with no covering
       index (word-boundary match against real attributes; leading-index-col aware)
-- [x] swap-in-use finding (node_memory_Swap* gauge; >=20% used) + "Swap used"
-      trend series
-- [x] cumulative-deadlocks finding (pg_stat_database_deadlocks_total >=5) +
-      "Deadlocks/s" trend rate
-- [x] work_mem-spill finding (temp-file rate >=1MB/s from trends) + "Temp file
-      bytes/s" trend rate
+- [x] swap-in-use finding (node_memory_Swap* gauge; >=20% used) + "Swap used" trend
+- [x] cumulative-deadlocks finding (deadlocks_total >=5) + "Deadlocks/s" rate
+- [x] work_mem-spill finding (temp-file rate >=1MB/s) + "Temp file bytes/s" rate
 - [x] realtime postgres_changes nudge (subscriptions > 0 -> prefer Broadcast)
-- catalog entries + thresholds grounded in docs/heuristics.md; new findings unit-
-  tested. NB: duplicate_index / rls_col_unindexed derive from splinter, not the
-  CLI inspect set, so the inspect-drift baseline is unchanged (CLI-inspect-only).
+      NB: duplicate_index / rls_col_unindexed derive from splinter, not the CLI
+      inspect set, so the inspect-drift baseline is unchanged (CLI-inspect-only).
 
-## Remaining
-- [x] Positive-findings pass ("what's looking good")
-- [x] Inline-SVG bar charts (query outliers + most-frequent) + severity bar
-- [x] Professional print CSS polish (color-adjust, repeating headers, break control)
-- [x] On-by-default soft-fail upstream sync check (src/sync.ts) - hashes vendored
-      splinter.sql vs upstream + catalog vintage/age; stored on analysis.sync,
-      rendered in the footer; --no-sync-check to skip
-- [x] narrate command (src/narrate.ts): LLM pass over the corpus + enriched
-      findings -> narrative.md. Grounded (bounded evidence digest + findings with
-      remediation/doc; system prompt forbids inventing facts). OpenAI-compatible
-      client, injectable for tests; SBPERF_LLM_BASE_URL + _MODEL (+ _API_KEY).
+Report + workflow:
+- [x] positive-findings pass ("what's looking good") - complements each finding
+      threshold; asserted only when the signal was actually collected
+- [x] inline-SVG bar charts (query outliers + most-frequent) + severity bar
+- [x] professional print CSS (color-adjust, repeating table headers, break control)
+- [x] on-by-default soft-fail sync check (src/sync.ts) - vendored splinter.sql vs
+      upstream + catalog vintage/age; on analysis.sync, footer-rendered;
+      --no-sync-check to skip. Fixed a false-drift (leading provenance header was
+      hashed) via stripLeadingComments.
+- [x] narrate command (src/narrate.ts): grounded LLM pass over the corpus +
+      enriched findings -> narrative.md. Bounded evidence digest + findings with
+      remediation/doc; prompt forbids inventing facts/URLs/downtimes. OpenAI-
+      compatible injectable client; SBPERF_LLM_BASE_URL + _MODEL (+ _API_KEY).
+      Compared sonnet-4-6 / opus-4-8 / haiku-4-5 on a real report; all grounded.
+- [x] import-trends command (src/importtrends.ts): merge external CSV/JSON series
+      into analysis.trends so the report renders bring-your-own history as native
+      panels - vendor-neutral, no dashboard coupling (you export, sbperf ingests).
+
+## Remaining / ideas
+Nothing outstanding from the planned backlog. Candidate next steps (unprioritised):
+- narrate: optionally render narrative.md -> narrative.html and/or embed it in
+  report.html behind a flag.
+- import-trends: long-format CSV (time,series,value) in addition to wide.
+- sqlrunner.ts has no unit test (network-bound); consider a fake-connection test.
 
 ## Done
 - [x] PAT-only collector across Management API + read-only SQL + metrics
