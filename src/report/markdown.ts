@@ -24,7 +24,13 @@ function inline(text: string): string {
 }
 
 export function mdToHtml(md: string): string {
-  const lines = md.replace(/\r\n?/g, "\n").split("\n");
+  // Drop HTML comments (<!-- ... -->) up front - provenance markers and any
+  // model-emitted comment would otherwise be HTML-escaped and show as literal
+  // "<!-- ... -->" text in the report.
+  const lines = md
+    .replace(/\r\n?/g, "\n")
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .split("\n");
   const out: string[] = [];
   let i = 0;
   let para: string[] = [];

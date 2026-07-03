@@ -151,8 +151,14 @@ function parseFlags(argv: string[]): Flags {
     else if (a === "--no-sync-check") out.noSyncCheck = true;
     else if (a === "--narrative") out.narrative = true;
     else if (a === "--print-prompt") out.printPrompt = true;
-    else if (a === "--import") out.import = argv[++i];
-    else if (a?.startsWith("--")) usage();
+    else if (a === "--import") {
+      const v = argv[++i];
+      if (v === undefined || (v.startsWith("--") && v !== "-")) {
+        console.error("error: --import needs a file path (or - for stdin)");
+        process.exit(1);
+      }
+      out.import = v;
+    } else if (a?.startsWith("--")) usage();
     else if (a) out._.push(a);
   }
   return out;
