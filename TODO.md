@@ -94,7 +94,7 @@ Nothing outstanding from the planned backlog. Candidate next steps (unprioritise
       so rates are computable - a single scrape of a counter is meaningless
 - [x] `report` fills trends from the store when no --prometheus trends are baked in;
       --prometheus stays as the alternate source and takes precedence
-- [x] verified live end-to-end (example-project): 2 snapshots -> store (140 samples, both
+- [x] verified live end-to-end (a real project): 2 snapshots -> store (140 samples, both
       scalars) -> report renders all 13 trend series. Rapid back-to-back snapshots
       show 0 rates because Supabase's scrape interval is coarser than the gap
       (identical counters -> zero delta); hourly cron produces real rates.
