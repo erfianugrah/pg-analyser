@@ -29,16 +29,20 @@ Or step by step:
 
 ```bash
 bun run src/index.ts analyze --ref <ref> --out ./reports/myproject
-bun run src/index.ts report  ./reports/myproject    # report.html + summary.html
-bun run src/index.ts summary ./reports/myproject    # non-technical summary.html only
-bun run src/index.ts pdf     ./reports/myproject    # report.pdf + summary.pdf
+bun run src/index.ts report  ./reports/myproject    # report.html (technical + business)
+bun run src/index.ts pdf     ./reports/myproject    # report.pdf
+bun run src/index.ts summary ./reports/myproject    # optional plain-language one-pager (summary.html)
 bun run src/index.ts narrate ./reports/myproject    # narrative.md (optional LLM pass)
 bun run src/index.ts import-trends ./reports/myproject series.csv  # merge external trends
 ```
 
-`report`/`pdf` emit two documents: the full technical **report** and a
-non-technical one-page **summary** (plain-language verdict for a non-engineering
-audience).
+`report`/`pdf` emit a single combined document (`report.html` / `report.pdf`)
+structured as a pyramid: verdict + executive summary up top, then a **Resource
+snapshot** (30-day capacity/cost charts), **What's looking good**, and
+**Findings worth addressing** - each finding framed as *what's happening / why
+it matters (business + technical impact) / what to do* - over the full evidence
+drill-down. `summary` remains as an optional standalone plain-language one-pager
+for a non-engineering audience.
 
 ## Install as a command (`sbperf`)
 

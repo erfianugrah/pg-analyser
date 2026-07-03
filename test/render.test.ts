@@ -219,9 +219,10 @@ describe("render", () => {
     expect(html).toContain('class="finding'); // per-finding deep-dive blocks
   });
 
-  test("findings deep-dive shows how-to-fix (remediation) + evidence link", () => {
+  test("findings deep-dive shows why-it-matters + what-to-do + evidence link", () => {
     const html = render(fixture());
-    expect(html).toContain("class=fix"); // remediation rendered
+    expect(html).toContain("Why it matters"); // consequence rendered
+    expect(html).toContain("What to do"); // remediation rendered
     expect(html).toContain("Evidence &#8595;"); // evidence jump link
   });
 
@@ -270,12 +271,12 @@ describe("render", () => {
         ],
       }),
     );
-    expect(html).toContain("30-day trends");
+    expect(html).toContain("Resource snapshot");
     expect(html).toContain("<svg viewBox");
   });
 
   test("omits trends section when no trend data", () => {
-    expect(render(fixture())).not.toContain("30-day trends");
+    expect(render(fixture())).not.toContain("Resource snapshot");
   });
 
   test("storage buckets render with access + usage", () => {

@@ -13,6 +13,8 @@ export interface Finding {
   heuristicId?: string;
   /** One-line copy-pasteable fix guidance (from the heuristic). */
   remediation?: string;
+  /** The consequence: business + technical impact (from the heuristic). */
+  whyItMatters?: string;
   /** Canonical doc/source URL for the reader and the narrate pass to cite. */
   docUrl?: string;
   /** Optional measured evidence string (e.g. object name + size + %). */
