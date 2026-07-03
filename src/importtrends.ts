@@ -13,6 +13,10 @@ import { TrendSeries as TrendSeriesSchema } from "./schemas.ts";
  *  - CSV (wide): first column is time, every other column is one series (the
  *    header is its title). This is Grafana's default time-series CSV export.
  *    A "Title [unit]" or "Title (unit)" header sets the series unit.
+ *  - CSV (long): exactly three columns (time, series, value) - the Prometheus /
+ *    tidy-data shape. Detected by header names (series/metric/name + value) or
+ *    by sniffing (col 2 is a non-numeric label, col 3 numeric). Grouped into one
+ *    series per distinct label.
  *  - JSON: a TrendSeries[] (sbperf-native), or {trends:[...]}, or an array of
  *    {title, unit?, points:[{t,v}]} / {title, unit?, points:[[t,v],...]}.
  *
@@ -84,11 +88,57 @@ function parseCsvRows(text: string): string[][] {
   return rows.filter((r) => r.some((c) => c.trim() !== ""));
 }
 
+const LONG_SERIES_HEADERS = new Set(["series", "metric", "name", "label", "key"]);
+const LONG_VALUE_HEADERS = new Set(["value", "val", "v", "y"]);
+
+/**
+ * Decide whether a 3-column table is LONG (time, series, value) rather than WIDE
+ * (time + two series columns). Prefer the header names; otherwise sniff - long
+ * data has a non-numeric category in column 1 and numbers in column 2.
+ */
+function isLongFormat(rows: string[][]): boolean {
+  const header = rows[0]!;
+  if (header.length !== 3) return false;
+  const h1 = header[1]!.trim().toLowerCase();
+  const h2 = header[2]!.trim().toLowerCase();
+  if (LONG_SERIES_HEADERS.has(h1) && LONG_VALUE_HEADERS.has(h2)) return true;
+  // Sniff the data: col1 mostly non-numeric (series labels), col2 mostly numeric.
+  const data = rows.slice(1);
+  if (!data.length) return false;
+  let col1NonNumeric = 0;
+  let col2Numeric = 0;
+  for (const r of data) {
+    if (num(r[1] ?? "") == null && (r[1] ?? "").trim() !== "") col1NonNumeric++;
+    if (num(r[2] ?? "") != null) col2Numeric++;
+  }
+  return col1NonNumeric > data.length / 2 && col2Numeric > data.length / 2;
+}
+
+/** Long format: (time, series, value) rows grouped into one series per label. */
+function parseTrendsCsvLong(rows: string[][]): TrendSeries[] {
+  const byName = new Map<string, TrendSeries>();
+  for (const r of rows.slice(1)) {
+    const t = toEpochSeconds(r[0] ?? "");
+    const name = (r[1] ?? "").trim();
+    const v = num(r[2] ?? "");
+    if (t == null || !name || v == null) continue;
+    const { title, unit } = splitUnit(name);
+    let s = byName.get(title);
+    if (!s) {
+      s = { title, unit, points: [] };
+      byName.set(title, s);
+    }
+    s.points.push({ t, v });
+  }
+  return [...byName.values()].filter((s) => s.points.length > 0);
+}
+
 export function parseTrendsCsv(text: string): TrendSeries[] {
   const rows = parseCsvRows(text);
   if (rows.length < 2) return [];
   const header = rows[0]!;
   if (header.length < 2) return [];
+  if (isLongFormat(rows)) return parseTrendsCsvLong(rows);
   const cols = header.slice(1).map(splitUnit);
   const series: TrendSeries[] = cols.map((c) => ({ title: c.title, unit: c.unit, points: [] }));
   for (const r of rows.slice(1)) {
