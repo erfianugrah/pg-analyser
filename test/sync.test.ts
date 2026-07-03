@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { HEURISTICS_REVIEWED } from "../src/heuristics.ts";
 import { SPLINTER_SQL } from "../src/splinter.ts";
-import { catalogAgeDays, computeSyncStatus } from "../src/sync.ts";
+import { catalogAgeDays, computeSyncStatus, stripLeadingComments } from "../src/sync.ts";
 
 const okFetch = (body: string): typeof fetch =>
   (async () => new Response(body, { status: 200 })) as unknown as typeof fetch;
@@ -19,6 +19,22 @@ describe("catalogAgeDays", () => {
   });
   test("returns 0 for a malformed vintage", () => {
     expect(catalogAgeDays("nope", new Date())).toBe(0);
+  });
+});
+
+describe("stripLeadingComments", () => {
+  test("drops a leading header + blank lines but keeps the body", () => {
+    const s = stripLeadingComments("-- header a\n-- header b\n\nselect 1;\n-- inline\nselect 2;");
+    expect(s).toBe("select 1;\n-- inline\nselect 2;");
+  });
+  test("a local header does not read as drift vs a header-less upstream", async () => {
+    const upstream = "select 1;\nselect 2;";
+    const vendored = `-- local provenance note\n-- @ 2026-07-03\n${upstream}`;
+    const s = await computeSyncStatus({
+      vendored,
+      fetchImpl: (async () => new Response(upstream, { status: 200 })) as unknown as typeof fetch,
+    });
+    expect(s.advisorSqlDrifted).toBe(false);
   });
 });
 

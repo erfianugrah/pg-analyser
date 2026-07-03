@@ -27,6 +27,19 @@ const DEFAULT_TIMEOUT_MS = 4000;
 
 const sha256 = (s: string): string => createHash("sha256").update(s).digest("hex");
 
+/**
+ * Normalize before hashing so a local provenance header (leading `--`/blank
+ * lines we add to the vendored copy) does not read as upstream drift. Only
+ * LEADING comment/blank lines are stripped - comments inside the lint body are
+ * kept, so a genuine change there is still caught.
+ */
+export function stripLeadingComments(sql: string): string {
+  const lines = sql.split("\n");
+  let i = 0;
+  while (i < lines.length && /^\s*(--.*)?$/.test(lines[i] ?? "")) i++;
+  return lines.slice(i).join("\n").trimEnd();
+}
+
 /** Days between the catalog vintage (YYYY-MM, taken as the 1st) and `now`. */
 export function catalogAgeDays(reviewed: string, now: Date): number {
   const [y, m] = reviewed.split("-").map(Number);
@@ -78,7 +91,8 @@ export async function computeSyncStatus(
       });
       if (res.ok) {
         const upstream = await res.text();
-        advisorSqlDrifted = sha256(upstream) !== sha256(vendored);
+        advisorSqlDrifted =
+          sha256(stripLeadingComments(upstream)) !== sha256(stripLeadingComments(vendored));
         upstreamChecked = true;
       }
     } catch {
