@@ -11,7 +11,13 @@ import { Management } from "./management.ts";
 import { clientFromEnv, narrate } from "./narrate.ts";
 import { backfillInstructions, toOpenMetrics } from "./promexport.ts";
 import { htmlToPdf } from "./report/pdf.ts";
-import { type IndexRow, render, renderIndex, renderSummary } from "./report/render.ts";
+import {
+  type IndexRow,
+  render,
+  renderIndex,
+  renderNarrativePage,
+  renderSummary,
+} from "./report/render.ts";
 import type { Analysis } from "./schemas.ts";
 import { writeScraper } from "./scraper.ts";
 import { DirectSqlRunner } from "./sqlrunner.ts";
@@ -50,6 +56,7 @@ Flags:
                        alternative to repeated --db-url. ref auto-derived if omitted.
   --prometheus <url>   trends from a scraper's Prometheus instead of the history store
   --no-sync-check      skip the on-by-default upstream sync check (offline runs)
+  --narrative          report/pdf: embed the LLM narrative (run 'narrate' first)
   -h, --help           show this help
   -v, --version        print version
 
@@ -80,6 +87,7 @@ type Flags = {
   dbUrls: string[];
   dbConfig?: string;
   noSyncCheck?: boolean;
+  narrative?: boolean;
 };
 
 /** Analytics-endpoint timeframe enum (verified live 2026-07; iso ranges are clamped). */
@@ -101,6 +109,7 @@ function parseFlags(argv: string[]): Flags {
     else if (a === "--db-config") out.dbConfig = argv[++i];
     else if (a === "--all") out.all = true;
     else if (a === "--no-sync-check") out.noSyncCheck = true;
+    else if (a === "--narrative") out.narrative = true;
     else if (a?.startsWith("--")) usage();
     else if (a) out._.push(a);
   }
@@ -388,12 +397,14 @@ async function doExportPrometheus(
   }
 }
 
-async function doReport(dir: string, storePath?: string): Promise<string> {
+async function doReport(dir: string, storePath?: string, narrative?: boolean): Promise<string> {
   const analysis = await loadAnalysis(dir);
   const path = storePath ?? DEFAULT_STORE;
   if (await Bun.file(path).exists()) fillTrendsFromStore(analysis, path);
+  if (narrative && !analysis.narrative)
+    console.error("> --narrative given but analysis.json has none; run 'sbperf narrate' first");
   const htmlPath = join(dir, "report.html");
-  await Bun.write(htmlPath, render(analysis));
+  await Bun.write(htmlPath, render(analysis, { narrative }));
   const summaryPath = join(dir, "summary.html");
   await Bun.write(summaryPath, renderSummary(analysis));
   console.error(`> ${htmlPath}`);
@@ -409,10 +420,10 @@ async function doSummary(dir: string): Promise<string> {
   return path;
 }
 
-async function doPdf(dir: string): Promise<string> {
+async function doPdf(dir: string, narrative?: boolean): Promise<string> {
   const analysis = await loadAnalysis(dir);
   const pdfPath = join(dir, "report.pdf");
-  await htmlToPdf(render(analysis), pdfPath);
+  await htmlToPdf(render(analysis, { narrative }), pdfPath);
   console.error(`> ${pdfPath}`);
   const summaryPdf = join(dir, "summary.pdf");
   await htmlToPdf(renderSummary(analysis), summaryPdf);
@@ -453,9 +464,16 @@ async function doNarrate(dir: string): Promise<string> {
   if ("error" in built) throw new Error(built.error);
   console.error(`> narrating ${dir} via ${built.client.model}`);
   const md = await narrate(analysis, built.client);
+  analysis.narrative = md;
+  // Persist onto analysis.json so `report --narrative` can embed it without
+  // re-running the LLM, and emit the markdown + a standalone HTML page.
+  await Bun.write(join(dir, "analysis.json"), JSON.stringify(analysis, null, 2));
   const path = join(dir, "narrative.md");
   await Bun.write(path, md);
+  await Bun.write(join(dir, "narrative.html"), renderNarrativePage(analysis));
   console.error(`> ${path}`);
+  console.error(`> ${join(dir, "narrative.html")}`);
+  console.error("> embed in the report with: sbperf report " + dir + " --narrative");
   return path;
 }
 
@@ -510,7 +528,7 @@ async function main(): Promise<void> {
       case "report": {
         const dir = flags._[0];
         if (!dir) usage();
-        await doReport(dir, flags.store);
+        await doReport(dir, flags.store, flags.narrative);
         break;
       }
       case "export-prometheus": {
@@ -557,7 +575,7 @@ async function main(): Promise<void> {
       case "pdf": {
         const dir = flags._[0];
         if (!dir) usage();
-        await doPdf(dir);
+        await doPdf(dir, flags.narrative);
         break;
       }
       case "narrate": {

@@ -263,8 +263,14 @@ remediation + doc URLs), the healthy positives, and a bounded evidence digest.
 ```bash
 export SBPERF_LLM_BASE_URL=http://localhost:11434/v1   # any OpenAI-compatible endpoint
 export SBPERF_LLM_MODEL=your-model-id                  # SBPERF_LLM_API_KEY if the endpoint needs one
-bun run src/index.ts narrate ./reports/myproject       # -> narrative.md
+bun run src/index.ts narrate ./reports/myproject       # -> narrative.md + narrative.html
+bun run src/index.ts report ./reports/myproject --narrative   # embed it in report.html
 ```
+
+`narrate` writes `narrative.md`, a standalone `narrative.html`, and stores the
+text on `analysis.json`. The deterministic report stays LLM-free by default; pass
+`--narrative` to `report`/`pdf` to embed the narrative as a clearly-labelled
+section above the evidence (no re-run of the model needed).
 
 Works with OpenAI, a local llama-server, OpenRouter, etc. The prompt forbids the
 model from inventing thresholds, numbers, table names, or doc URLs not present in

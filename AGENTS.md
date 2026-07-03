@@ -88,7 +88,11 @@ src/
                  captured); captures the COMPLETE metrics corpus (all ~321
                  families, no curation) - the corpus is the product
   report/render  Analysis -> self-contained HTML (utilitarian, print CSS,
-                 positives pass + inline-SVG bar charts + severity bar)
+                 positives pass + inline-SVG bar charts + severity bar).
+                 render(a,{narrative}) embeds the LLM narrative on demand;
+                 renderNarrativePage(a) is the standalone narrative.html.
+  report/markdown minimal, HTML-escaping Markdown->HTML for the narrate subset
+                 (headings/lists/bold/code/fenced/links); NOT a general parser
   report/pdf     HTML -> PDF via headless Chromium --print-to-pdf (no Playwright
                  dep; system Chrome discovered on PATH or SBPERF_CHROME)
   narrate.ts     LLM pass over the corpus + enriched findings -> narrative.md.

@@ -7,6 +7,7 @@ import {
 } from "../findings.ts";
 import { curate } from "../metrics.ts";
 import type { Advisor, Analysis, SqlRow } from "../schemas.ts";
+import { mdToHtml } from "./markdown.ts";
 
 const esc = (s: unknown): string =>
   String(s ?? "").replace(
@@ -327,9 +328,13 @@ export function renderIndex(rows: IndexRow[], collectedAt: string): string {
 </body></html>`;
 }
 
-export function render(a: Analysis): string {
+export function render(a: Analysis, opts: { narrative?: boolean } = {}): string {
   const m = a.meta;
   const disk = a.disk;
+  const narrativeBlock =
+    opts.narrative && a.narrative
+      ? `<h2 id="narrative">Narrative <span class=note>LLM synthesis - the tables below are ground truth</span></h2>\n<div class=narrative>${mdToHtml(a.narrative)}</div>`
+      : "";
   const errored = new Set(a.errors.map((e) => e.source));
   const findings = deriveFindings(a);
   const positives = derivePositives(a);
@@ -371,6 +376,7 @@ export function render(a: Analysis): string {
 <h2>Findings</h2>
 ${findingsSummary(findings, degraded)}
 ${positivesSection(positives)}
+${narrativeBlock}
 
 <h2>Service health</h2><p>${healthBadges(a)}</p>
 ${trendsSection(a)}
@@ -436,6 +442,14 @@ ${a.errors.length ? `<h2>Collection notes <span class=count>${a.errors.length}</
   .banner.bad{background:var(--errbg)}.banner.ok{background:var(--okbg)}
   ul.positives{margin:6px 0;padding-left:20px;columns:2;column-gap:28px}
   ul.positives li{margin:2px 0;break-inside:avoid}
+  .narrative{font-size:13px;line-height:1.5;max-width:78ch;border-left:3px solid var(--accent);padding:2px 0 2px 14px;margin:8px 0}
+  .narrative h2{font-size:14px;margin:14px 0 4px;border:none;padding:0}
+  .narrative h3{font-size:13px;font-weight:700;margin:10px 0 2px}
+  .narrative ul,.narrative ol{margin:4px 0;padding-left:22px}
+  .narrative li{margin:2px 0}
+  .narrative code{background:#f2f2f2;padding:1px 4px;border-radius:2px;font-size:12px}
+  .narrative pre{background:#f7f7f7;padding:8px 10px;border-radius:3px;overflow:auto}
+  .narrative pre code{background:none;padding:0}
   .sevbar{display:flex;height:16px;border-radius:3px;overflow:hidden;margin:4px 0 10px;max-width:420px;font-size:11px;font-weight:700}
   .segbar{display:flex;align-items:center;justify-content:center;color:#3a3a3a;min-width:16px}
   .segbar.ERROR{background:#f7b0b0}.segbar.WARN{background:#ffe08a}.segbar.INFO{background:#a9c7ff}
@@ -495,6 +509,30 @@ ${banner}
 ${sections}
 <p class=meta style="margin-top:32px">Generated deterministically from the Supabase Management API, ${m.sqlSource === "superuser" ? "superuser SQL (--db-url)" : "read-only SQL"}, and the project metrics endpoint. No values inferred.</p>
 ${syncFooter(a.sync)}
+</body></html>`;
+}
+
+/** Standalone narrative.html - the LLM narrative on its own page. */
+export function renderNarrativePage(a: Analysis): string {
+  const m = a.meta;
+  const body = a.narrative ? mdToHtml(a.narrative) : "<p>No narrative generated.</p>";
+  return `<!doctype html><html lang=en><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>sbperf narrative - ${esc(m.name)}</title>
+<style>
+  body{font:15px/1.6 -apple-system,Segoe UI,Roboto,sans-serif;color:#1a1a1a;background:#fff;margin:0 auto;padding:32px;max-width:80ch}
+  h1{font-size:20px;margin:0 0 2px}
+  .meta{color:#666;font-size:12px;margin-bottom:20px}
+  h2{font-size:16px;margin:20px 0 6px;border-bottom:2px solid #1a1a1a;padding-bottom:3px}
+  h3{font-size:14px;margin:14px 0 3px}
+  ul,ol{padding-left:22px}li{margin:3px 0}
+  code{background:#f2f2f2;padding:1px 4px;border-radius:2px;font-size:13px}
+  pre{background:#f7f7f7;padding:10px 12px;border-radius:3px;overflow:auto}pre code{background:none;padding:0}
+  a{color:#3056d3}hr{border:none;border-top:1px solid #ddd;margin:16px 0}
+</style></head><body>
+<h1>Supabase performance - narrative</h1>
+<div class=meta><code>${esc(m.name)}</code> (${esc(m.ref)}) &middot; ${esc(m.region)} &middot; collected ${esc(m.collectedAt.slice(0, 10))} &middot; LLM synthesis over analysis.json (the deterministic report is ground truth)</div>
+${body}
 </body></html>`;
 }
 
