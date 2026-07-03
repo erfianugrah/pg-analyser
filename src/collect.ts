@@ -6,6 +6,7 @@ import { type Analysis, MetricSample } from "./schemas.ts";
 import { collectSplinterPerfLints } from "./splinter.ts";
 import { QUERIES } from "./sql.ts";
 import { ManagementSqlRunner, type SqlRunner } from "./sqlrunner.ts";
+import { computeSyncStatus } from "./sync.ts";
 import type { Transport } from "./transport.ts";
 
 type CollectError = { source: string; message: string };
@@ -15,7 +16,12 @@ export async function collect(
   ref: string,
   transport: Transport,
   version: string,
-  opts: { prometheusUrl?: string; interval?: string; sqlRunner?: SqlRunner } = {},
+  opts: {
+    prometheusUrl?: string;
+    interval?: string;
+    sqlRunner?: SqlRunner;
+    syncCheck?: boolean;
+  } = {},
 ): Promise<Analysis> {
   const m = new Management(transport);
   const errors: CollectError[] = [];
@@ -26,6 +32,11 @@ export async function collect(
   // The metrics scrape is point-in-time and SQL is cumulative-since-reset, so
   // this is the only query window Supabase lets us pick (max ~7 days).
   const interval = opts.interval ?? "1day";
+
+  // Upstream sync check (on by default, soft-fail). Kicked off concurrently with
+  // the plane fetches; computeSyncStatus never throws (offline -> skipped note).
+  const syncP: Promise<Analysis["sync"]> =
+    opts.syncCheck === false ? Promise.resolve(null) : computeSyncStatus();
 
   const safe = async <T>(source: string, fn: () => Promise<T>, fallback: T): Promise<T> => {
     try {
@@ -254,6 +265,7 @@ export async function collect(
     },
     metrics: { available: metricsText != null, samples },
     trends,
+    sync: await syncP,
     errors,
   };
 

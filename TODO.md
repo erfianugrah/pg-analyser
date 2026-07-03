@@ -17,10 +17,12 @@
   CLI inspect set, so the inspect-drift baseline is unchanged (CLI-inspect-only).
 
 ## Remaining
-- [ ] Positive-findings pass ("what's looking good")
-- [ ] Inline-SVG charts in the report (beyond the existing trend sparklines)
-- [ ] Professional print CSS polish
-- [ ] On-by-default soft-fail upstream sync check, annotated in the report
+- [x] Positive-findings pass ("what's looking good")
+- [x] Inline-SVG bar charts (query outliers + most-frequent) + severity bar
+- [x] Professional print CSS polish (color-adjust, repeating headers, break control)
+- [x] On-by-default soft-fail upstream sync check (src/sync.ts) - hashes vendored
+      splinter.sql vs upstream + catalog vintage/age; stored on analysis.sync,
+      rendered in the footer; --no-sync-check to skip
 - [ ] narrate command (LLM pass over corpus + enriched findings)
 
 ## Done

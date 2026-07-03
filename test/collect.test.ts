@@ -50,7 +50,7 @@ const okMetrics = () => textResponse(METRICS);
 describe("collect", () => {
   test("composes a full validated Analysis", async () => {
     const t = fakeTransport({ onMgmt: fullRoutes(), onMetrics: okMetrics });
-    const a = await collect("ref", t, "0.0.0-test");
+    const a = await collect("ref", t, "0.0.0-test", { syncCheck: false });
 
     expect(a.meta.name).toBe("example-project");
     expect(a.advisors.performance).toHaveLength(2);
@@ -74,7 +74,7 @@ describe("collect", () => {
       onMgmt: fullRoutes({ "/v1/projects/ref/config/disk": () => textResponse("boom", 500) }),
       onMetrics: okMetrics,
     });
-    const a = await collect("ref", t, "0.0.0-test");
+    const a = await collect("ref", t, "0.0.0-test", { syncCheck: false });
     expect(a.disk).toBeNull();
     expect(a.errors.map((e) => e.source)).toContain("disk");
     expect(a.meta.name).toBe("example-project"); // still produced
@@ -82,14 +82,14 @@ describe("collect", () => {
 
   test("marks metrics unavailable when the endpoint 404s", async () => {
     const t = fakeTransport({ onMgmt: fullRoutes() }); // no onMetrics -> 404
-    const a = await collect("ref", t, "0.0.0-test");
+    const a = await collect("ref", t, "0.0.0-test", { syncCheck: false });
     expect(a.metrics.available).toBe(false);
     expect(a.metrics.samples).toHaveLength(0);
   });
 
   test("defaults sqlSource to read-only (PAT runner)", async () => {
     const t = fakeTransport({ onMgmt: fullRoutes(), onMetrics: okMetrics });
-    const a = await collect("ref", t, "0.0.0-test");
+    const a = await collect("ref", t, "0.0.0-test", { syncCheck: false });
     expect(a.meta.sqlSource).toBe("read-only");
   });
 
@@ -103,7 +103,7 @@ describe("collect", () => {
       },
     };
     const t = fakeTransport({ onMgmt: fullRoutes(), onMetrics: okMetrics });
-    const a = await collect("ref", t, "0.0.0-test", { sqlRunner: runner });
+    const a = await collect("ref", t, "0.0.0-test", { syncCheck: false, sqlRunner: runner });
     expect(a.meta.sqlSource).toBe("superuser");
     // the diagnostic queries went through the injected runner, not the API
     expect(seen.some((q) => q.includes("pg_stat_statements"))).toBe(true);
@@ -113,14 +113,14 @@ describe("collect", () => {
 
   test("threads --interval through to the analytics endpoints", async () => {
     const t = fakeTransport({ onMgmt: fullRoutes(), onMetrics: okMetrics });
-    await collect("ref", t, "0.0.0-test", { interval: "3day" });
+    await collect("ref", t, "0.0.0-test", { syncCheck: false, interval: "3day" });
     const apiCall = t.calls.mgmt.find((p) => p.includes("usage.api-counts"));
     expect(apiCall).toContain("interval=3day");
   });
 
   test("defaults the analytics interval to 1day", async () => {
     const t = fakeTransport({ onMgmt: fullRoutes(), onMetrics: okMetrics });
-    await collect("ref", t, "0.0.0-test");
+    await collect("ref", t, "0.0.0-test", { syncCheck: false });
     const apiCall = t.calls.mgmt.find((p) => p.includes("usage.api-counts"));
     expect(apiCall).toContain("interval=1day");
   });
@@ -129,6 +129,8 @@ describe("collect", () => {
     const t = fakeTransport({
       onMgmt: fullRoutes({ "/v1/projects/ref": () => textResponse("nope", 403) }),
     });
-    await expect(collect("ref", t, "0.0.0-test")).rejects.toThrow(/cannot read project/);
+    await expect(collect("ref", t, "0.0.0-test", { syncCheck: false })).rejects.toThrow(
+      /cannot read project/,
+    );
   });
 });

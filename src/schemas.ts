@@ -161,6 +161,17 @@ export const TrendSeries = z.object({
 });
 export type TrendSeries = z.infer<typeof TrendSeries>;
 
+/** On-by-default upstream sync check result (see sync.ts). */
+export const SyncStatus = z.object({
+  catalogReviewed: z.string(),
+  ageDays: z.number(),
+  stale: z.boolean(),
+  upstreamChecked: z.boolean(),
+  advisorSqlDrifted: z.boolean().nullable(),
+  note: z.string(),
+});
+export type SyncStatus = z.infer<typeof SyncStatus>;
+
 export const Analysis = z.object({
   meta: z.object({
     ref: z.string(),
@@ -229,6 +240,9 @@ export const Analysis = z.object({
     samples: z.array(MetricSample),
   }),
   trends: z.array(TrendSeries),
+  // Upstream sync check; nullable + defaulted for back-compat with analysis.json
+  // written before the check existed.
+  sync: SyncStatus.nullable().default(null),
   errors: z.array(z.object({ source: z.string(), message: z.string() })),
 });
 export type Analysis = z.infer<typeof Analysis>;

@@ -251,6 +251,14 @@ function findingsSummary(findings: Finding[], degraded: boolean): string {
 <table class=find><thead><tr><th>sev</th><th>area</th><th>finding</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
+/** Upstream sync annotation for the footer - advisor lints are live regardless. */
+function syncFooter(sync: Analysis["sync"]): string {
+  if (!sync) return "";
+  const flagged = sync.stale || sync.advisorSqlDrifted === true;
+  const cls = flagged ? "warn-text" : "";
+  return `<p class="meta ${cls}">Heuristics sync: ${esc(sync.note)} Live advisor lints (performance + security) are fetched per run and are always current.</p>`;
+}
+
 /** "What's looking good" - confirmed-healthy observations, only when present. */
 function positivesSection(positives: Positive[]): string {
   if (!positives.length) return "";
@@ -486,6 +494,7 @@ ${a.errors.length ? `<h2>Collection notes <span class=count>${a.errors.length}</
 ${banner}
 ${sections}
 <p class=meta style="margin-top:32px">Generated deterministically from the Supabase Management API, ${m.sqlSource === "superuser" ? "superuser SQL (--db-url)" : "read-only SQL"}, and the project metrics endpoint. No values inferred.</p>
+${syncFooter(a.sync)}
 </body></html>`;
 }
 
