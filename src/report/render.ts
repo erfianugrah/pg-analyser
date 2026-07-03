@@ -17,6 +17,17 @@ function brandHead(brand: Brand, title: string): string {
 const BRAND_CSS =
   ".brandhead{display:flex;align-items:center;gap:10px}.brandhead .logo svg{height:28px;width:auto;display:block}.brandhead h1{margin:0}";
 
+/**
+ * Shared theme tokens + dark-mode override for every rendered page. Colours flow
+ * through CSS custom properties so a single prefers-color-scheme block flips the
+ * whole report; scoped to `screen` so print/PDF always stays light. In dark mode
+ * links use the (bright) brand accent for contrast.
+ */
+function themeVars(brand: Brand): string {
+  return `:root{--fg:#1a1a1a;--mut:#666;--line:#ddd;--bg:#fff;--panel:#f6f6f6;--stripe:#fafafa;--code:#f2f2f2;--track:#eee;--spark:#fafafa;--lvlinfo:#e6f0ff;${brandVars(brand)};--okbg:#e3f4e3;--warnbg:#fff4d6;--errbg:#fde2e2}
+  @media screen and (prefers-color-scheme:dark){:root{--fg:#e7e8ea;--mut:#9aa1aa;--line:#2b2f36;--bg:#16181c;--panel:#1d2026;--stripe:#191c21;--code:#22262d;--track:#2b2f36;--spark:#191c21;--lvlinfo:#1d2b45;--okbg:#16351f;--warnbg:#3a3410;--errbg:#3a1d1d;--link:var(--accent)}}`;
+}
+
 const esc = (s: unknown): string =>
   String(s ?? "").replace(
     /[&<>]/g,
@@ -67,7 +78,7 @@ function barSvg(frac: number): string {
   const w = 150;
   const h = 11;
   const bw = Math.max(1, Math.round(Math.max(0, Math.min(1, frac)) * w));
-  return `<svg class=bar width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><rect width="${w}" height="${h}" fill="#eee"/><rect width="${bw}" height="${h}" fill="var(--accent)"/></svg>`;
+  return `<svg class=bar width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><rect width="${w}" height="${h}" fill="var(--track)"/><rect width="${bw}" height="${h}" fill="var(--accent)"/></svg>`;
 }
 
 /**
@@ -195,32 +206,42 @@ const fmtVal = (v: number, unit: string): string =>
 
 /** Inline SVG sparkline for one trend series - self-contained, no external assets. */
 function sparkline(s: Analysis["trends"][number]): string {
-  const w = 340;
-  const h = 70;
+  const w = 260;
+  const h = 34;
   const pad = 4;
   const vals = s.points.map((p) => p.v);
   const min = Math.min(...vals);
   const max = Math.max(...vals);
-  const span = max - min || 1;
+  const span = max - min;
   const n = s.points.length;
-  const x = (i: number) => pad + (n <= 1 ? 0 : (i / (n - 1)) * (w - 2 * pad));
-  const y = (v: number) => h - pad - ((v - min) / span) * (h - 2 * pad);
-  const path = s.points
-    .map((p, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(p.v).toFixed(1)}`)
-    .join(" ");
   const last = s.points[n - 1]?.v ?? 0;
+  const y = (v: number) => (span === 0 ? h / 2 : h - pad - ((v - min) / span) * (h - 2 * pad));
+  // A single sample has no line to draw - show a baseline + a dot so the panel
+  // isn't an empty box; a flat series draws a flat mid-line.
+  let shape: string;
+  if (n <= 1) {
+    shape = `<line x1="${pad}" y1="${h / 2}" x2="${w - pad}" y2="${h / 2}" stroke="var(--line)" stroke-width="1"/><circle cx="${(w / 2).toFixed(1)}" cy="${(h / 2).toFixed(1)}" r="2.5" fill="var(--link)"/>`;
+  } else {
+    const x = (i: number) => pad + (i / (n - 1)) * (w - 2 * pad);
+    const path = s.points
+      .map((p, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(p.v).toFixed(1)}`)
+      .join(" ");
+    shape = `<path d="${path}" fill="none" stroke="var(--link)" stroke-width="1.5"/>`;
+  }
+  const range =
+    span === 0
+      ? `flat at ${esc(fmtVal(last, s.unit))}`
+      : `${esc(fmtVal(min, s.unit))}-${esc(fmtVal(max, s.unit))}`;
   return `<figure class=spark>
     <figcaption>${esc(s.title)} <b>${esc(fmtVal(last, s.unit))}</b></figcaption>
-    <svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}" preserveAspectRatio="none">
-      <path d="${path}" fill="none" stroke="var(--link)" stroke-width="1.5"/>
-    </svg>
-    <span class=note>${esc(fmtVal(min, s.unit))} - ${esc(fmtVal(max, s.unit))} over ${n} pts</span>
+    <svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}" preserveAspectRatio="none">${shape}</svg>
+    <span class=note>${range} &middot; ${n} pt${n === 1 ? "" : "s"}</span>
   </figure>`;
 }
 
 function trendsSection(a: Analysis): string {
   if (!a.trends.length) return "";
-  return `<h2 id="trends">30-day trends <span class=note>sampled over time</span></h2>
+  return `<h2 id="trends">30-day trends <span class=note>sampled over time; single-point series show a marker until more snapshots accrue</span></h2>
 <div class=sparks>${a.trends.map(sparkline).join("")}</div>`;
 }
 
@@ -387,17 +408,18 @@ export function renderIndex(
   return `<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">${faviconTag(brand)}<title>sbperf - org report</title>
 <style>
-  body{font:14px/1.45 -apple-system,Segoe UI,Roboto,sans-serif;color:#1a1a1a;margin:0 auto;padding:24px;max-width:1000px}
-  h1{font-size:20px;margin:0 0 4px}.meta{color:#666;font-size:12px;margin-bottom:16px}
+  ${themeVars(brand)}
+  body{font:14px/1.45 -apple-system,Segoe UI,Roboto,sans-serif;color:var(--fg);background:var(--bg);margin:0 auto;padding:24px;max-width:1000px}
+  h1{font-size:20px;margin:0 0 4px}.meta{color:var(--mut);font-size:12px;margin-bottom:16px}
   ${BRAND_CSS}
   table{border-collapse:collapse;width:100%;font-size:13px}
-  th,td{text-align:left;padding:5px 9px;border:1px solid #ddd}
-  th{background:#f6f6f6}tbody tr:nth-child(even){background:#fafafa}
+  th,td{text-align:left;padding:5px 9px;border:1px solid var(--line)}
+  th{background:var(--panel)}tbody tr:nth-child(even){background:var(--stripe)}
   td.mono{font-family:ui-monospace,Menlo,monospace;font-size:11.5px}
-  .badge{font-size:11px;padding:1px 6px;border-radius:3px}.badge.ok{background:#e3f4e3}.badge.bad{background:#fde2e2}
-  .lvl{font-weight:700;font-size:11px;padding:1px 5px;border-radius:2px}
-  .lvl.WARN{background:#fff4d6}.lvl.ERROR{background:#fde2e2}.lvl.INFO{background:#e6f0ff}
-  a{color:${brand.ink}}
+  .badge{font-size:11px;padding:1px 6px;border-radius:3px}.badge.ok{background:var(--okbg)}.badge.bad{background:var(--errbg)}
+  .lvl{font-weight:700;font-size:11px;padding:1px 5px;border-radius:2px;color:#1a1a1a}
+  .lvl.WARN{background:#ffe08a}.lvl.ERROR{background:#f7b0b0}.lvl.INFO{background:#a9c7ff}
+  a{color:var(--link)}
 </style></head><body>
 ${brandHead(brand, "Supabase performance - org report")}
 <div class=meta>${rows.length} projects &middot; collected ${esc(collectedAt)} &middot; findings shown as high / med / low</div>
@@ -519,7 +541,7 @@ ${a.errors.length ? `<h2>Collection notes <span class=count>${a.errors.length}</
 ${faviconTag(brand)}
 <title>sbperf - ${esc(m.name)}</title>
 <style>
-  :root{--fg:#1a1a1a;--mut:#666;--line:#ddd;--bg:#fff;${brandVars(brand)};--okbg:#e3f4e3;--warnbg:#fff4d6;--errbg:#fde2e2}
+  ${themeVars(brand)}
   ${BRAND_CSS}
   *{box-sizing:border-box}
   body{font:14px/1.45 -apple-system,Segoe UI,Roboto,sans-serif;color:var(--fg);background:var(--bg);margin:0 auto;padding:24px;max-width:1200px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
@@ -530,7 +552,7 @@ ${faviconTag(brand)}
   summary{border-bottom:2px solid var(--fg);padding-bottom:3px;cursor:pointer;list-style-position:inside}
   summary .h2{margin-right:4px}
   .meta{color:var(--mut);font-size:12px;margin-bottom:8px}
-  .meta code{background:#f2f2f2;padding:1px 4px;border-radius:2px}
+  .meta code{background:var(--code);padding:1px 4px;border-radius:2px}
   .lead{font-weight:600;margin:6px 0}
   .banner{padding:8px 12px;border-radius:4px;font-size:13px;margin:8px 0}
   .banner.bad{background:var(--errbg)}.banner.ok{background:var(--okbg)}
@@ -541,8 +563,8 @@ ${faviconTag(brand)}
   .narrative h3{font-size:13px;font-weight:700;margin:10px 0 2px}
   .narrative ul,.narrative ol{margin:4px 0;padding-left:22px}
   .narrative li{margin:2px 0}
-  .narrative code{background:#f2f2f2;padding:1px 4px;border-radius:2px;font-size:12px}
-  .narrative pre{background:#f7f7f7;padding:8px 10px;border-radius:3px;overflow:auto}
+  .narrative code{background:var(--code);padding:1px 4px;border-radius:2px;font-size:12px}
+  .narrative pre{background:var(--code);padding:8px 10px;border-radius:3px;overflow:auto}
   .narrative pre code{background:none;padding:0}
   .sevbar{display:flex;height:20px;border-radius:3px;overflow:hidden;margin:6px 0 12px;max-width:460px;font-size:11px;font-weight:700}
   .segbar{display:flex;align-items:center;justify-content:center;color:#3a3a3a;padding:0 8px;white-space:nowrap}
@@ -571,35 +593,37 @@ ${faviconTag(brand)}
   p.fix.empty{color:var(--mut)}
   p.flinks{margin:8px 0 0;font-size:12px}
   table.chart{border:none;width:auto;margin:4px 0 8px}
-  table.chart td{border:none;padding:1px 8px 1px 0;vertical-align:middle}
-  table.chart td.mono{max-width:none;white-space:nowrap;font-size:11px}
-  table.chart td.barcell{width:150px}
-  table.chart td.num{font-family:ui-monospace,Menlo,monospace;font-size:11px;white-space:nowrap;text-align:right}
+  table.chart{border-spacing:0}
+  table.chart td{border:none;padding:3px 0;vertical-align:middle}
+  table.chart td.mono{max-width:380px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;padding-right:20px}
+  table.chart td.barcell{width:150px;padding-right:12px}
+  table.chart td.num{font-family:ui-monospace,Menlo,monospace;font-size:11px;white-space:nowrap;text-align:right;color:var(--mut)}
   svg.bar{display:block}
   table{border-collapse:collapse;width:100%;font-size:12.5px;margin:2px 0}
   th,td{text-align:left;padding:4px 8px;border:1px solid var(--line);vertical-align:top}
-  th{background:#f6f6f6;font-weight:600;white-space:nowrap}
-  tbody tr:nth-child(even){background:#fafafa}
+  th{background:var(--panel);font-weight:600;white-space:nowrap}
+  tbody tr:nth-child(even){background:var(--stripe)}
   tbody tr.flag{background:var(--warnbg)}
   td.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;white-space:pre-wrap;max-width:620px;word-break:break-word}
   table.kv{table-layout:fixed}
   table.kv td:first-child{white-space:nowrap;font-weight:600;width:130px}
   table.kv td:nth-child(3){width:34%;word-break:break-word}
   table.find td:first-child,table.find td:nth-child(2){white-space:nowrap;width:1%}
-  .count{display:inline-block;background:var(--fg);color:#fff;border-radius:10px;padding:0 7px;font-size:11px;vertical-align:middle}
+  .count{display:inline-block;background:var(--fg);color:var(--bg);border-radius:10px;padding:0 7px;font-size:11px;vertical-align:middle}
   .note{color:var(--mut);font-weight:400;font-size:12px}
   .empty{color:var(--mut);font-style:italic;margin:4px 0}
-  .warn-text{color:#8a6d00}
-  .lvl{font-weight:700;font-size:11px;padding:1px 5px;border-radius:2px}
-  .lvl.WARN{background:var(--warnbg)}.lvl.ERROR{background:var(--errbg)}.lvl.INFO{background:#e6f0ff}
-  .badge{display:inline-block;font-size:11px;padding:1px 6px;border-radius:3px;background:#eee}
+  .warn-text{color:#b8860b}
+  .lvl{font-weight:700;font-size:11px;padding:1px 5px;border-radius:2px;color:#1a1a1a}
+  .lvl.WARN{background:#ffe08a}.lvl.ERROR{background:#f7b0b0}.lvl.INFO{background:#a9c7ff}
+  .badge{display:inline-block;font-size:11px;padding:1px 6px;border-radius:3px;background:var(--track)}
   .badge.ok{background:var(--okbg)}.badge.warn{background:var(--warnbg)}.badge.bad{background:var(--errbg)}
   table.adv td:nth-child(3){max-width:560px}
   a{color:var(--link)}
-  .sparks{display:grid;grid-template-columns:repeat(2,1fr);gap:10px 18px;margin-top:8px}
+  .sparks{display:grid;grid-template-columns:repeat(3,1fr);gap:8px 16px;margin-top:8px}
   figure.spark{margin:0}
-  figure.spark figcaption{font-size:12px;font-weight:600}
-  figure.spark svg{border:1px solid var(--line);background:#fafafa}
+  figure.spark figcaption{font-size:11.5px;font-weight:600;margin-bottom:2px}
+  figure.spark svg{display:block;border:1px solid var(--line);background:var(--spark);border-radius:2px}
+  figure.spark .note{display:block;margin-top:1px}
   @page{size:A4;margin:14mm 12mm}
   @media print{
     body{padding:0;max-width:none;font-size:11.5px}
@@ -638,15 +662,16 @@ export function renderNarrativePage(a: Analysis, brand: Brand = DEFAULT_BRAND): 
 ${faviconTag(brand)}
 <title>sbperf narrative - ${esc(m.name)}</title>
 <style>
-  body{font:15px/1.6 -apple-system,Segoe UI,Roboto,sans-serif;color:#1a1a1a;background:#fff;margin:0 auto;padding:32px;max-width:80ch}
+  ${themeVars(brand)}
+  body{font:15px/1.6 -apple-system,Segoe UI,Roboto,sans-serif;color:var(--fg);background:var(--bg);margin:0 auto;padding:32px;max-width:80ch}
   h1{font-size:20px;margin:0 0 2px}
-  .meta{color:#666;font-size:12px;margin-bottom:20px}
-  h2{font-size:16px;margin:20px 0 6px;border-bottom:2px solid #1a1a1a;padding-bottom:3px}
+  .meta{color:var(--mut);font-size:12px;margin-bottom:20px}
+  h2{font-size:16px;margin:20px 0 6px;border-bottom:2px solid var(--fg);padding-bottom:3px}
   h3{font-size:14px;margin:14px 0 3px}
   ul,ol{padding-left:22px}li{margin:3px 0}
-  code{background:#f2f2f2;padding:1px 4px;border-radius:2px;font-size:13px}
-  pre{background:#f7f7f7;padding:10px 12px;border-radius:3px;overflow:auto}pre code{background:none;padding:0}
-  a{color:${brand.ink}}hr{border:none;border-top:1px solid #ddd;margin:16px 0}
+  code{background:var(--code);padding:1px 4px;border-radius:2px;font-size:13px}
+  pre{background:var(--code);padding:10px 12px;border-radius:3px;overflow:auto}pre code{background:none;padding:0}
+  a{color:var(--link)}hr{border:none;border-top:1px solid var(--line);margin:16px 0}
   ${BRAND_CSS}
 </style></head><body>
 ${brandHead(brand, "Supabase performance - narrative")}
@@ -720,21 +745,22 @@ export function renderSummary(a: Analysis, brand: Brand = DEFAULT_BRAND): string
 ${faviconTag(brand)}
 <title>${esc(m.name)} - performance summary</title>
 <style>
-  body{font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;color:#1a1a1a;background:#fff;margin:0 auto;padding:32px;max-width:760px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  ${themeVars(brand)}
+  body{font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;color:var(--fg);background:var(--bg);margin:0 auto;padding:32px;max-width:760px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   h1{font-size:22px;margin:0 0 2px}
   ${BRAND_CSS}
-  .meta{color:#666;font-size:13px;margin-bottom:16px}
+  .meta{color:var(--mut);font-size:13px;margin-bottom:16px}
   .verdict{padding:14px 16px;border-radius:6px;font-size:17px;font-weight:600;margin:12px 0 20px}
   h2.g,ul,tr,.verdict{break-inside:avoid;page-break-inside:avoid}
   h2.g{page-break-after:avoid}
-  .verdict.ok{background:#e3f4e3}.verdict.warn{background:#fff4d6}.verdict.bad{background:#fde2e2}
-  h2.g{font-size:14px;margin:20px 0 4px;padding:2px 8px;border-radius:3px;display:inline-block}
-  h2.g.ERROR{background:#fde2e2}h2.g.WARN{background:#fff4d6}h2.g.INFO{background:#e6f0ff}
+  .verdict.ok{background:var(--okbg)}.verdict.warn{background:var(--warnbg)}.verdict.bad{background:var(--errbg)}
+  h2.g{font-size:14px;margin:20px 0 4px;padding:2px 8px;border-radius:3px;display:inline-block;color:#1a1a1a}
+  h2.g.ERROR{background:#f7b0b0}h2.g.WARN{background:#ffe08a}h2.g.INFO{background:#a9c7ff}
   ul{margin:4px 0 0;padding-left:22px}li{margin:7px 0}
-  .sfix{color:#555;font-size:13px;margin-top:2px}
+  .sfix{color:var(--mut);font-size:13px;margin-top:2px}
   table{border-collapse:collapse;width:100%;margin-top:8px;font-size:14px}
-  td{padding:6px 10px;border:1px solid #ddd}td:first-child{font-weight:600;width:180px}
-  .foot{color:#666;font-size:12px;margin-top:28px}
+  td{padding:6px 10px;border:1px solid var(--line)}td:first-child{font-weight:600;width:180px}
+  .foot{color:var(--mut);font-size:12px;margin-top:28px}
   @page{size:A4;margin:16mm}
 </style></head><body>
 ${brandHead(brand, "Performance summary")}
