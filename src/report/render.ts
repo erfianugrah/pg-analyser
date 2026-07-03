@@ -400,23 +400,22 @@ function auditFindings(findings: Finding[], degraded: boolean): string {
       ]
         .filter(Boolean)
         .join(" &middot; ");
-      const row = (label: string, text?: string) =>
-        text
-          ? `<div class=frow><span class=flabel>${label}</span><span class=ftext>${esc(text)}</span></div>`
-          : "";
+      // Inline bold labels read as a paragraph - cleaner hierarchy than the
+      // cramped uppercase label grid, matching the audit-report house style.
+      const leg = (label: string, text?: string) =>
+        text ? `<p class=fleg><b class=flabel>${label}.</b> ${esc(text)}</p>` : "";
       const doText = esc(
         f.remediation ?? "See the linked evidence and the Supabase advisor detail.",
       );
       const sqlBlock = f.sql ? `<pre class=fsql><code>${esc(f.sql)}</code></pre>` : "";
       const dashLink = f.dashUrl
-        ? `<div class=fadv><a href="${esc(f.dashUrl)}">Open in the ${esc(f.category)} Advisor: ${esc(f.dashUrl)}</a></div>`
+        ? `<p class=fadv><a href="${esc(f.dashUrl)}">Open in the ${esc(f.category)} Advisor: ${esc(f.dashUrl)}</a></p>`
         : "";
-      const whatToDo = `<div class=frow><span class=flabel>What to do</span><span class=ftext>${doText}${sqlBlock}${dashLink}</span></div>`;
       const body =
-        row("What's happening", f.evidence) +
-        row("Why it matters", f.whyItMatters) +
-        whatToDo +
-        row("How to verify", f.howToVerify);
+        leg("What's happening", f.evidence) +
+        leg("Why it matters", f.whyItMatters) +
+        `<p class=fleg><b class=flabel>What to do.</b> ${doText}</p>${sqlBlock}${dashLink}` +
+        leg("How to verify", f.howToVerify);
       return `<div class="finding ${SEV_CLASS[f.severity]}" id="${fid(i)}">
   <h3><span class="lvl ${SEV_CLASS[f.severity]}">${SEV_WORD[f.severity]}</span> <span class=fcat>${esc(f.category)}</span> ${esc(f.title)}</h3>
   <div class=fbody>${body}</div>
@@ -723,10 +722,9 @@ ${faviconTag(brand)}
   .fcat{font-size:11px;font-weight:600;color:var(--mut);text-transform:uppercase;letter-spacing:.03em}
   p.fix{margin:0;font-size:13px;line-height:1.5}
   p.fix.empty{color:var(--mut)}
-  .fbody{display:grid;grid-template-columns:max-content 1fr;gap:2px 14px;font-size:13px;line-height:1.5}
-  .frow{display:contents}
-  .flabel{font-weight:600;color:var(--mut);white-space:nowrap;font-size:11px;text-transform:uppercase;letter-spacing:.03em;padding-top:1px}
-  .ftext{min-width:0}
+  .fbody{font-size:13px;line-height:1.55}
+  .fleg{margin:0 0 5px}
+  .flabel{font-weight:700;color:var(--fg)}
   pre.fsql{background:var(--code);border:1px solid var(--line);border-radius:4px;padding:8px 10px;margin:6px 0 0;overflow-x:auto;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.45;white-space:pre;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   pre.fsql code{background:none;padding:0;white-space:inherit;font-family:inherit}
   .fadv{margin-top:6px;font-size:12px;word-break:break-all}
@@ -734,8 +732,9 @@ ${faviconTag(brand)}
   :target{animation:sbflash 1.6s ease-out}
   h2:target,summary:target,.finding:target{box-shadow:-6px 0 0 0 var(--accent);border-radius:2px}
   @media print{pre.fsql{white-space:pre-wrap;word-break:break-word;overflow:visible}}
-  @media (max-width:640px){.fbody{grid-template-columns:1fr;gap:1px}.flabel{padding-top:6px}}
-  p.flinks{margin:8px 0 0;font-size:12px}
+  p.flinks{margin:10px 0 0;padding-top:8px;border-top:1px solid var(--line);font-size:12.5px}
+  p.flinks a{font-weight:600;color:var(--link);text-decoration:none}
+  p.flinks a:hover{text-decoration:underline}
   table.chart{border:none;width:100%;margin:4px 0 8px;table-layout:fixed}
   table.chart{border-spacing:0}
   table.chart td{border:none;padding:3px 0;vertical-align:middle}
