@@ -95,6 +95,12 @@ export interface Heuristic {
   sql?: string;
   /** Canonical doc/source URL for the reader (and the narrate pass to cite). */
   docUrl: string;
+  /**
+   * Optional Supabase changelog / known-issue URL documenting a platform change
+   * behind this finding. Rendered as an extra "Changelog" reference and surfaced
+   * to the narrate pass. MUST be a real, verified URL - never a guess.
+   */
+  changelogUrl?: string;
   /** Catalog vintage for this entry. */
   reviewed: string;
 }
@@ -464,6 +470,7 @@ export function meta(id: string): {
   howToVerify?: string;
   sql?: string;
   docUrl?: string;
+  changelogUrl?: string;
 } {
   const h = HEURISTICS[id];
   if (!h) return {};
@@ -474,5 +481,6 @@ export function meta(id: string): {
     howToVerify: h.howToVerify,
     sql: h.sql,
     docUrl: h.docUrl,
+    changelogUrl: h.changelogUrl,
   };
 }

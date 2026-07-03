@@ -412,6 +412,7 @@ function auditFindings(findings: Finding[], degraded: boolean): string {
     .map((f, i) => {
       const links = [
         f.docUrl ? `<a href="${esc(f.docUrl)}">Reference &#8599;</a>` : "",
+        f.changelogUrl ? `<a href="${esc(f.changelogUrl)}">Changelog &#8599;</a>` : "",
         f.anchor ? `<a href="${esc(f.anchor)}">Evidence &#8595;</a>` : "",
       ]
         .filter(Boolean)

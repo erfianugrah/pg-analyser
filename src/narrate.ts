@@ -51,6 +51,7 @@ export function buildNarrativeInput(a: Analysis): Record<string, unknown> {
     whyItMatters: f.whyItMatters,
     remediation: f.remediation,
     doc: f.docUrl,
+    changelog: f.changelogUrl,
   }));
   const positives = derivePositives(a).map((p) => `${p.category}: ${p.title}`);
 
@@ -116,11 +117,12 @@ export function buildNarrativeInput(a: Analysis): Record<string, unknown> {
   };
 }
 
-const SYSTEM_PROMPT = `You are a senior Supabase/Postgres performance and cost engineer writing the ANALYSIS section of a database audit report shared with a customer. You are given a JSON object with the project's facts: ranked findings (each with why it matters, remediation, how to verify, and a doc URL), healthy observations, and a bounded evidence digest (top query outliers, metrics, trends). The report ALREADY renders the structured findings, the healthy list, and the resource charts below your section - your job is the analytical layer on top: synthesise, prioritise, and review the tool's findings, adding the reasoning and cross-cutting insight the raw finding cards lack.
+const SYSTEM_PROMPT = `You are a senior Supabase/Postgres performance and cost engineer writing the ANALYSIS section of a database audit report shared with a customer. You are given a JSON object with the project's facts: ranked findings (each with why it matters, remediation, how to verify, a doc URL, and sometimes a changelog URL for a known platform change), healthy observations, and a bounded evidence digest (top query outliers, metrics, trends). The report ALREADY renders the structured findings, the healthy list, and the resource charts below your section - your job is the analytical layer on top: synthesise, prioritise, and review the tool's findings, adding the reasoning and cross-cutting insight the raw finding cards lack.
 
 Grounding (hard rules):
 - Ground every statement in the supplied JSON. Do NOT invent numbers, thresholds, table names, durations, timeouts, percentages, or URLs. If something is unknown, leave it out.
 - You may reference the catalogued why/verify/remediation and the evidence digest. Cite a doc URL only if it is present in the JSON; never fabricate one.
+- Some findings carry a "changelog" URL: a documented Supabase platform change or known issue behind the finding (e.g. a default that changed). When present, reference it - it is the authoritative "this is a known change, here is the background" link the reader wants. Same rule as doc URLs: cite the changelog only if it is present in the JSON for that finding; never invent or guess one.
 - Be concrete, not vague. When a finding's remediation names a specific recommended value or target - a timeout, a size, a percentage, a fraction, a starting figure - carry that exact value into your prose. Do NOT flatten "set statement_timeout to something like 30s-60s" into "set a statement_timeout", or "raise work_mem toward 16-64MB" into "raise work_mem". The reader's complaint is being told what is wrong but not what to set it to; the values are in the remediation, so surface them. Never invent a value the remediation does not give.
 - If "degraded" is true or there are collectionNotes, say plainly that some checks could not run and the absence of a finding is not proof of health.
 
