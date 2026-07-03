@@ -17,9 +17,9 @@ HTML + PDF report. No superuser `--db-url`, no manual Grafana screenshots.
 | Command | Purpose |
 |---|---|
 | `bun run src/index.ts analyze --ref <ref>` | fetch all planes -> `analysis.json` |
-| `bun run src/index.ts report <dir>` | `analysis.json` -> `report.html` + `summary.html` |
-| `bun run src/index.ts summary <dir>` | `analysis.json` -> `summary.html` (non-technical) |
-| `bun run src/index.ts pdf <dir>` | `analysis.json` -> `report.pdf` + `summary.pdf` |
+| `bun run src/index.ts report <dir>` | `analysis.json` -> `report.html` (combined technical + business pyramid) |
+| `bun run src/index.ts summary <dir>` | `analysis.json` -> `summary.html` (optional standalone plain-language one-pager) |
+| `bun run src/index.ts pdf <dir>` | `analysis.json` -> `report.pdf` |
 | `bun run src/index.ts narrate <dir>` | `analysis.json` -> `narrative.md` (LLM pass; needs `SBPERF_LLM_*`) |
 | `bun run src/index.ts import-trends <dir> <file...>` | merge external CSV/JSON series into `analysis.trends` (vendor-neutral; no dashboard coupling) |
 | `bun run src/index.ts full --ref <ref>` | analyze + report + summary + pdf |

@@ -39,9 +39,9 @@ function usage(code = 1): never {
 
 Usage:
   sbperf analyze  --ref <ref> [--out <dir>]   fetch all planes -> analysis.json
-  sbperf report   <dir>                       analysis.json -> report.html
-  sbperf summary  <dir>                        analysis.json -> summary.html (non-technical)
-  sbperf pdf      <dir>                        analysis.json -> report.pdf + summary.pdf
+  sbperf report   <dir>                       analysis.json -> report.html (technical + business)
+  sbperf summary  <dir>                        analysis.json -> summary.html (optional plain-language one-pager)
+  sbperf pdf      <dir>                        analysis.json -> report.pdf
   sbperf narrate  <dir>                        analysis.json -> narrative.md (LLM pass)
   sbperf import-trends <dir> <file...>         merge external CSV/JSON series into analysis.trends
   sbperf full     --ref <ref> [--out <dir>]    analyze + report + pdf
@@ -153,11 +153,8 @@ async function emitReport(
   await mkdir(dir, { recursive: true });
   await Bun.write(join(dir, "analysis.json"), JSON.stringify(analysis, null, 2));
   const html = render(analysis, { brand: activeBrand });
-  const summaryHtml = renderSummary(analysis, activeBrand);
   await Bun.write(join(dir, "report.html"), html);
-  await Bun.write(join(dir, "summary.html"), summaryHtml);
   await htmlToPdf(html, join(dir, "report.pdf"));
-  await htmlToPdf(summaryHtml, join(dir, "summary.pdf"));
   const f = deriveFindings(analysis);
   return {
     high: f.filter((x) => x.severity === "high").length,
@@ -589,10 +586,7 @@ async function doReport(dir: string, storePath?: string, narrative?: boolean): P
     console.error("> --narrative given but analysis.json has none; run 'sbperf narrate' first");
   const htmlPath = join(dir, "report.html");
   await Bun.write(htmlPath, render(analysis, { narrative, brand: activeBrand }));
-  const summaryPath = join(dir, "summary.html");
-  await Bun.write(summaryPath, renderSummary(analysis, activeBrand));
   console.error(`> ${htmlPath}`);
-  console.error(`> ${summaryPath}`);
   return htmlPath;
 }
 
@@ -609,9 +603,6 @@ async function doPdf(dir: string, narrative?: boolean): Promise<string> {
   const pdfPath = join(dir, "report.pdf");
   await htmlToPdf(render(analysis, { narrative, brand: activeBrand }), pdfPath);
   console.error(`> ${pdfPath}`);
-  const summaryPdf = join(dir, "summary.pdf");
-  await htmlToPdf(renderSummary(analysis, activeBrand), summaryPdf);
-  console.error(`> ${summaryPdf}`);
   return pdfPath;
 }
 

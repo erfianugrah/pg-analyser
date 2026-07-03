@@ -204,34 +204,48 @@ function metricsTable(a: Analysis): string {
 const fmtVal = (v: number, unit: string): string =>
   unit === "bytes" ? bytes(v) : v < 10 ? v.toFixed(2) : String(Math.round(v));
 
-/** Inline SVG sparkline for one trend series - self-contained, no external assets. */
+/**
+ * Inline SVG trend panel for one series - self-contained (no external assets),
+ * Grafana-style: filled area under the line + last-point marker. viewBox
+ * stretches to the panel width (preserveAspectRatio=none) so it fills the grid
+ * cell; keep TEXT out of the SVG (it would distort) - labels live in the HTML
+ * caption/footer.
+ */
 function sparkline(s: Analysis["trends"][number]): string {
-  const w = 260;
-  const h = 34;
-  const pad = 4;
+  const w = 360;
+  const h = 60;
+  const pad = 6;
+  const baseY = h - pad;
   const vals = s.points.map((p) => p.v);
   const min = Math.min(...vals);
   const max = Math.max(...vals);
   const span = max - min;
   const n = s.points.length;
   const last = s.points[n - 1]?.v ?? 0;
-  const y = (v: number) => (span === 0 ? h / 2 : h - pad - ((v - min) / span) * (h - 2 * pad));
+  const y = (v: number) => (span === 0 ? h / 2 : baseY - ((v - min) / span) * (h - 2 * pad));
   // A single sample has no line to draw - show a baseline + a dot so the panel
   // isn't an empty box; a flat series draws a flat mid-line.
   let shape: string;
   if (n <= 1) {
-    shape = `<line x1="${pad}" y1="${h / 2}" x2="${w - pad}" y2="${h / 2}" stroke="var(--line)" stroke-width="1"/><circle cx="${(w / 2).toFixed(1)}" cy="${(h / 2).toFixed(1)}" r="2.5" fill="var(--link)"/>`;
+    const cx = (w / 2).toFixed(1);
+    const cy = (h / 2).toFixed(1);
+    shape = `<line x1="${pad}" y1="${h / 2}" x2="${w - pad}" y2="${h / 2}" stroke="var(--line)" stroke-width="1"/><circle cx="${cx}" cy="${cy}" r="3" fill="var(--link)"/>`;
   } else {
     const x = (i: number) => pad + (i / (n - 1)) * (w - 2 * pad);
-    const path = s.points
-      .map((p, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(p.v).toFixed(1)}`)
-      .join(" ");
-    shape = `<path d="${path}" fill="none" stroke="var(--link)" stroke-width="1.5"/>`;
+    const pts = s.points.map((p, i) => `${x(i).toFixed(1)},${y(p.v).toFixed(1)}`);
+    const line = `M${pts.join(" L")}`;
+    const area = `M${x(0).toFixed(1)},${baseY} L${pts.join(" L")} L${x(n - 1).toFixed(1)},${baseY} Z`;
+    const lastX = x(n - 1).toFixed(1);
+    const lastY = y(last).toFixed(1);
+    shape =
+      `<path d="${area}" fill="var(--link)" fill-opacity="0.12" stroke="none"/>` +
+      `<path d="${line}" fill="none" stroke="var(--link)" stroke-width="1.5"/>` +
+      `<circle cx="${lastX}" cy="${lastY}" r="2.5" fill="var(--link)"/>`;
   }
   const range =
     span === 0
       ? `flat at ${esc(fmtVal(last, s.unit))}`
-      : `${esc(fmtVal(min, s.unit))}-${esc(fmtVal(max, s.unit))}`;
+      : `${esc(fmtVal(min, s.unit))} - ${esc(fmtVal(max, s.unit))}`;
   return `<figure class=spark>
     <figcaption>${esc(s.title)} <b>${esc(fmtVal(last, s.unit))}</b></figcaption>
     <svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}" preserveAspectRatio="none">${shape}</svg>
@@ -241,7 +255,7 @@ function sparkline(s: Analysis["trends"][number]): string {
 
 function trendsSection(a: Analysis): string {
   if (!a.trends.length) return "";
-  return `<h2 id="trends">30-day trends <span class=note>sampled over time; single-point series show a marker until more snapshots accrue</span></h2>
+  return `<h2 id="trends">Resource snapshot <span class=note>infra over time - read for headroom vs cost (over-provisioned = downsize, near-ceiling = upsize). Single-point series show a marker until more snapshots accrue</span></h2>
 <div class=sparks>${a.trends.map(sparkline).join("")}</div>`;
 }
 
@@ -340,9 +354,20 @@ function auditFindings(findings: Finding[], degraded: boolean): string {
       ]
         .filter(Boolean)
         .join(" &middot; ");
+      const row = (label: string, text?: string) =>
+        text
+          ? `<div class=frow><span class=flabel>${label}</span><span class=ftext>${esc(text)}</span></div>`
+          : "";
+      const body =
+        row("What's happening", f.evidence) +
+        row("Why it matters", f.whyItMatters) +
+        row(
+          "What to do",
+          f.remediation ?? "See the linked evidence and the Supabase advisor detail.",
+        );
       return `<div class="finding ${SEV_CLASS[f.severity]}" id="${fid(i)}">
   <h3><span class="lvl ${SEV_CLASS[f.severity]}">${SEV_WORD[f.severity]}</span> <span class=fcat>${esc(f.category)}</span> ${esc(f.title)}</h3>
-  ${f.remediation ? `<p class=fix>${esc(f.remediation)}</p>` : `<p class="fix empty">See the linked evidence and the Supabase advisor detail.</p>`}
+  <div class=fbody>${body}</div>
   ${links ? `<p class=flinks>${links}</p>` : ""}
 </div>`;
     })
@@ -541,13 +566,15 @@ export function render(a: Analysis, opts: { narrative?: boolean; brand?: Brand }
 </section>
 ${narrativeBlock}
 
-<h2 id="findings">Findings <span class=count>${findings.length}</span></h2>
-${auditFindings(findings, degraded)}
+${trendsSection(a)}
+
 ${positivesSection(positives)}
 
-<h2 id="evidence">Evidence</h2>
-<p class=note>Substantiating data for the findings above - each finding's "Evidence" link lands in one of these sections.</p>
-${trendsSection(a)}
+<h2 id="findings">Findings worth addressing <span class=count>${findings.length}</span></h2>
+${auditFindings(findings, degraded)}
+
+<h2 id="evidence">Evidence &amp; drill-down</h2>
+<p class=note>Substantiating data for every finding above - each finding's "Evidence" link lands in one of these sections.</p>
 
 <h2 id="infra">Infrastructure</h2>
 <table class=kv>
@@ -645,6 +672,11 @@ ${faviconTag(brand)}
   .fcat{font-size:11px;font-weight:600;color:var(--mut);text-transform:uppercase;letter-spacing:.03em}
   p.fix{margin:0;font-size:13px;line-height:1.5}
   p.fix.empty{color:var(--mut)}
+  .fbody{display:grid;grid-template-columns:max-content 1fr;gap:2px 14px;font-size:13px;line-height:1.5}
+  .frow{display:contents}
+  .flabel{font-weight:600;color:var(--mut);white-space:nowrap;font-size:11px;text-transform:uppercase;letter-spacing:.03em;padding-top:1px}
+  .ftext{min-width:0}
+  @media (max-width:640px){.fbody{grid-template-columns:1fr;gap:1px}.flabel{padding-top:6px}}
   p.flinks{margin:8px 0 0;font-size:12px}
   table.chart{border:none;width:100%;margin:4px 0 8px;table-layout:fixed}
   table.chart{border-spacing:0}
@@ -673,9 +705,11 @@ ${faviconTag(brand)}
   .badge.ok{background:var(--okbg)}.badge.warn{background:var(--warnbg)}.badge.bad{background:var(--errbg)}
   table.adv td:nth-child(3){max-width:560px}
   a{color:var(--link)}
-  .sparks{display:grid;grid-template-columns:repeat(3,1fr);gap:8px 16px;margin-top:8px}
+  .sparks{display:grid;grid-template-columns:repeat(3,1fr);gap:12px 16px;margin-top:8px}
+  @media (max-width:900px){.sparks{grid-template-columns:repeat(2,1fr)}}
+  @media (max-width:560px){.sparks{grid-template-columns:1fr}}
   figure.spark{margin:0}
-  figure.spark figcaption{font-size:11.5px;font-weight:600;margin-bottom:2px}
+  figure.spark figcaption{font-size:12px;font-weight:600;margin-bottom:3px}
   figure.spark svg{display:block;border:1px solid var(--line);background:var(--spark);border-radius:2px}
   figure.spark .note{display:block;margin-top:1px}
   @page{size:A4;margin:14mm 12mm}

@@ -48,6 +48,7 @@ export function buildNarrativeInput(a: Analysis): Record<string, unknown> {
     severity: f.severity,
     category: f.category,
     title: f.title,
+    whyItMatters: f.whyItMatters,
     remediation: f.remediation,
     doc: f.docUrl,
   }));
