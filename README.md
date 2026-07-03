@@ -8,17 +8,26 @@ One reproducible command produces the whole report from the Management API,
 read-only SQL, and the project metrics endpoint - no superuser connection
 string and no manual dashboard screenshots to assemble.
 
-## Quick start
+## Requirements
 
-Needs [Bun](https://bun.sh) (`curl -fsSL https://bun.sh/install | bash`).
+| For | You need | If missing |
+|---|---|---|
+| Running from source | [Bun](https://bun.sh) (`curl -fsSL https://bun.sh/install \| bash`) | `bun: command not found` at the shell. Or use the compiled binary (below), which needs nothing. |
+| Auth (always) | A Supabase **Personal Access Token** - `SUPABASE_ACCESS_TOKEN`, or run `supabase login` | The tool exits with `config error: no access token ...` and the token URL. |
+| `pdf` / `full` only | A system **Chrome/Chromium** on PATH (or `SBPERF_CHROME=/path/to/chrome`) | `pdf`/`full` exit with `no Chrome/Chromium found ...`. `analyze` and `report` (HTML) work without it. |
+
+sbperf checks each of these and fails with an actionable message - it never
+silently produces a broken report.
+
+## Quick start
 
 ```bash
 bun install
-cp .env.example .env          # add SUPABASE_ACCESS_TOKEN
-# PDF needs a system Chrome/Chromium on PATH (or set SBPERF_CHROME)
+cp .env.example .env          # add SUPABASE_ACCESS_TOKEN (or: supabase login)
 
 bun run src/index.ts full --ref <project-ref>
-# -> reports/<ref>-<ts>/{analysis.json, report.html, report.pdf}
+# -> reports/<org>/<project>-<ts>/{analysis.json, report.html, report.pdf}
+#    (analyze/report need no browser; pdf/full need Chrome/Chromium)
 ```
 
 Your **project ref** is the 20-char id in the dashboard URL
