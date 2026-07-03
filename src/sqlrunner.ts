@@ -27,6 +27,15 @@ export interface SqlRunner {
   runMulti?(query: string): Promise<SqlRow[][]>;
 }
 
+/**
+ * Normalize a Bun.SQL simple-query result to SqlRow[][]: a multi-statement
+ * command returns an array of result sets (each an array), while a single
+ * statement returns a flat row array - wrap the latter as one result set.
+ */
+export function normalizeMultiResult(res: unknown[]): SqlRow[][] {
+  return Array.isArray(res[0]) ? (res as SqlRow[][]) : [res as SqlRow[]];
+}
+
 /** PAT path: delegates to the Management API read-only SQL endpoint. */
 export class ManagementSqlRunner implements SqlRunner {
   readonly source = "read-only" as const;
@@ -63,8 +72,7 @@ export class DirectSqlRunner implements SqlRunner {
    * to SqlRow[][].
    */
   async runMulti(query: string): Promise<SqlRow[][]> {
-    const res = (await this.#sql.unsafe(query)) as unknown[];
-    return Array.isArray(res[0]) ? (res as SqlRow[][]) : [res as SqlRow[]];
+    return normalizeMultiResult((await this.#sql.unsafe(query)) as unknown[]);
   }
   close(): Promise<void> {
     return this.#sql.end();
