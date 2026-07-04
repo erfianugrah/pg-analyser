@@ -11,10 +11,11 @@ function captureQueries(): { urls: string[] } {
   const urls: string[] = [];
   globalThis.fetch = (async (url: string | URL | Request) => {
     urls.push(String(url));
-    return new Response(JSON.stringify({ status: "success", data: { result: [] } }), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
+    // one data point per panel so the happy path completes (all-empty throws)
+    return new Response(
+      JSON.stringify({ status: "success", data: { result: [{ values: [[1, "1"]] }] } }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
   }) as typeof fetch;
   return { urls };
 }
@@ -78,10 +79,10 @@ describe("fetchTrends ref scoping", () => {
     const inits: (RequestInit | undefined)[] = [];
     globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
       inits.push(init);
-      return new Response(JSON.stringify({ status: "success", data: { result: [] } }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
+      return new Response(
+        JSON.stringify({ status: "success", data: { result: [{ values: [[1, "1"]] }] } }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }) as typeof fetch;
     return inits;
   }
@@ -141,12 +142,62 @@ describe("fetchTrends ref scoping", () => {
     const inits: (RequestInit | undefined)[] = [];
     globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
       inits.push(init);
-      return new Response(JSON.stringify({ status: "success", data: { result: [] } }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
+      return new Response(
+        JSON.stringify({ status: "success", data: { result: [{ values: [[1, "1"]] }] } }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }) as typeof fetch;
     await fetchTrends("http://prom:9090", 30, "r1");
-    expect(inits.every((i) => i === undefined)).toBe(true);
+    // no auth header set (init still carries redirect:"manual", so not undefined)
+    for (const i of inits) {
+      const h = (i?.headers ?? {}) as Record<string, string>;
+      expect(h.Authorization).toBeUndefined();
+      expect(h.Cookie).toBeUndefined();
+    }
+  });
+
+  test("throws a clear, actionable error on an auth redirect (stale/absent cookie)", async () => {
+    globalThis.fetch = (async (_u: string | URL | Request) =>
+      new Response(null, {
+        status: 302,
+        headers: { location: "https://accounts.google.com/o/oauth2/auth?client_id=x" },
+      })) as typeof fetch;
+    await expect(
+      fetchTrends("https://grafana/api/datasources/proxy/uid/x", 30, "r1"),
+    ).rejects.toThrow(/redirected.*cookie\/token is missing or expired/);
+  });
+
+  test("throws when a 200 body isn't JSON (an SSO login HTML page)", async () => {
+    globalThis.fetch = (async (_u: string | URL | Request) =>
+      new Response("<html>sign in</html>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      })) as typeof fetch;
+    await expect(fetchTrends("https://grafana", 30, "r1")).rejects.toThrow(/non-JSON/);
+  });
+
+  test("throws on a prometheus query error (status:error in a 200 body)", async () => {
+    globalThis.fetch = (async (_u: string | URL | Request) =>
+      new Response(
+        JSON.stringify({ status: "error", errorType: "bad_data", error: "parse error" }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      )) as typeof fetch;
+    await expect(fetchTrends("https://grafana", 30, "r1")).rejects.toThrow(
+      /query error.*parse error/,
+    );
+  });
+
+  test("throws (not silent) when every panel returns 0 series - matcher/ref mismatch", async () => {
+    globalThis.fetch = (async (_u: string | URL | Request) =>
+      new Response(JSON.stringify({ status: "success", data: { result: [] } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })) as typeof fetch;
+    await expect(
+      fetchTrends("https://grafana", 30, "r1", { matcher: 'Name="x-{ref}"' }),
+    ).rejects.toThrow(/all \d+ panels returned 0 series.*Name="x-r1"/);
   });
 });

@@ -108,9 +108,13 @@ function buildPanels(refMatcher: string): Array<{ title: string; unit: string; q
 
 const RangeResponse = z.object({
   status: z.string(),
-  data: z.object({
-    result: z.array(z.object({ values: z.array(z.tuple([z.number(), z.string()])) })).default([]),
-  }),
+  error: z.string().optional(),
+  errorType: z.string().optional(),
+  data: z
+    .object({
+      result: z.array(z.object({ values: z.array(z.tuple([z.number(), z.string()])) })).default([]),
+    })
+    .optional(),
 });
 
 /**
@@ -147,17 +151,57 @@ export async function fetchTrends(
   else if (opts.cookie) headers.Cookie = opts.cookie;
   const init: RequestInit | undefined = Object.keys(headers).length > 0 ? { headers } : undefined;
 
+  // Don't silently follow a redirect to an SSO login page - a 3xx means the
+  // cookie/token didn't authenticate, and following it yields a 200 HTML page
+  // that only fails later at JSON parse with a confusing error.
+  const reqInit: RequestInit = { ...(init ?? {}), redirect: "manual" };
+
   const out: TrendSeries[] = [];
+  let emptyPanels = 0;
   for (const panel of panels) {
     const url = `${base}/api/v1/query_range?query=${encodeURIComponent(panel.query)}&start=${start}&end=${end}&step=${step}`;
-    const res = await fetch(url, init);
-    if (!res.ok) throw new Error(`prometheus ${panel.query} -> ${res.status}`);
-    const parsed = RangeResponse.parse(await res.json());
-    const values = parsed.data.result[0]?.values ?? [];
+    const res = await fetch(url, reqInit);
+    // Auth failure: a datasource behind an SSO proxy 3xx-redirects an
+    // unauthenticated request to the IdP. Surface it clearly - it aborts every
+    // panel identically, so fail fast on the first with an actionable message.
+    if (res.status >= 300 && res.status < 400) {
+      const loc = res.headers.get("location") ?? "";
+      throw new Error(
+        `datasource redirected (HTTP ${res.status}${loc.includes("accounts.google") || loc.includes("/oauth2/") ? " to SSO login" : ""}) - the session cookie/token is missing or expired for this datasource`,
+      );
+    }
+    if (!res.ok) {
+      const body = (await res.text()).replace(/\s+/g, " ").slice(0, 200);
+      throw new Error(`datasource HTTP ${res.status} for "${panel.title}": ${body}`);
+    }
+    let json: unknown;
+    try {
+      json = await res.json();
+    } catch {
+      const body = (await res.text().catch(() => "")).replace(/\s+/g, " ").slice(0, 200);
+      throw new Error(
+        `datasource returned non-JSON for "${panel.title}" (an HTML login page? check auth): ${body}`,
+      );
+    }
+    const parsed = RangeResponse.parse(json);
+    // Prometheus/Grafana signals a query error in a 200 body (status:"error").
+    if (parsed.status !== "success")
+      throw new Error(
+        `datasource query error for "${panel.title}": ${parsed.error ?? parsed.status}`,
+      );
+    const values = parsed.data?.result[0]?.values ?? [];
     const points = values
       .map(([t, v]) => ({ t, v: Number(v) }))
       .filter((p) => Number.isFinite(p.v));
     if (points.length) out.push({ title: panel.title, unit: panel.unit, points });
+    else emptyPanels++;
   }
+  // Reachable + authenticated but EVERY panel matched zero series -> almost
+  // always a matcher/ref/region mismatch, not "no data". Fail loud so the caller
+  // records it (silent empty trends is the #1 confusing failure).
+  if (out.length === 0 && emptyPanels > 0)
+    throw new Error(
+      `datasource reachable but all ${emptyPanels} panels returned 0 series - the matcher "${refMatcher || "(none)"}" likely doesn't match this project's labels (check the ref, region, and datasource)`,
+    );
   return out;
 }
