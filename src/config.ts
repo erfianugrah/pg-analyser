@@ -63,6 +63,24 @@ export function loadConfig(
   );
 }
 
+/**
+ * Like loadConfig but returns null instead of throwing when no token is found.
+ * Enables no-PAT mode: sbperf can run against a superuser --db-url (+ optional
+ * Grafana trends) with no Supabase Management API access at all. A malformed
+ * env (not merely absent) still throws.
+ */
+export function loadConfigOptional(
+  env: NodeJS.ProcessEnv = process.env,
+  cliToken: () => string | null = readCliToken,
+): Config | null {
+  try {
+    return loadConfig(env, cliToken);
+  } catch (err) {
+    if (err instanceof ConfigError) return null;
+    throw err;
+  }
+}
+
 export class ConfigError extends Error {
   override name = "ConfigError";
 }

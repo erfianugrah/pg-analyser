@@ -46,6 +46,23 @@ and the `<ref>.supabase.co` metrics endpoint (service_role auto-fetched per run
 via the Management API, never stored). The `Transport` interface exists mainly
 so tests can inject a fake; there is one impl (`DirectTransport`).
 
+**No-PAT mode** (`collect(ref, null, ...)`): with NO PAT resolvable but a
+superuser `--db-url` (or `SBPERF_DB_URL` / `sbperf.databases.json`), `collect`
+runs transport-free - `loadConfigOptional()` returns null instead of throwing,
+every Management-API plane is skipped (returns its fallback, one summary
+collection note - NOT per-plane 401 spam), advisors come from the self-hosted
+splinter lints (`collectSplinterLints` fills BOTH performance and security), SQL
+from the injected `DirectSqlRunner`, trends from Grafana if `SBPERF_PROMETHEUS_*`
+is set. `meta.managementApi=false` drives a report banner + footer stating what
+was NOT collected (provisioning/backups/pooler/metrics/analytics). This is the
+customer-audit path: a DB connstring + optional Grafana cookie, no PAT -
+equivalent to `supabase inspect db` plus ranked findings, splinter advisors, and
+trends. `--all` still needs a PAT (it enumerates projects via the Management
+API); the explicit `--db-url` / `sbperf.databases.json` sweep (`doAllDbs`) is the
+no-PAT multi-DB path. The db-url SQL + splinter are drift-synced by
+`check:inspect` + `check:lints` (advisory) - this mode's sync guarantee the way
+`check:api` is for PAT mode.
+
 ### SQL tiers (PAT vs superuser)
 
 SQL diagnostics run through a `SqlRunner` (`sqlrunner.ts`):
@@ -57,9 +74,10 @@ SQL diagnostics run through a `SqlRunner` (`sqlrunner.ts`):
   pooler connstring, or ANY Postgres) via `Bun.SQL` (`prepare:false` for
   transaction-pooler safety). Full access: real inspect, all schemas, multiple/
   non-Supabase DBs, and can `pg_stat_statements_reset()` to window queries.
-  Currently AUGMENTS the PAT (API planes + metrics still use the PAT transport);
-  pure no-PAT arbitrary-PG mode is a later step. The connstring is a secret -
-  read from flag/env, never written to analysis.json (only `meta.sqlSource`).
+  AUGMENTS the PAT when one is present (API planes + metrics still use the PAT
+  transport). With NO PAT it is the SOLE data source - see "No-PAT mode" above.
+  The connstring is a secret - read from flag/env, never written to
+  analysis.json (only `meta.sqlSource`).
 
 ## Architecture (bounded contexts)
 

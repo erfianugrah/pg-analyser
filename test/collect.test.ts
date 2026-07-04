@@ -133,4 +133,58 @@ describe("collect", () => {
       /cannot read project/,
     );
   });
+
+  describe("no-PAT mode (transport === null)", () => {
+    const perfLint = {
+      name: "unindexed_foreign_keys",
+      title: "Unindexed FK",
+      level: "INFO",
+      categories: ["PERFORMANCE"],
+    };
+    const secLint = {
+      name: "rls_disabled_in_public",
+      title: "RLS disabled",
+      level: "ERROR",
+      categories: ["SECURITY"],
+    };
+    const superuserRunner = {
+      source: "superuser" as const,
+      run: async (q: string) => {
+        if (q.includes("cache_hit_pct")) return [{ cache_hit_pct: "99.00" }];
+        if (q.includes("pg_database_size")) return [{ db_size: "10 MB" }];
+        return [];
+      },
+      // splinter: leading setup statements -> [], the lint SELECT is largest
+      runMulti: async () => [[], [perfLint, secLint]] as never,
+    };
+
+    test("runs on a superuser runner alone: SQL + splinter advisors, no Management planes", async () => {
+      const a = await collect("myref", null, "0.0.0-test", {
+        syncCheck: false,
+        sqlRunner: superuserRunner,
+      });
+      // meta derived without the Management API
+      expect(a.meta.managementApi).toBe(false);
+      expect(a.meta.name).toBe("myref");
+      expect(a.meta.sqlSource).toBe("superuser");
+      // Management-only planes absent (not errored per-plane; one summary note)
+      expect(a.disk).toBeNull();
+      expect(a.pooler).toBeNull();
+      expect(a.metrics.available).toBe(false);
+      expect(a.errors.map((e) => e.source)).toContain("management");
+      expect(a.errors.some((e) => e.source === "disk")).toBe(false);
+      // splinter fills BOTH advisor planes
+      expect(a.advisors.performance.map((l) => l.name)).toEqual(["unindexed_foreign_keys"]);
+      expect(a.advisors.security.map((l) => l.name)).toEqual(["rls_disabled_in_public"]);
+      // SQL diagnostics still ran through the superuser runner
+      expect(a.sql.dbSize).toBe("10 MB");
+      expect(a.sql.cacheHitPct).toBe(99);
+    });
+
+    test("throws when neither a PAT transport nor a SQL runner is available", async () => {
+      await expect(collect("myref", null, "0.0.0-test", { syncCheck: false })).rejects.toThrow(
+        /no PAT.*no superuser SQL runner|nothing to collect/,
+      );
+    });
+  });
 });

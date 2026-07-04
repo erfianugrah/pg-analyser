@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ConfigError, loadConfig } from "../src/config.ts";
+import { ConfigError, loadConfig, loadConfigOptional } from "../src/config.ts";
 
 const noCli = () => null;
 
@@ -31,5 +31,17 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ SUPABASE_ACCESS_TOKEN: "" } as NodeJS.ProcessEnv, noCli)).toThrow(
       ConfigError,
     );
+  });
+});
+
+describe("loadConfigOptional (no-PAT mode)", () => {
+  test("returns the Config when a token is present", () => {
+    expect(
+      loadConfigOptional({ SUPABASE_ACCESS_TOKEN: "sbp_x" } as NodeJS.ProcessEnv, noCli),
+    ).toEqual({ accessToken: "sbp_x", tokenSource: "env" });
+  });
+
+  test("returns null (does NOT throw) when no token anywhere", () => {
+    expect(loadConfigOptional({} as NodeJS.ProcessEnv, noCli)).toBeNull();
   });
 });

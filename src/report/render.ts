@@ -662,10 +662,16 @@ export function render(
       ? `<p class="empty warn-text">not collected - see notes</p>`
       : sqlTable(rows, opts);
 
-  const degraded = m.status !== "ACTIVE_HEALTHY" || dbUnreachable;
-  const banner = degraded
-    ? `<p class="banner bad">Project status <b>${esc(m.status)}</b>${dbUnreachable ? " - database was unreachable" : ""}. Runtime diagnostics (queries, metrics, health) are unavailable; only static config was collected. Empty sections below mean "not collected", not "clean".</p>`
-    : "";
+  // In no-PAT mode the project's status is simply unknown (no Management API),
+  // which is NOT a degradation - full SQL diagnostics were still collected. Only
+  // treat an unreachable DB as degraded there.
+  const noPat = m.managementApi === false;
+  const degraded = (!noPat && m.status !== "ACTIVE_HEALTHY") || dbUnreachable;
+  const banner = noPat
+    ? `<p class="banner ${dbUnreachable ? "bad" : "warn"}">No-PAT mode: diagnostics via superuser SQL (--db-url)${a.trends.length ? " + Grafana trends" : ""}; advisors via the self-hosted splinter lints. Management-API planes (compute/disk provisioning, backups, pooler config, metrics, edge/API analytics) were not collected - absent sections there mean "not available in this mode", not "clean".${dbUnreachable ? " The database was ALSO unreachable, so SQL diagnostics are missing too." : ""}</p>`
+    : degraded
+      ? `<p class="banner bad">Project status <b>${esc(m.status)}</b>${dbUnreachable ? " - database was unreachable" : ""}. Runtime diagnostics (queries, metrics, health) are unavailable; only static config was collected. Empty sections below mean "not collected", not "clean".</p>`
+      : "";
 
   const diskLine = disk
     ? `${disk.sizeGb} GB ${esc(disk.type)} / ${disk.iops ?? "-"} IOPS / ${disk.throughputMibps ?? "-"} MiB/s`
@@ -885,7 +891,11 @@ ${brandHead(brand, "Supabase performance report")}
 </div>
 ${banner}
 ${sections}
-<p class=meta style="margin-top:32px">Generated deterministically from the Supabase Management API, ${m.sqlSource === "superuser" ? "superuser SQL (--db-url)" : "read-only SQL"}, and the project metrics endpoint. No values inferred.</p>
+<p class=meta style="margin-top:32px">Generated deterministically from ${
+    m.managementApi === false
+      ? `superuser SQL (--db-url) and the self-hosted splinter advisors${a.trends.length ? " + Grafana trends" : ""} (no-PAT mode)`
+      : `the Supabase Management API, ${m.sqlSource === "superuser" ? "superuser SQL (--db-url)" : "read-only SQL"}, and the project metrics endpoint`
+  }. No values inferred.</p>
 ${syncFooter(a.sync)}
 </body></html>`;
 }

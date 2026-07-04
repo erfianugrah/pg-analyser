@@ -4,7 +4,7 @@ import { join } from "node:path";
 import pkg from "../package.json" with { type: "json" };
 import { type Brand, DEFAULT_BRAND, loadBrand } from "./brand.ts";
 import { collect } from "./collect.ts";
-import { ConfigError, loadConfig } from "./config.ts";
+import { ConfigError, loadConfig, loadConfigOptional } from "./config.ts";
 import { type DbTarget, parseDbConfig, type RawEntry, REF, resolveTargets } from "./dbtargets.ts";
 import { deriveFindings } from "./findings.ts";
 import { mergeTrends, parseTrendsFile } from "./importtrends.ts";
@@ -26,7 +26,7 @@ import type { Analysis } from "./schemas.ts";
 import { writeScraper } from "./scraper.ts";
 import { DirectSqlRunner } from "./sqlrunner.ts";
 import { DEFAULT_STORE, HistoryStore } from "./store.ts";
-import { makeTransport } from "./transport.ts";
+import { makeTransport, type Transport } from "./transport.ts";
 import { computeTrends } from "./trends.ts";
 
 const VERSION = pkg.version;
@@ -104,7 +104,14 @@ accumulate history, then 'sbperf report <dir>' draws trends from the store.
 No Prometheus/Grafana needed - sbperf is the collector, SQLite is the store.
 
 <ref> is your project ref (dashboard URL, or 'supabase projects list').
-Auth: set SUPABASE_ACCESS_TOKEN (see .env.example).`);
+Auth: set SUPABASE_ACCESS_TOKEN (see .env.example).
+
+No-PAT mode: with NO SUPABASE_ACCESS_TOKEN but a --db-url (or SBPERF_DB_URL /
+sbperf.databases.json), sbperf runs on the superuser connstring alone - SQL
+diagnostics + advisors from the self-hosted splinter lints (+ Grafana trends if
+SBPERF_PROMETHEUS_* is set). Management-API planes (provisioning, backups,
+pooler, metrics, analytics) are skipped. This is the customer-audit path where
+you have a DB connstring but no PAT. '--all' still needs a PAT.`);
   process.exit(code);
 }
 
@@ -219,9 +226,9 @@ async function doAllDbs(
   interval?: string,
   syncCheck?: boolean,
 ): Promise<void> {
-  const transport = makeTransport(loadCfg());
+  const transport = resolveTransport();
   console.error(
-    `> auditing ${targets.length} databases (superuser --db-url; PAT for API + metrics)`,
+    `> auditing ${targets.length} databases (superuser --db-url; ${transport ? "PAT for API + metrics" : "no PAT - db-url + Grafana only"})`,
   );
   const rows: IndexRow[] = [];
   for (const t of targets) {
@@ -325,7 +332,12 @@ async function doAll(
   syncCheck?: boolean,
   refFilter?: Set<string>,
 ): Promise<void> {
-  const transport = makeTransport(loadCfg());
+  const cfg = loadConfigOptional();
+  if (!cfg)
+    throw new Error(
+      "--all needs a PAT: it enumerates projects via the Management API. For no-PAT mode, pass explicit --db-url connstrings (or sbperf.databases.json) to 'full'.",
+    );
+  const transport = makeTransport(cfg);
   const m = new Management(transport);
   let projects = await m.projects();
   if (orgFilter) projects = projects.filter((p) => p.organization_id === orgFilter);
@@ -455,6 +467,24 @@ function loadCfg() {
   return cfg;
 }
 
+/**
+ * Resolve a Management-API transport, or null for no-PAT mode. Returns null
+ * (with a one-line notice) when no PAT is resolvable - collect then runs on the
+ * superuser --db-url + Grafana trends alone, skipping all Management planes.
+ */
+function resolveTransport(): Transport | null {
+  const cfg = loadConfigOptional();
+  if (!cfg) {
+    console.error(
+      "> no PAT found - running no-PAT mode (superuser SQL + Grafana trends; Management API planes skipped)",
+    );
+    return null;
+  }
+  if (cfg.tokenSource === "cli")
+    console.error("> auth: using Supabase CLI token (~/.supabase/access-token)");
+  return makeTransport(cfg);
+}
+
 function defaultOut(ref: string): string {
   const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   return join("reports", `${ref}-${ts}`);
@@ -511,7 +541,10 @@ function parseRefsFile(text: string, path: string): string[] {
 async function nestedOut(ref: string): Promise<string> {
   const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   try {
-    const m = new Management(makeTransport(loadConfig()));
+    // No PAT -> no Management API to resolve org/project names -> flat layout.
+    const cfg = loadConfigOptional();
+    if (!cfg) return defaultOut(ref);
+    const m = new Management(makeTransport(cfg));
     const projects = await m.projects();
     const proj = projects.find((p) => p.id === ref);
     if (!proj) return defaultOut(ref);
@@ -540,10 +573,19 @@ async function doAnalyze(
   dbUrl?: string,
   syncCheck?: boolean,
 ): Promise<string> {
-  const transport = makeTransport(loadCfg());
+  const transport = resolveTransport();
+  if (!transport && !dbUrl)
+    throw new Error(
+      "no PAT and no --db-url: nothing to analyze. Set SUPABASE_ACCESS_TOKEN, or pass a --db-url connstring for no-PAT db-url mode.",
+    );
   const runner = dbUrl ? new DirectSqlRunner(dbUrl) : undefined;
-  if (runner) console.error("> SQL tier: superuser (--db-url); PAT used for API + metrics");
-  console.error(`> analyzing ${ref} via the Management API`);
+  if (runner)
+    console.error(
+      `> SQL tier: superuser (--db-url)${transport ? "; PAT used for API + metrics" : " (no PAT - advisors via splinter, no Management planes)"}`,
+    );
+  console.error(
+    `> analyzing ${ref} via ${transport ? "the Management API" : "no-PAT db-url mode"}`,
+  );
   const analysis = await collect(ref, transport, VERSION, {
     prometheusUrl,
     interval,
@@ -584,10 +626,14 @@ async function doSnapshot(
   dbUrl?: string,
   syncCheck?: boolean,
 ): Promise<void> {
-  const transport = makeTransport(loadCfg());
+  const transport = resolveTransport();
+  if (!transport && !dbUrl)
+    throw new Error(
+      "no PAT and no --db-url: nothing to snapshot. Set SUPABASE_ACCESS_TOKEN, or pass a --db-url connstring.",
+    );
   const runner = dbUrl ? new DirectSqlRunner(dbUrl) : undefined;
   if (runner) console.error("> SQL tier: superuser (--db-url); PAT used for API + metrics");
-  console.error(`> snapshot ${ref} via the Management API`);
+  console.error(`> snapshot ${ref} via ${transport ? "the Management API" : "no-PAT db-url mode"}`);
   const analysis = await collect(ref, transport, VERSION, {
     interval,
     sqlRunner: runner,
