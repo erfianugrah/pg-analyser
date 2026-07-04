@@ -259,25 +259,25 @@ async function doAllDbs(
 ): Promise<void> {
   const transport = resolveTransport();
   console.error(
-    `> auditing ${targets.length} databases (superuser --db-url; ${transport ? "PAT for API + metrics" : "no PAT - db-url + Grafana only"})`,
+    `> auditing ${targets.length} database${targets.length === 1 ? "" : "s"} (superuser --db-url; ${transport ? "PAT for API + metrics" : "no PAT - db-url + Grafana only"})`,
   );
+  const progress = makeProgress(targets.length);
   const rows: IndexRow[] = [];
   for (const t of targets) {
     const label = t.name ?? t.ref;
-    process.stderr.write(`  - ${label} (${t.ref}) `);
     const runner = new DirectSqlRunner(t.dbUrl);
     // Per-project regional Grafana: a profile maps the project's region (derived
     // from its connstring) to that region's host/uid/cookie. Falls back to the
     // global --prometheus / SBPERF_PROMETHEUS_* when there's no profile match.
     const graf = activeProfile ? resolveGrafana(activeProfile, t.region) : null;
     // A profile WITH a grafana block but no entry for this project's region =
-    // trends can't be fetched; make it visible (stderr + a report note) rather
-    // than a silently trend-less report.
+    // trends can't be fetched; surface it in the report note + the done line
+    // rather than a silently trend-less report.
     const grafanaGap =
       activeProfile?.grafana && !graf
         ? `no Grafana config for region "${t.region ?? "(underivable from connstring)"}" - trends skipped`
         : null;
-    if (grafanaGap) console.error(`    (${grafanaGap})`);
+    progress.step(`${label} (${t.ref})`);
     try {
       const analysis = await collect(t.ref, transport, VERSION, {
         prometheusUrl: graf?.url ?? prometheusUrl,
@@ -299,7 +299,10 @@ async function doAllDbs(
         ...counts,
         dir: t.ref,
       });
-      console.error(`ok (${counts.high + counts.med + counts.low} findings)`);
+      const n = counts.high + counts.med + counts.low;
+      progress.done(
+        `ok - ${n} finding${n === 1 ? "" : "s"}${grafanaGap ? " (trends skipped)" : ""}`,
+      );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       rows.push({
@@ -312,9 +315,10 @@ async function doAllDbs(
         dir: t.ref,
         error: msg,
       });
-      console.error(`FAILED: ${msg}`);
+      progress.done(`FAILED: ${msg}`);
     }
   }
+  progress.stop();
   await mkdir(outBase, { recursive: true });
   await Bun.write(
     join(outBase, "index.html"),
