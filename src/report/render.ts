@@ -38,6 +38,23 @@ const esc = (s: unknown): string =>
 /** Advisor text is markdown with backslash-escaped backticks; unescape for display. */
 const cleanText = (s: unknown): string => esc(String(s ?? "").replace(/\\`/g, "`"));
 
+/**
+ * Header identity: "name (ref)" but just "ref" when name === ref (the no-PAT,
+ * no-profile-name case, where name falls back to ref - showing "ref (ref)" is
+ * pure noise). Returns HTML with the ref in a <code> tag.
+ */
+const metaIdent = (m: { name: string; ref: string }): string =>
+  m.name && m.name !== m.ref
+    ? `<code>${esc(m.name)}</code> (${esc(m.ref)})`
+    : `<code>${esc(m.ref)}</code>`;
+
+/** Treat the "unknown"/"" placeholders (no-PAT region/status) as absent. */
+const known = (v: string | null | undefined): string | null => (v && v !== "unknown" ? v : null);
+
+/** Join non-empty header segments with the middot separator. */
+const metaLine = (parts: (string | null | undefined)[]): string =>
+  parts.filter(Boolean).join(" &middot; ");
+
 const bytes = (n: number | null): string => {
   if (n == null) return "-";
   const u = ["B", "KB", "MB", "GB", "TB"];
@@ -548,6 +565,11 @@ export function renderIndex(
   const body = rows
     .map((r) => {
       const healthy = r.status === "ACTIVE_HEALTHY";
+      // No-PAT rows have no platform status; a red "unknown" badge reads as
+      // "unhealthy", so show a neutral dash instead.
+      const statusCell = known(r.status)
+        ? `<span class="badge ${healthy ? "ok" : "bad"}">${esc(r.status)}</span>`
+        : '<span style="color:var(--mut)">-</span>';
       const sev =
         r.error != null
           ? '<span class="lvl ERROR">ERROR</span>'
@@ -559,7 +581,7 @@ export function renderIndex(
       return `<tr>
       <td><a href="${esc(r.dir)}/report.html">${esc(r.name)}</a></td>
       <td class=mono>${esc(r.ref)}</td>
-      <td><span class="badge ${healthy ? "ok" : "bad"}">${esc(r.status)}</span></td>
+      <td>${statusCell}</td>
       <td>${r.error ? esc(r.error) : `${r.high} / ${r.med} / ${r.low}`}</td>
       <td>${sev}</td>
     </tr>`;
@@ -923,11 +945,13 @@ ${faviconTag(brand)}
   }
 </style></head><body>
 ${brandHead(brand, "Supabase performance report")}
-<div class=meta>
-  <code>${esc(m.name)}</code> (${esc(m.ref)}) &middot; ${esc(m.region)} &middot;
-  status <code>${esc(m.status)}</code> &middot;
-  collected <code>${esc(m.collectedAt)}</code> &middot; sbperf <code>${esc(m.sbperfVersion)}</code>
-</div>
+<div class=meta>${metaLine([
+    metaIdent(m),
+    known(m.region) ? esc(m.region) : null,
+    known(m.status) ? `status <code>${esc(m.status)}</code>` : null,
+    `collected <code>${esc(m.collectedAt)}</code>`,
+    `sbperf <code>${esc(m.sbperfVersion)}</code>`,
+  ])}</div>
 ${banner}
 ${sections}
 <p class=meta style="margin-top:32px">Generated deterministically from ${
@@ -961,7 +985,12 @@ ${faviconTag(brand)}
   ${BRAND_CSS}
 </style></head><body>
 ${brandHead(brand, "Supabase performance - narrative")}
-<div class=meta><code>${esc(m.name)}</code> (${esc(m.ref)}) &middot; ${esc(m.region)} &middot; collected ${esc(m.collectedAt.slice(0, 10))} &middot; LLM synthesis over analysis.json (the deterministic report is ground truth)</div>
+<div class=meta>${metaLine([
+    metaIdent(m),
+    known(m.region) ? esc(m.region) : null,
+    `collected ${esc(m.collectedAt.slice(0, 10))}`,
+    "LLM synthesis over analysis.json (the deterministic report is ground truth)",
+  ])}</div>
 ${body}
 </body></html>`;
 }
@@ -1050,7 +1079,11 @@ ${faviconTag(brand)}
   @page{size:A4;margin:16mm}
 </style></head><body>
 ${brandHead(brand, "Performance summary")}
-<div class=meta>${esc(m.name)} &middot; ${esc(m.region)} &middot; ${esc(m.collectedAt.slice(0, 10))}</div>
+<div class=meta>${metaLine([
+    m.name && m.name !== m.ref ? `${esc(m.name)} (${esc(m.ref)})` : esc(m.ref),
+    known(m.region) ? esc(m.region) : null,
+    esc(m.collectedAt.slice(0, 10)),
+  ])}</div>
 <div class="verdict ${verdict.cls}">${esc(verdict.text)}</div>
 ${body}
 <h2 class=g>At a glance</h2>
