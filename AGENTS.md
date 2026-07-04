@@ -25,6 +25,8 @@ HTML + PDF report. No superuser `--db-url`, no manual Grafana screenshots.
 | `bun run src/index.ts full --ref <ref>` | analyze + report + pdf |
 | `bun run src/index.ts full --ref <r1>,<r2> ...` / `--ref-file <f>` | audit a subset of projects -> combined org/project index (PAT-only). `--ref` repeatable + comma/space lists; `--ref-file` reads a .txt/.csv (ref-shaped tokens only) |
 | `bun run src/index.ts full --all [--org <slug>]` | audit every project -> `index.html` |
+| `bun run src/index.ts full --profile <file.json>` | no-PAT work sweep: force-no-PAT + per-region Grafana + customer DBs, all in one gitignored JSON -> per-DB reports + index |
+| `bun run src/index.ts full --db-url <connstr>` | superuser SQL tier (augments the PAT, or SOLE source in no-PAT mode); repeatable / `--db-config <file>` for a multi-DB sweep |
 | `bun run src/index.ts snapshot --ref <ref>` | collect + append to the SQLite history store (cron this) |
 | `bun run src/index.ts export-prometheus <dir> [--ref <ref>]` | history store -> OpenMetrics for promtool backfill |
 | `bun run src/index.ts scrape-init --ref <ref>` | write the (alternate) Prometheus+Grafana stack |
@@ -131,6 +133,21 @@ src/
                  {plainTitle, whatToDo, sql?, howToVerify}; makes advisor findings
                  a one-stop shop (concrete fix, not "go to the Advisor"). Kept in
                  sync with splinter.sql by scripts/check-lints-drift.ts.
+  findings.ts    deriveFindings/derivePositives: the deterministic ranking pass.
+                 Turns the raw Analysis (advisors + SQL + metrics + trends) into
+                 ordered Finding[] (Performance/Security/Capacity, high/med/low)
+                 and Positive[] ("what's looking good"), each enriched by meta()
+                 from heuristics.ts. Includes the phase-2 tuning findings and the
+                 TREND-DRIVEN capacity suggestions (disk/CPU/memory projections),
+                 all data-aware via trendstats.sufficient() so a 2-point store
+                 series never claims "sustained over 30d".
+  trendstats.ts  trend-analysis primitives (slope/growth, sustained-fraction,
+                 peak, linear projection) behind sufficient() gating; the shapes
+                 the capacity findings + trend-health positives reason over.
+  rls.ts         isUnwrappedAuth: flags an RLS policy that calls auth.uid()/
+                 jwt()/role() WITHOUT a scalar sub-select wrapper (per-row re-eval
+                 -> the 94-99% latency win from wrapping). Case-insensitive to
+                 match how Postgres stores a wrapped policy back.
   report/render  Analysis -> self-contained HTML: a technical + business audit
                  pyramid (verdict + deterministic/LLM Executive summary ->
                  Resource snapshot 30-day charts -> What's looking good ->
@@ -171,7 +188,20 @@ src/
                  Analysis + denormalized metric_samples/sql_scalars; keyed by
                  ref at ~/.sbperf/history.db; prune to retention
   trends.ts      pure computeTrends: gauges (1 pt/snapshot) + counter-derived
-                 rates (CPU util %, IOPS, throughput) across >=2 snapshots
+                 rates (CPU util %, IOPS, throughput) across >=2 snapshots, with
+                 read-time downsampling to ~300 pts/panel (Grafana-style). The
+                 query window is --trend-days (default 30; profile.trendDays wins)
+                 and AUTO-SCOPES to a project's real data span so a young project
+                 re-queries at its actual span instead of a mostly-empty 30d.
+  prometheus.ts  optional trend panels pulled from a Prometheus/Grafana that
+                 scrapes the metrics endpoint (--prometheus[-token|-cookie|
+                 -matcher]); scoped to one project ref. Alternate trend source to
+                 the store; `report` prefers --prometheus when both exist.
+  profile.ts     --profile <file.json>: the whole work/customer-audit config in
+                 one gitignored JSON (force-no-PAT + region-mapped Grafana creds,
+                 per-region ALB cookie, + customer databases). resolveGrafana maps
+                 each project's region (from its connstring) to that region's
+                 host/uid/cookie; full --profile sweeps databases[] via doAllDbs.
   promexport.ts  history store -> OpenMetrics (timestamped) for `export-prometheus`;
                  promtool backfills a Prometheus TSDB -> retroactive Grafana
   scraper.ts     generate a going-forward Prometheus+Grafana stack (alternate
