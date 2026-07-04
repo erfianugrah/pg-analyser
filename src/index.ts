@@ -79,6 +79,11 @@ Flags:
   --prometheus-matcher <m> project-label selector template for a scraper whose
                        schema isn't the default supabase_project_ref="{ref}";
                        "{ref}" -> the project ref (env: SBPERF_PROMETHEUS_MATCHER)
+  --no-pat             force no-PAT mode: ignore any token (incl. the CLI
+                       ~/.supabase/access-token fallback) and run on --db-url +
+                       Grafana alone. For a work profile auditing customer
+                       projects you have a connstring for but no PAT.
+                       (env: SBPERF_NO_PAT=1)
   --no-sync-check      skip the on-by-default upstream sync check (offline runs)
   --narrative          report/pdf: embed the narrative summary (run 'narrate' first)
   --print-prompt       narrate: write the grounded prompt to prompt.md for copy-paste
@@ -128,6 +133,7 @@ type Flags = {
   prometheusToken?: string;
   prometheusCookie?: string;
   prometheusMatcher?: string;
+  noPat?: boolean;
   store?: string;
   retentionDays?: number;
   interval?: string;
@@ -168,6 +174,7 @@ function parseFlags(argv: string[]): Flags {
     else if (a === "--prometheus-token") out.prometheusToken = argv[++i];
     else if (a === "--prometheus-cookie") out.prometheusCookie = argv[++i];
     else if (a === "--prometheus-matcher") out.prometheusMatcher = argv[++i];
+    else if (a === "--no-pat") out.noPat = true;
     else if (a === "--store") out.store = argv[++i];
     else if (a === "--retention-days") out.retentionDays = Number(argv[++i]);
     else if (a === "--interval") out.interval = argv[++i];
@@ -332,10 +339,10 @@ async function doAll(
   syncCheck?: boolean,
   refFilter?: Set<string>,
 ): Promise<void> {
-  const cfg = loadConfigOptional();
+  const cfg = noPatForced() ? null : loadConfigOptional();
   if (!cfg)
     throw new Error(
-      "--all needs a PAT: it enumerates projects via the Management API. For no-PAT mode, pass explicit --db-url connstrings (or sbperf.databases.json) to 'full'.",
+      "--all needs a PAT: it enumerates projects via the Management API (and cannot run in forced no-PAT mode). For no-PAT, pass explicit --db-url connstrings (or sbperf.databases.json) to 'full'.",
     );
   const transport = makeTransport(cfg);
   const m = new Management(transport);
@@ -472,7 +479,20 @@ function loadCfg() {
  * (with a one-line notice) when no PAT is resolvable - collect then runs on the
  * superuser --db-url + Grafana trends alone, skipping all Management planes.
  */
+/** Forced no-PAT mode (--no-pat / SBPERF_NO_PAT). Ignores any resolvable token
+ * - including the personal ~/.supabase/access-token CLI fallback - so a work
+ * profile auditing customer projects never accidentally runs PAT mode. */
+function noPatForced(): boolean {
+  return ["1", "true", "yes"].includes((process.env.SBPERF_NO_PAT ?? "").trim().toLowerCase());
+}
+
 function resolveTransport(): Transport | null {
+  if (noPatForced()) {
+    console.error(
+      "> no-PAT mode forced (--no-pat / SBPERF_NO_PAT); ignoring any token - Management API planes skipped",
+    );
+    return null;
+  }
   const cfg = loadConfigOptional();
   if (!cfg) {
     console.error(
@@ -541,8 +561,8 @@ function parseRefsFile(text: string, path: string): string[] {
 async function nestedOut(ref: string): Promise<string> {
   const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   try {
-    // No PAT -> no Management API to resolve org/project names -> flat layout.
-    const cfg = loadConfigOptional();
+    // No PAT (or forced no-PAT) -> no Management API to resolve names -> flat.
+    const cfg = noPatForced() ? null : loadConfigOptional();
     if (!cfg) return defaultOut(ref);
     const m = new Management(makeTransport(cfg));
     const projects = await m.projects();
@@ -880,6 +900,7 @@ async function main(): Promise<void> {
   if (flags.prometheusToken) process.env.SBPERF_PROMETHEUS_TOKEN = flags.prometheusToken;
   if (flags.prometheusCookie) process.env.SBPERF_PROMETHEUS_COOKIE = flags.prometheusCookie;
   if (flags.prometheusMatcher) process.env.SBPERF_PROMETHEUS_MATCHER = flags.prometheusMatcher;
+  if (flags.noPat) process.env.SBPERF_NO_PAT = "1";
 
   try {
     // Resolve superuser DB targets. Precedence: explicit flags are authoritative

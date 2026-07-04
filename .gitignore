@@ -38,3 +38,8 @@ sbperf.overlays/
 db_exporter.json
 sbperf.grafana.json
 sbperf.grafana.*.json
+
+# work profile: no-PAT customer-audit config (self-hosted Grafana cookie/URL +
+# customer connstrings). keep the .example; never commit the real one.
+sbperf.work.env
+sbperf.work.databases.json
