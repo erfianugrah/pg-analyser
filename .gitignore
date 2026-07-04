@@ -41,7 +41,7 @@ sbperf.grafana.*.json
 
 # work profile: the single-JSON customer-audit config (forced no-PAT +
 # region-mapped Grafana cookies + customer connstrings). keep the .example.
+# canonical: sbperf.profile.json; named variants: sbperf.<name>.profile.json
 sbperf.profile.json
 sbperf.*.profile.json
-sbperf.work.json
 sbperf.work.env
