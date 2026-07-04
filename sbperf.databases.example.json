@@ -10,6 +10,7 @@
   {
     "name": "legacy-non-supabase",
     "ref": "manual-ref-label",
+    "region": "us-east-1",
     "dbUrl": "postgresql://user:PASSWORD@db.internal.example.com:5432/appdb"
   }
 ]

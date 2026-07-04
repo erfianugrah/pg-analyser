@@ -4,7 +4,7 @@
   "grafana": {
     "hostTemplate": "https://grafana-{region}.example.com",
     "datasourceUid": "REPLACE_WITH_PROMETHEUS_DATASOURCE_UID",
-    "matcher": "supabase_project_ref=\"{ref}\"",
+    "matcher": "REPLACE_with_your_scrapers_project_label_selector__e.g__<label>=\"<prefix>-{ref}\"__or__supabase_project_ref=\"{ref}\"__(a wrong/unset matcher matches 0 series; {ref} is substituted per project)",
     "regions": {
       "ap-southeast-1": {
         "cookie": "REPLACE_WITH_THE_ap-southeast-1_SESSION_COOKIE_HEADER"
@@ -23,6 +23,7 @@
     },
     {
       "name": "customer-b",
+      "region": "eu-central-1",
       "dbUrl": "postgresql://<role>.<ref>:PASSWORD@aws-0-eu-central-1.pooler.supabase.com:6543/postgres"
     }
   ]
