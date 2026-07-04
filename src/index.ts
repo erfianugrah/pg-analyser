@@ -258,8 +258,14 @@ async function doAllDbs(
     // from its connstring) to that region's host/uid/cookie. Falls back to the
     // global --prometheus / SBPERF_PROMETHEUS_* when there's no profile match.
     const graf = activeProfile ? resolveGrafana(activeProfile, t.region) : null;
-    if (activeProfile && !graf && t.region)
-      console.error(`    (no Grafana config for region ${t.region} - trends skipped)`);
+    // A profile WITH a grafana block but no entry for this project's region =
+    // trends can't be fetched; make it visible (stderr + a report note) rather
+    // than a silently trend-less report.
+    const grafanaGap =
+      activeProfile?.grafana && !graf
+        ? `no Grafana config for region "${t.region ?? "(underivable from connstring)"}" - trends skipped`
+        : null;
+    if (grafanaGap) console.error(`    (${grafanaGap})`);
     try {
       const analysis = await collect(t.ref, transport, VERSION, {
         prometheusUrl: graf?.url ?? prometheusUrl,
@@ -269,6 +275,7 @@ async function doAllDbs(
         sqlRunner: runner,
         syncCheck,
       }).finally(() => runner.close());
+      if (grafanaGap) analysis.errors.push({ source: "trends", message: grafanaGap });
       const counts = await emitReport(analysis, join(outBase, t.ref));
       rows.push({
         name: t.name ?? analysis.meta.name,
