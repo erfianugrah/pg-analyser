@@ -192,6 +192,11 @@ export const Analysis = z.object({
     // Which SQL tier produced the diagnostics. Defaulted for back-compat with
     // analysis.json written before the superuser tier existed.
     sqlSource: z.enum(["read-only", "superuser"]).default("read-only"),
+    // False in no-PAT mode: no Supabase Management API was available, so
+    // advisors came from self-hosted splinter, SQL from a superuser --db-url,
+    // trends from Grafana; provisioning/backups/metrics/analytics were skipped.
+    // Optional/absent == PAT mode (back-compat + consumers test `=== false`).
+    managementApi: z.boolean().optional(),
   }),
   health: HealthList,
   disk: z

@@ -3,7 +3,7 @@ import { parsePrometheus } from "./metrics.ts";
 import { fetchTrends } from "./prometheus.ts";
 import { isUnwrappedAuth } from "./rls.ts";
 import { type Analysis, MetricSample } from "./schemas.ts";
-import { collectSplinterPerfLints } from "./splinter.ts";
+import { collectSplinterLints } from "./splinter.ts";
 import { QUERIES } from "./sql.ts";
 import { ManagementSqlRunner, type SqlRunner } from "./sqlrunner.ts";
 import { computeSyncStatus } from "./sync.ts";
@@ -14,7 +14,7 @@ type CollectError = { source: string; message: string };
 /** Collect every plane for a project into one validated Analysis object. */
 export async function collect(
   ref: string,
-  transport: Transport,
+  transport: Transport | null,
   version: string,
   opts: {
     prometheusUrl?: string;
@@ -26,11 +26,30 @@ export async function collect(
     syncCheck?: boolean;
   } = {},
 ): Promise<Analysis> {
-  const m = new Management(transport);
+  // No-PAT mode: transport == null. No Supabase Management API at all - a
+  // superuser SQL runner (--db-url) is then REQUIRED, advisors come from the
+  // self-hosted splinter lints, trends from Grafana (if configured). Every
+  // Management plane is skipped rather than attempted-and-401'd.
+  const m = transport ? new Management(transport) : null;
+  const noPat = m === null;
   const errors: CollectError[] = [];
+  if (noPat && !opts.sqlRunner) {
+    throw new Error(
+      "no PAT (SUPABASE_ACCESS_TOKEN unset) and no superuser SQL runner: nothing to collect. " +
+        "Provide a Personal Access Token, or a --db-url connstring for no-PAT db-url mode.",
+    );
+  }
+  if (noPat) {
+    errors.push({
+      source: "management",
+      message:
+        "no PAT: Supabase Management API planes skipped (advisors via splinter, SQL via superuser --db-url, trends via Grafana if configured). Compute/disk provisioning, backups, pooler config, metrics and edge/API analytics are unavailable in this mode.",
+    });
+  }
   // Default SQL tier is the PAT read-only runner; --db-url injects a superuser
-  // DirectSqlRunner. API planes + metrics still go through the PAT transport.
-  const runner: SqlRunner = opts.sqlRunner ?? new ManagementSqlRunner(m, ref);
+  // DirectSqlRunner. In no-PAT mode the injected superuser runner is the only
+  // data source (guarded above).
+  const runner: SqlRunner = opts.sqlRunner ?? new ManagementSqlRunner(m as Management, ref);
   // Timeframe for the analytics endpoints (API counts + edge-function stats).
   // The metrics scrape is point-in-time and SQL is cumulative-since-reset, so
   // this is the only query window Supabase lets us pick (max ~7 days).
@@ -50,10 +69,18 @@ export async function collect(
     }
   };
 
-  // project meta is required - everything else is best-effort.
-  const project = await m.project(ref).catch((err) => {
-    throw new Error(`cannot read project ${ref}: ${err instanceof Error ? err.message : err}`);
-  });
+  // Run a Management-API plane, or return its fallback unchanged in no-PAT mode
+  // (no transport -> the plane is simply absent, no error recorded per-plane).
+  const mgmt = <T>(source: string, fn: (mm: Management) => Promise<T>, fallback: T): Promise<T> =>
+    m ? safe(source, () => fn(m), fallback) : Promise.resolve(fallback);
+
+  // project meta is required in PAT mode; in no-PAT mode there is no Management
+  // API to read it from, so meta is derived from the ref + SQL tier instead.
+  const project = m
+    ? await m.project(ref).catch((err) => {
+        throw new Error(`cannot read project ${ref}: ${err instanceof Error ? err.message : err}`);
+      })
+    : null;
 
   const sql = (key: keyof typeof QUERIES) => safe(`sql:${key}`, () => runner.run(QUERIES[key]), []);
 
@@ -95,18 +122,18 @@ export async function collect(
     storageUsage,
     metricsText,
   ] = await Promise.all([
-    safe("health", () => m.health(ref), []),
-    safe("disk", () => m.disk(ref), null),
-    safe("diskUtil", () => m.diskUtil(ref), null),
-    safe("pgConfig", () => m.pgConfig(ref), null),
-    safe("pooler", () => m.pooler(ref), null),
-    safe("backups", () => m.backups(ref), null),
-    safe("upgrade", () => m.upgrade(ref), null),
-    safe("functions", () => m.functions(ref), []),
-    safe("buckets", () => m.buckets(ref), []),
-    safe("advisors:performance", () => m.advisors(ref, "performance"), []),
-    safe("advisors:security", () => m.advisors(ref, "security"), []),
-    safe("apiCounts", () => m.apiCounts(ref, interval), []),
+    mgmt("health", (mm) => mm.health(ref), []),
+    mgmt("disk", (mm) => mm.disk(ref), null),
+    mgmt("diskUtil", (mm) => mm.diskUtil(ref), null),
+    mgmt("pgConfig", (mm) => mm.pgConfig(ref), null),
+    mgmt("pooler", (mm) => mm.pooler(ref), null),
+    mgmt("backups", (mm) => mm.backups(ref), null),
+    mgmt("upgrade", (mm) => mm.upgrade(ref), null),
+    mgmt("functions", (mm) => mm.functions(ref), []),
+    mgmt("buckets", (mm) => mm.buckets(ref), []),
+    mgmt("advisors:performance", (mm) => mm.advisors(ref, "performance"), []),
+    mgmt("advisors:security", (mm) => mm.advisors(ref, "security"), []),
+    mgmt("apiCounts", (mm) => mm.apiCounts(ref, interval), []),
     sql("dbSize"),
     sql("cacheHit"),
     sql("statsResetAge"),
@@ -130,15 +157,17 @@ export async function collect(
     sql("locks"),
     sql("blocking"),
     sql("storageUsage"),
-    safe(
-      "metrics",
-      async () => {
-        const res = await transport.metrics(ref);
-        if (!res.ok) throw new Error(`metrics -> ${res.status}`);
-        return await res.text();
-      },
-      null,
-    ),
+    transport
+      ? safe(
+          "metrics",
+          async () => {
+            const res = await transport.metrics(ref);
+            if (!res.ok) throw new Error(`metrics -> ${res.status}`);
+            return await res.text();
+          },
+          null,
+        )
+      : Promise.resolve(null),
   ]);
 
   // Capture the FULL scrape - every family the endpoint serves, no curation.
@@ -173,7 +202,7 @@ export async function collect(
   // so they run after the parallel batch. Best-effort per function.
   const functionStats: Analysis["functionStats"] = [];
   for (const fn of functions) {
-    if (!fn.id) continue;
+    if (!m || !fn.id) continue;
     const id = fn.id;
     const resp = await safe(
       `functionStats:${fn.slug}`,
@@ -219,23 +248,33 @@ export async function collect(
     unwrapped_auth: isUnwrappedAuth(r.qual as string | null, r.with_check as string | null),
   }));
 
+  // Fill any advisor plane the hosted endpoint didn't provide from the
+  // self-hosted splinter lints (run once, split by category). This is the
+  // FALLBACK in PAT mode (the hosted advisors/performance endpoint 400s on the
+  // storage-buckets lint) and the PRIMARY advisor source in no-PAT mode (both
+  // planes empty -> both filled).
   let performanceAdvisors = perfAdvisors;
-  if (performanceAdvisors.length === 0 && runner.runMulti) {
-    const lints = await safe("advisors:splinter", () => collectSplinterPerfLints(runner), []);
-    if (lints.length) performanceAdvisors = lints;
+  let securityAdvisors = secAdvisors;
+  if ((performanceAdvisors.length === 0 || securityAdvisors.length === 0) && runner.runMulti) {
+    const all = await safe("advisors:splinter", () => collectSplinterLints(runner), []);
+    if (performanceAdvisors.length === 0)
+      performanceAdvisors = all.filter((l) => (l.categories ?? []).includes("PERFORMANCE"));
+    if (securityAdvisors.length === 0)
+      securityAdvisors = all.filter((l) => (l.categories ?? []).includes("SECURITY"));
   }
 
   const analysis: Analysis = {
     meta: {
       ref,
-      name: project.name,
-      region: project.region,
-      status: project.status,
-      pgVersion: project.database?.version ?? null,
-      createdAt: project.created_at,
+      name: project?.name ?? ref,
+      region: project?.region ?? "unknown",
+      status: project?.status ?? "unknown",
+      pgVersion: project?.database?.version ?? null,
+      createdAt: project?.created_at ?? "",
       collectedAt: new Date().toISOString(),
       sbperfVersion: version,
       sqlSource: runner.source,
+      managementApi: !noPat,
     },
     health,
     disk: disk
@@ -255,7 +294,7 @@ export async function collect(
     functions,
     functionStats,
     buckets,
-    advisors: { performance: performanceAdvisors, security: secAdvisors },
+    advisors: { performance: performanceAdvisors, security: securityAdvisors },
     apiCounts,
     sql: {
       dbSize,

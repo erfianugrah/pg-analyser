@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { collectSplinterPerfLints, parseSplinterPerfLints } from "../src/splinter.ts";
+import {
+  collectSplinterLints,
+  collectSplinterPerfLints,
+  parseSplinterPerfLints,
+  parseSplinterSecurityLints,
+} from "../src/splinter.ts";
 import type { SqlRunner } from "../src/sqlrunner.ts";
 
 // Splinter-shaped rows (the columns the lint SQL selects).
@@ -58,5 +63,37 @@ describe("collectSplinterPerfLints", () => {
   test("returns [] on a runner without multi-statement support (PAT tier)", async () => {
     const patRunner: SqlRunner = { source: "read-only", run: async () => [] };
     expect(await collectSplinterPerfLints(patRunner)).toEqual([]);
+  });
+});
+
+describe("parseSplinterSecurityLints", () => {
+  test("keeps only SECURITY lints (the no-PAT security-advisor path)", () => {
+    const out = parseSplinterSecurityLints([
+      perfLint("unused_index"),
+      secLint("auth_users_exposed"),
+      secLint("rls_disabled_in_public"),
+    ]);
+    expect(out.map((l) => l.name)).toEqual(["auth_users_exposed", "rls_disabled_in_public"]);
+  });
+});
+
+describe("collectSplinterLints", () => {
+  const withMulti = (sets: unknown[][]): SqlRunner => ({
+    source: "superuser",
+    run: async () => [],
+    runMulti: async () => sets as never,
+  });
+
+  test("returns ALL lints (both categories) so a caller can fill both planes", async () => {
+    const all = await collectSplinterLints(
+      withMulti([[], [perfLint("unused_index"), secLint("auth_users_exposed")]]),
+    );
+    expect(all.map((l) => l.name)).toEqual(["unused_index", "auth_users_exposed"]);
+    expect(all.filter((l) => l.categories?.includes("PERFORMANCE"))).toHaveLength(1);
+    expect(all.filter((l) => l.categories?.includes("SECURITY"))).toHaveLength(1);
+  });
+
+  test("returns [] on a PAT-tier runner (no multi-statement)", async () => {
+    expect(await collectSplinterLints({ source: "read-only", run: async () => [] })).toEqual([]);
   });
 });
