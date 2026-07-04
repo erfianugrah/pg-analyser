@@ -1,0 +1,28 @@
+{
+  "noPat": true,
+  "grafana": {
+    "hostTemplate": "https://grafana-{region}.example.com",
+    "datasourceUid": "REPLACE_WITH_PROMETHEUS_DATASOURCE_UID",
+    "matcher": "supabase_project_ref=\"{ref}\"",
+    "regions": {
+      "ap-southeast-1": {
+        "cookie": "REPLACE_WITH_THE_ap-southeast-1_SESSION_COOKIE_HEADER"
+      },
+      "eu-central-1": {
+        "cookie": "REPLACE_WITH_THE_eu-central-1_SESSION_COOKIE_HEADER",
+        "uid": "OPTIONAL_PER_REGION_DATASOURCE_UID_OVERRIDE",
+        "host": "https://grafana-eu-central-1.example.com"
+      }
+    }
+  },
+  "databases": [
+    {
+      "name": "customer-a",
+      "dbUrl": "postgresql://<role>.<ref>:PASSWORD@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres"
+    },
+    {
+      "name": "customer-b",
+      "dbUrl": "postgresql://<role>.<ref>:PASSWORD@aws-0-eu-central-1.pooler.supabase.com:6543/postgres"
+    }
+  ]
+}

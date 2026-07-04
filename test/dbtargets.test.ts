@@ -3,6 +3,7 @@ import {
   parseDbConfig,
   redactConnstring,
   refFromConnstring,
+  regionFromConnstring,
   resolveTargets,
 } from "../src/dbtargets.ts";
 
@@ -36,6 +37,39 @@ describe("refFromConnstring", () => {
   test("garbage -> null", () => {
     expect(refFromConnstring("not a url")).toBeNull();
     expect(refFromConnstring("")).toBeNull();
+  });
+});
+
+describe("regionFromConnstring", () => {
+  test("pooler host aws-N-<region> -> region", () => {
+    expect(
+      regionFromConnstring(
+        `postgresql://supabase_admin.${REF}:pw@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres`,
+      ),
+    ).toBe("ap-southeast-1");
+    expect(
+      regionFromConnstring(
+        `postgresql://postgres.${REF}:pw@aws-0-eu-central-1.pooler.supabase.com:5432/postgres`,
+      ),
+    ).toBe("eu-central-1");
+  });
+
+  test("direct host (db.<ref>.supabase.co) carries no region -> null", () => {
+    expect(
+      regionFromConnstring(`postgresql://postgres:pw@db.${REF}.supabase.co:5432/postgres`),
+    ).toBeNull();
+  });
+
+  test("non-Supabase / unparseable -> null", () => {
+    expect(regionFromConnstring("postgresql://u:p@localhost:5432/db")).toBeNull();
+    expect(regionFromConnstring("not a url")).toBeNull();
+  });
+
+  test("resolveTargets carries the derived region through", () => {
+    const url = `postgresql://supabase_admin.${REF}:pw@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres`;
+    expect(resolveTargets([{ dbUrl: url }])[0]?.region).toBe("ap-southeast-1");
+    // explicit region in the entry wins
+    expect(resolveTargets([{ dbUrl: url, region: "us-east-1" }])[0]?.region).toBe("us-east-1");
   });
 });
 
