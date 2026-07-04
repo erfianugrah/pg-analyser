@@ -39,7 +39,9 @@ db_exporter.json
 sbperf.grafana.json
 sbperf.grafana.*.json
 
-# work profile: no-PAT customer-audit config (self-hosted Grafana cookie/URL +
-# customer connstrings). keep the .example; never commit the real one.
+# work profile: the single-JSON customer-audit config (forced no-PAT +
+# region-mapped Grafana cookies + customer connstrings). keep the .example.
+sbperf.profile.json
+sbperf.*.profile.json
+sbperf.work.json
 sbperf.work.env
-sbperf.work.databases.json

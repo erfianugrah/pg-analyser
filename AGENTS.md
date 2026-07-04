@@ -63,6 +63,22 @@ no-PAT multi-DB path. The db-url SQL + splinter are drift-synced by
 `check:inspect` + `check:lints` (advisory) - this mode's sync guarantee the way
 `check:api` is for PAT mode.
 
+**Profile** (`--profile <file.json>`, `profile.ts`): the whole customer-audit
+config in ONE gitignored JSON - `{ noPat, grafana: { hostTemplate, datasourceUid,
+matcher, regions: { <region>: { cookie, uid?, host? } } }, databases: [...] }`.
+`full --profile <f>` forces no-PAT (`profile.noPat`, default true), makes
+`databases[]` the sweep targets, and always routes through `doAllDbs`. Each
+regional Grafana is a separate ALB (per-region session cookie), so trends are
+resolved PER PROJECT: `regionFromConnstring` derives the region from the
+connstring, `resolveGrafana` maps it to that region's host/uid/cookie (host from
+`hostTemplate.{region}` or a per-region override), and only `{ref}` stays
+templated in the matcher. A region absent from the map -> that project's trends
+are skipped (SQL/advisors still run). Nothing internal is baked into the repo:
+hosts, UIDs, cookies and connstrings all live in the gitignored profile
+(`sbperf.profile.json` / `sbperf.*.profile.json`; keep `.example`). Supersedes
+`sbperf.databases.json` for the work case (it's a superset); overlays are a
+separate presentation layer and untouched.
+
 ### SQL tiers (PAT vs superuser)
 
 SQL diagnostics run through a `SqlRunner` (`sqlrunner.ts`):

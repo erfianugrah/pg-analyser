@@ -8,11 +8,12 @@ import { z } from "zod";
  * --db-url flags Just Works for Supabase pooler/direct strings.
  */
 
-export type DbTarget = { ref: string; dbUrl: string; name?: string };
+export type DbTarget = { ref: string; dbUrl: string; name?: string; region?: string };
 
 const RawEntry = z.object({
   name: z.string().optional(),
   ref: z.string().optional(),
+  region: z.string().optional(),
   dbUrl: z.string().min(1),
 });
 export type RawEntry = z.infer<typeof RawEntry>;
@@ -53,6 +54,22 @@ export function refFromConnstring(url: string): string | null {
   return null;
 }
 
+/**
+ * Derive the AWS region from a Supabase pooler connstring - the pooler host is
+ * `aws-<n>-<region>.pooler.supabase.com` (e.g. aws-1-ap-southeast-1). Used to
+ * pick the right regional Grafana/ALB in a profile. Direct (`db.<ref>....`)
+ * strings carry no region; returns null.
+ */
+export function regionFromConnstring(url: string): string | null {
+  try {
+    const host = new URL(url).hostname;
+    const m = host.match(/^aws-\d+-([a-z]{2}-[a-z]+-\d+)\.pooler\.supabase\.com$/);
+    return m ? m[1]! : null;
+  } catch {
+    return null;
+  }
+}
+
 /** A redacted connstring for error/log messages - never leak the password. */
 export function redactConnstring(url: string): string {
   try {
@@ -77,6 +94,11 @@ export function resolveTargets(raw: RawEntry[], fallbackRef?: string): DbTarget[
           `add "ref" to its config entry, or use --ref for a single --db-url`,
       );
     }
-    return { ref, dbUrl: e.dbUrl, name: e.name };
+    return {
+      ref,
+      dbUrl: e.dbUrl,
+      name: e.name,
+      region: e.region ?? regionFromConnstring(e.dbUrl) ?? undefined,
+    };
   });
 }
