@@ -305,7 +305,10 @@ function trendsSection(a: Analysis): string {
 }
 
 function healthBadges(a: Analysis): string {
-  if (!a.health.length) return `<p class=empty>unavailable</p>`;
+  // Service health comes from the Management API - absent in no-PAT mode, where
+  // it's not collected rather than genuinely unknown.
+  if (!a.health.length)
+    return `<p class=empty>${a.meta.managementApi === false ? "service health not collected (no PAT)" : "unavailable"}</p>`;
   return a.health
     .map(
       (h) =>
@@ -390,7 +393,16 @@ function execSummarySection(
   const c = { high: 0, med: 0, low: 0 };
   for (const f of findings) c[f.severity]++;
   const total = findings.length;
-  const named = (titles: string[]) => esc(humanList(titles));
+  // Finding titles are Capitalised (they head their own cards); spliced
+  // mid-sentence they'd read "...starting with Overlapping...". Lowercase the
+  // first letter for prose flow, unless the title opens with an acronym (RLS,
+  // CPU, WAL, DB...) or a non-letter (a number, a backticked identifier).
+  const decap = (s: string) => {
+    const first = s.match(/^(\S+)/)?.[1] ?? "";
+    if (/^[A-Z]{2,}/.test(first) || /^[^A-Za-z]/.test(first)) return s;
+    return s.charAt(0).toLowerCase() + s.slice(1);
+  };
+  const named = (titles: string[]) => esc(humanList(titles.map(decap)));
   // The opening's count and the items it names MUST agree - the high-severity
   // count and a separate "top 3 areas" list previously contradicted each other
   // ("1 item stands out ... the areas are A, B and C"). Name the urgent item(s)
