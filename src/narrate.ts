@@ -1,5 +1,6 @@
 import { deriveFindings, derivePositives } from "./findings.ts";
 import type { Analysis, SqlRow } from "./schemas.ts";
+import { sufficient, trendStat } from "./trendstats.ts";
 
 /**
  * `narrate` - the LLM pass over the collected corpus + the enriched findings.
@@ -70,12 +71,27 @@ export function buildNarrativeInput(a: Analysis): Record<string, unknown> {
     table: r.table,
     size: r.total_size ?? r.size ?? null,
   }));
-  const trends = a.trends.map((t) => ({
-    title: t.title,
-    latest: t.points.at(-1)?.v ?? null,
-    unit: t.unit,
-    points: t.points.length,
-  }));
+  // Full trend shape so the model reasons over the TRAJECTORY (headroom,
+  // direction, projection), not just the last value. `sufficient` tells it when
+  // the window is trustworthy for sustained/projection claims.
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  const trends = a.trends.map((t) => {
+    const s = trendStat(t.points);
+    return {
+      title: t.title,
+      unit: t.unit,
+      points: t.points.length,
+      spanDays: s ? r2(s.spanDays) : 0,
+      latest: s ? r2(s.last) : null,
+      mean: s ? r2(s.mean) : null,
+      min: s ? r2(s.min) : null,
+      max: s ? r2(s.max) : null,
+      p95: s ? r2(s.p95) : null,
+      perDay: s ? r2(s.slopePerDay) : null,
+      direction: s?.direction ?? null,
+      sufficient: sufficient(t.points),
+    };
+  });
 
   return {
     project: {
@@ -89,9 +105,16 @@ export function buildNarrativeInput(a: Analysis): Record<string, unknown> {
       statsWindow: a.sql.statsResetAge,
       disk: a.disk,
       sqlSource: a.meta.sqlSource,
+      // false = no-PAT mode: no Management API (provisioning/backups/metrics/
+      // analytics absent); SQL + splinter advisors + Grafana trends are the evidence.
+      managementApi: a.meta.managementApi !== false,
     },
-    // Report the collection health so the model can caveat gaps honestly.
-    degraded: a.meta.status !== "ACTIVE_HEALTHY" || a.errors.some((e) => e.source === "sql:dbSize"),
+    // Report the collection health so the model can caveat gaps honestly. In
+    // no-PAT mode the status is simply unknown (not degraded) - gate on it only
+    // when the Management API was available.
+    degraded:
+      (a.meta.managementApi !== false && a.meta.status !== "ACTIVE_HEALTHY") ||
+      a.errors.some((e) => e.source === "sql:dbSize"),
     collectionNotes: a.errors.slice(0, 12),
     findings,
     positives,
@@ -122,6 +145,8 @@ const SYSTEM_PROMPT = `You are a senior Supabase/Postgres performance and cost e
 Grounding (hard rules):
 - Ground every statement in the supplied JSON. Do NOT invent numbers, thresholds, table names, durations, timeouts, percentages, or URLs. If something is unknown, leave it out.
 - You may reference the catalogued why/verify/remediation and the evidence digest. Cite a doc URL only if it is present in the JSON; never fabricate one.
+- TRENDS: each trend carries mean/min/max/p95, a per-day slope, a direction (rising/falling/flat) and the window span in days. Reason over the TRAJECTORY - headroom vs pressure, where it's heading, whether a resource is over- or under-provisioned - not just the latest value. A trend also has a "sufficient" flag: when false the window is too short/sparse to trust, so do NOT make sustained-% or days-to-full claims from it (say the history is too short instead). Never extrapolate a projection much past the span you were given.
+- NO-PAT MODE: if project.managementApi is false, there was no Supabase Management API - compute/disk provisioning, backups, pooler config, the point-in-time metrics scrape and edge/API analytics were NOT collected. Do not comment on them or claim they're healthy; base the analysis on the SQL diagnostics, the splinter advisors, and the Grafana trends. Disk provisioning (size/IOPS) is unknown, but disk-used% is available from the trend.
 - Some findings carry a "changelog" URL: a documented Supabase platform change or known issue behind the finding (e.g. a default that changed). When present, reference it - it is the authoritative "this is a known change, here is the background" link the reader wants. Same rule as doc URLs: cite the changelog only if it is present in the JSON for that finding; never invent or guess one.
 - Be concrete, not vague. When a finding's remediation names a specific recommended value or target - a timeout, a size, a percentage, a fraction, a starting figure - carry that exact value into your prose. Do NOT flatten "set statement_timeout to something like 30s-60s" into "set a statement_timeout", or "raise work_mem toward 16-64MB" into "raise work_mem". The reader's complaint is being told what is wrong but not what to set it to; the values are in the remediation, so surface them. Never invent a value the remediation does not give.
 - If "degraded" is true or there are collectionNotes, say plainly that some checks could not run and the absence of a finding is not proof of health.
