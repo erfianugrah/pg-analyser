@@ -25,6 +25,12 @@ export async function collect(
     interval?: string;
     sqlRunner?: SqlRunner;
     syncCheck?: boolean;
+    // No-PAT fallbacks: the human project name (from a --profile db entry) and
+    // the AWS region (derived from the connstring). The Management API supplies
+    // both in PAT mode; without it these are the only source, so a no-PAT
+    // report can still show a real name/region instead of "ref (ref) - unknown".
+    name?: string;
+    region?: string;
   } = {},
 ): Promise<Analysis> {
   // No-PAT mode: transport == null. No Supabase Management API at all - a
@@ -277,8 +283,8 @@ export async function collect(
   const analysis: Analysis = {
     meta: {
       ref,
-      name: project?.name ?? ref,
-      region: project?.region ?? "unknown",
+      name: project?.name ?? opts.name ?? ref,
+      region: project?.region ?? opts.region ?? "unknown",
       status: project?.status ?? "unknown",
       // PAT gives the platform version; no-PAT falls back to server_version from
       // pg_settings (SQL), so the report shows a version either way.

@@ -5,7 +5,14 @@ import pkg from "../package.json" with { type: "json" };
 import { type Brand, DEFAULT_BRAND, loadBrand } from "./brand.ts";
 import { collect } from "./collect.ts";
 import { ConfigError, loadConfig, loadConfigOptional } from "./config.ts";
-import { type DbTarget, parseDbConfig, type RawEntry, REF, resolveTargets } from "./dbtargets.ts";
+import {
+  type DbTarget,
+  parseDbConfig,
+  type RawEntry,
+  REF,
+  regionFromConnstring,
+  resolveTargets,
+} from "./dbtargets.ts";
 import { deriveFindings } from "./findings.ts";
 import { mergeTrends, parseTrendsFile } from "./importtrends.ts";
 import { Management } from "./management.ts";
@@ -280,6 +287,8 @@ async function doAllDbs(
         interval,
         sqlRunner: runner,
         syncCheck,
+        name: t.name,
+        region: t.region ?? regionFromConnstring(t.dbUrl) ?? undefined,
       }).finally(() => runner.close());
       if (grafanaGap) analysis.errors.push({ source: "trends", message: grafanaGap });
       const counts = await emitReport(analysis, join(outBase, t.ref));
@@ -644,6 +653,7 @@ async function doAnalyze(
     interval,
     sqlRunner: runner,
     syncCheck,
+    region: dbUrl ? (regionFromConnstring(dbUrl) ?? undefined) : undefined,
   }).finally(() => runner?.close());
   await mkdir(outDir, { recursive: true });
   const jsonPath = join(outDir, "analysis.json");
@@ -691,6 +701,7 @@ async function doSnapshot(
     interval,
     sqlRunner: runner,
     syncCheck,
+    region: dbUrl ? (regionFromConnstring(dbUrl) ?? undefined) : undefined,
   }).finally(() => runner?.close());
   await mkdir(outDir, { recursive: true });
   await Bun.write(join(outDir, "analysis.json"), JSON.stringify(analysis, null, 2));

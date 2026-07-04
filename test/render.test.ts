@@ -127,6 +127,45 @@ describe("render", () => {
     }
   });
 
+  test("no-PAT header: collapses ref (ref) and drops unknown region/status", () => {
+    const html = render(
+      fixture({
+        meta: {
+          ...fixture().meta,
+          name: "testref", // no-PAT with no profile name -> name falls back to ref
+          ref: "testref",
+          region: "unknown",
+          status: "unknown",
+          managementApi: false,
+        },
+      }),
+    );
+    const metaLine = html.match(/<div class=meta>[\s\S]*?<\/div>/)?.[0] ?? "";
+    expect(metaLine).toContain("<code>testref</code>");
+    expect(metaLine).not.toContain("(testref)"); // no "ref (ref)" duplication
+    expect(metaLine).not.toContain("unknown"); // region + status placeholders dropped
+    expect(metaLine).not.toContain("status <code>");
+  });
+
+  test("no-PAT header: keeps a derived region and a real name", () => {
+    const html = render(
+      fixture({
+        meta: {
+          ...fixture().meta,
+          name: "prod-api",
+          ref: "testref",
+          region: "ap-southeast-1", // derived from the connstring
+          status: "unknown",
+          managementApi: false,
+        },
+      }),
+    );
+    const metaLine = html.match(/<div class=meta>[\s\S]*?<\/div>/)?.[0] ?? "";
+    expect(metaLine).toContain("<code>prod-api</code> (testref)");
+    expect(metaLine).toContain("ap-southeast-1");
+    expect(metaLine).not.toContain("status <code>"); // status still unknown -> dropped
+  });
+
   test("gates point-in-time snapshot sections on data", () => {
     // section anchor ids (robust vs heading text, which can collide with
     // positives like "Transaction-ID wraparound headroom is healthy")
@@ -496,5 +535,14 @@ describe("renderIndex", () => {
     expect(html).toContain("0 / 2 / 5");
     expect(html).toContain("unreachable"); // failed project shows its error
     expect(html).toContain("2 projects");
+  });
+
+  test("no-PAT rows render a neutral status, not a red 'unknown' badge", () => {
+    const html = renderIndex(
+      [{ name: "cust-db", ref: "ccc", status: "unknown", high: 1, med: 0, low: 3, dir: "ccc" }],
+      "2026-07-02T00:00:00Z",
+    );
+    expect(html).not.toContain('class="badge bad">unknown'); // no misleading red badge
+    expect(html).toContain("1 / 0 / 3");
   });
 });
