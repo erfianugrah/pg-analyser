@@ -94,7 +94,7 @@ export const QUERIES = {
       'max_connections', 'shared_buffers', 'effective_cache_size', 'work_mem',
       'maintenance_work_mem', 'statement_timeout', 'lock_timeout',
       'idle_in_transaction_session_timeout', 'random_page_cost',
-      'max_parallel_workers'
+      'max_parallel_workers', 'server_version'
     )
     order by name`,
 

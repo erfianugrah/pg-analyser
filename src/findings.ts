@@ -578,6 +578,57 @@ export function deriveFindings(a: Analysis): Finding[] {
     }
   }
 
+  // Checkpoint pressure: share of checkpoints forced by WAL filling (requested)
+  // vs the healthy timed interval. High requested share -> raise max_wal_size.
+  const reqPts = pointsOf("Requested checkpoints/s");
+  const timedPts = pointsOf("Timed checkpoints/s");
+  if (sufficient(reqPts) && sufficient(timedPts)) {
+    const req = trendStat(reqPts)!.mean;
+    const timed = trendStat(timedPts)!.mean;
+    const total = req + timed;
+    if (total > 0 && req / total >= THRESHOLDS.checkpointReqFrac) {
+      out.push({
+        severity: "med",
+        category: "Performance",
+        title: `Checkpoint pressure: ${Math.round((req / total) * 100)}% of checkpoints forced by WAL filling (raise max_wal_size)`,
+        anchor: "#trends",
+        ...meta("checkpoint_pressure"),
+      });
+    }
+  }
+
+  // WAL archival backlog: sustained pending-archival files -> PITR/backup risk.
+  const walPts = pointsOf("WAL files pending archival");
+  if (sufficient(walPts)) {
+    const s = trendStat(walPts)!;
+    if (s.mean >= THRESHOLDS.walPendingMax) {
+      out.push({
+        severity: "high",
+        category: "Capacity",
+        title: `WAL archival falling behind: avg ${Math.round(s.mean)} files pending over ${Math.round(s.spanDays)}d (peak ${Math.round(s.max)})`,
+        anchor: "#trends",
+        ...meta("wal_archival_backlog"),
+      });
+    }
+  }
+
+  // Connection ceiling: peak backends vs max_connections (from pgSettings SQL,
+  // so it works in no-PAT too). Needs both the trend and the setting.
+  const connPts = pointsOf("DB connections");
+  const maxConnections = num(settingsMap(a.sql.pgSettings).get("max_connections"));
+  if (sufficient(connPts) && maxConnections > 0) {
+    const peak = trendStat(connPts)!.max;
+    if (peak >= maxConnections * THRESHOLDS.connCeilingFrac) {
+      out.push({
+        severity: "high",
+        category: "Capacity",
+        title: `Connections near ceiling: peaked ${Math.round(peak)}/${maxConnections} (${Math.round((peak / maxConnections) * 100)}% of max_connections)`,
+        anchor: "#trends",
+        ...meta("connections_ceiling"),
+      });
+    }
+  }
+
   out.sort(
     (x, y) =>
       SEV_RANK[x.severity] - SEV_RANK[y.severity] || CAT_RANK[x.category] - CAT_RANK[y.category],

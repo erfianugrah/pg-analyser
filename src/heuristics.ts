@@ -77,6 +77,16 @@ export const THRESHOLDS = {
    * track to hit 100% within this many days (capped to ~3x the observed span
    * so we never extrapolate far past the data we actually have). */
   diskFillHorizonDays: 120,
+  /** Checkpoint pressure: fraction of checkpoints that were REQUESTED (forced
+   * by WAL filling) rather than timed. A high share means max_wal_size is too
+   * small - Postgres is checkpointing on WAL pressure, not the interval. */
+  checkpointReqFrac: 0.3,
+  /** WAL archival backlog: sustained files-pending-archival at/above this = the
+   * archiver is falling behind (PITR / backup-freshness risk). */
+  walPendingMax: 1,
+  /** Connection ceiling: peak backends at/above this fraction of max_connections
+   * over the window = approaching the limit (pooler / max_connections sizing). */
+  connCeilingFrac: 0.8,
   /** Cumulative deadlocks (since stats reset) worth surfacing point-in-time. */
   deadlockMin: 5,
   /** Sustained temp-file spill rate (bytes/s, from >=2 snapshots) worth flagging. */
@@ -420,6 +430,42 @@ export const HEURISTICS: Record<string, Heuristic> = {
     remediation:
       "Grow the disk ahead of the projected date (Supabase disk auto-scales, but with a cooldown - don't rely on it under fast growth), and attack the growth source: prune/rotate large tables, drop dead bloat (VACUUM FULL / pg_repack in a window), archive cold data, and check for runaway WAL or unvacuumed dead tuples.",
     docUrl: "https://supabase.com/docs/guides/platform/compute-and-disk",
+    reviewed: R,
+  },
+  checkpoint_pressure: {
+    id: "checkpoint_pressure",
+    plane: "Compute",
+    howToVerify:
+      "After raising max_wal_size, re-check the requested-vs-timed checkpoint mix over a window - requested checkpoints should fall back to a small share (most checkpoints timed).",
+    whyItMatters:
+      "A 'requested' checkpoint is forced because WAL filled before checkpoint_timeout. A high requested share means the DB is checkpointing under write pressure - each checkpoint is a burst of full-page writes and fsync, adding I/O and latency. Timed checkpoints (the interval) are the healthy case.",
+    remediation:
+      "Raise max_wal_size so WAL can absorb writes between timed checkpoints (fewer forced checkpoints, smoother I/O). Confirm checkpoint_timeout and checkpoint_completion_target are sane. On a write-heavy workload this is one of the highest-leverage knobs.",
+    docUrl: "https://supabase.com/docs/guides/database/postgres/configuration",
+    reviewed: R,
+  },
+  wal_archival_backlog: {
+    id: "wal_archival_backlog",
+    plane: "Storage",
+    howToVerify:
+      "Confirm the pending-WAL-archival count returns to ~0 and stays there after the archiver / storage issue is resolved.",
+    whyItMatters:
+      "WAL files pending archival pile up when the archiver can't keep pace or the archive destination is unhealthy. Backlog means point-in-time recovery falls behind (you can't restore to recent moments) and WAL accumulates on the data disk - a stealth contributor to disk fill.",
+    remediation:
+      "Check the archive command / destination health and network throughput; ensure the disk has headroom for the backlog. If it's a sustained rate problem, the write volume may be outrunning archival - raise instance/IO capacity or reduce WAL churn (fewer forced checkpoints, less bloat/churn).",
+    docUrl: "https://supabase.com/docs/guides/platform/backups",
+    reviewed: R,
+  },
+  connections_ceiling: {
+    id: "connections_ceiling",
+    plane: "Compute",
+    howToVerify:
+      "After routing through the pooler / raising the limit, confirm peak backends sit comfortably below max_connections across peak periods.",
+    whyItMatters:
+      "Peak connections approaching max_connections risks 'too many clients' errors that hard-fail new work, and each backend costs memory (work_mem x concurrency). Sustained near the ceiling means the app is one traffic spike from refusal.",
+    remediation:
+      "Route clients through the pooler (Supavisor / PgBouncer) in transaction mode so many clients share few backends, cap application pool sizes, and only then consider raising max_connections (it trades RAM for headroom). Long-lived idle connections are the usual culprit.",
+    docUrl: "https://supabase.com/docs/guides/database/connecting-to-postgres",
     reviewed: R,
   },
   disk_iops_high: {

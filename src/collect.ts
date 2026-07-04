@@ -280,7 +280,12 @@ export async function collect(
       name: project?.name ?? ref,
       region: project?.region ?? "unknown",
       status: project?.status ?? "unknown",
-      pgVersion: project?.database?.version ?? null,
+      // PAT gives the platform version; no-PAT falls back to server_version from
+      // pg_settings (SQL), so the report shows a version either way.
+      pgVersion:
+        project?.database?.version ??
+        (pgSettings.find((r) => r.name === "server_version")?.setting as string | undefined) ??
+        null,
       createdAt: project?.created_at ?? "",
       collectedAt: new Date().toISOString(),
       sbperfVersion: version,
