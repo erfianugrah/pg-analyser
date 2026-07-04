@@ -164,9 +164,9 @@ export async function fetchTrends(
   const panels = buildPanels(refMatcher);
   // Auth for a datasource fronted by Grafana. A service-account bearer TOKEN is
   // the documented path (Grafana proxy /api/datasources/proxy/uid/<uid>, or any
-  // auth'd Prometheus/Prometheus). When Grafana sits behind an SSO /
-  // SSO proxy that a token can't traverse, the browser session COOKIE (the
-  // same auth the dashboard uses) is the only header that gets through. Token
+  // auth'd Prometheus). When Grafana sits behind an SSO proxy that a token can't
+  // traverse, the browser session COOKIE (the same auth the dashboard uses) is
+  // the only header that gets through. Token
   // wins if both are set. No auth -> no header (backward compatible).
   const headers: Record<string, string> = {};
   if (opts.token) headers.Authorization = `Bearer ${opts.token}`;
