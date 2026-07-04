@@ -87,6 +87,18 @@ const ALLOW = [
   "node_disk_io_time_seconds_total",
   "node_network_receive_bytes_total",
   "node_network_transmit_bytes_total",
+  // node_exporter - filesystem (disk-used %), PSI stall, OOM + paging, and the
+  // AWS CloudWatch EBS burst-balance gauges. Feed the capacity trend findings.
+  "node_filesystem_avail_bytes",
+  "node_filesystem_size_bytes",
+  "node_pressure_cpu_waiting_seconds_total",
+  "node_pressure_memory_waiting_seconds_total",
+  "node_pressure_io_waiting_seconds_total",
+  "node_vmstat_oom_kill",
+  "node_vmstat_pgmajfault",
+  "node_vmstat_pswpin",
+  "aws_ec2_ebsiobalance_percent_minimum",
+  "aws_ec2_ebsbyte_balance_percent_minimum",
   // postgres_exporter - database
   "pg_stat_database_num_backends",
   "pg_stat_database_deadlocks_total",
@@ -99,6 +111,7 @@ const ALLOW = [
   "pg_wal_size_mb",
   "pg_stat_bgwriter_checkpoints_req_total",
   "pg_stat_bgwriter_checkpoints_timed_total",
+  "pg_ls_archive_statusdir_wal_pending_count",
   "pg_stat_replication_replay_lag",
   "pg_stat_replication_send_lag",
   "pg_up",

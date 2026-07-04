@@ -560,7 +560,7 @@ describe("trend-driven capacity findings (data-aware)", () => {
   test("Disk filling fast -> projection fires; slow fill (beyond trust horizon) does NOT", () => {
     const fast = base();
     fast.trends = [{ title: "Disk used (%)", unit: "%", points: series(15, 10, 50, 80) }];
-    const f = deriveFindings(fast).find((x) => x.title.includes("Disk filling"));
+    const f = deriveFindings(fast).find((x) => x.title.includes("Data disk filling"));
     expect(f).toBeDefined();
     expect(f?.severity).toBe("high"); // ~7 days to full
     expect(f?.title).toContain("days to full");
@@ -568,6 +568,6 @@ describe("trend-driven capacity findings (data-aware)", () => {
     // rising, but so slowly that 100% is ~490 days out (>> 3x the 10d span) -> suppressed
     const slow = base();
     slow.trends = [{ title: "Disk used (%)", unit: "%", points: series(15, 10, 50, 51) }];
-    expect(deriveFindings(slow).some((x) => x.title.includes("Disk filling"))).toBe(false);
+    expect(deriveFindings(slow).some((x) => x.title.includes("filling"))).toBe(false);
   });
 });

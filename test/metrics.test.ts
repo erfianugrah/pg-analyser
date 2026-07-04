@@ -48,7 +48,7 @@ describe("curate", () => {
     const names = new Set(c.map((x) => x.name));
     expect(names.has("node_load1")).toBe(true);
     expect(names.has("pg_stat_database_num_backends")).toBe(true);
-    expect(names.has("node_vmstat_pgmajfault")).toBe(false); // long tail dropped
+    expect(names.has("bare_metric_no_labels")).toBe(false); // long tail dropped
   });
 
   // Counter families are kept for the SQLite trend path (rate-able across >=2

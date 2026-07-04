@@ -294,8 +294,27 @@ pattern so the cookies + connstrings are never committed.
 
 No Supabase API returns 30 days of infra history - the metrics endpoint is a
 point-in-time scrape, and the analytics endpoints cap around 24h. Time series
-**must** be accumulated going forward. sbperf is its own collector: no
-Prometheus, no Grafana.
+**must** be accumulated going forward (via `snapshot` -> the SQLite store), or
+pulled from a Grafana/Prometheus that already has the history (see above).
+
+### Trends become suggestions (data-aware)
+
+With real history - Grafana (instant) or enough accrued snapshots - the trend
+series drive **capacity findings**, not just charts:
+
+- **CPU** sustained high -> upsize; consistently idle over >=14d -> downsize
+  candidate (both directions).
+- **Memory** sustained near the ceiling -> upsize.
+- **Disk / root FS** rising -> projected days-to-full (upsize before the cliff),
+  with the horizon capped to ~3x the observed span so a short history never
+  claims a far-future date.
+
+The analysis is **data-aware**: every trend finding is gated on enough points
+over enough span, so it stays dormant on a single snapshot and fires only once
+there's a window to trust - and the window auto-scopes to a young project's real
+age (a 7-day-old project is analysed over 7 days, not a mostly-empty 30). Healthy
+trends produce affirmative "looking good" notes, so both over- and
+under-provisioned are surfaced.
 
 ```bash
 # schedule this (e.g. hourly cron / systemd timer):
