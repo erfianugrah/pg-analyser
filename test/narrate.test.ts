@@ -84,13 +84,30 @@ describe("buildNarrativeInput", () => {
     expect(input.evidence.queryOutliers).toHaveLength(8);
     expect(input.evidence.duplicateIndexes).toBe(1);
     expect(input.evidence.rlsUnindexedColumns).toEqual(["public.docs.owner_id"]);
-    expect(input.trends[0]).toMatchObject({ title: "CPU utilization (%)", latest: 42 });
+    // enriched trend shape so the model reasons over the trajectory, not just latest
+    expect(input.trends[0]).toMatchObject({
+      title: "CPU utilization (%)",
+      latest: 42,
+      mean: 42,
+      sufficient: false, // single point -> not trustworthy for trend claims
+    });
+    expect(input.trends[0]).toHaveProperty("direction");
+    expect(input.trends[0]).toHaveProperty("perDay");
   });
 
   test("flags degraded collection so the model can caveat", () => {
     const a = base();
     a.meta.status = "INACTIVE";
     expect((buildNarrativeInput(a) as any).degraded).toBe(true);
+  });
+
+  test("no-PAT mode: unknown status is NOT degraded; managementApi flagged", () => {
+    const a = base();
+    a.meta.managementApi = false;
+    a.meta.status = "unknown";
+    const input = buildNarrativeInput(a) as any;
+    expect(input.degraded).toBe(false); // unknown status in no-PAT != degraded
+    expect(input.project.managementApi).toBe(false);
   });
 });
 
