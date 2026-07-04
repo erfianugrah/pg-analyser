@@ -228,6 +228,68 @@ bun run src/index.ts full --db-config sbperf.databases.json
 
 `ref` is optional when derivable; set it explicitly for non-Supabase strings.
 
+### No PAT: customer audits (`--no-pat` / `--profile`)
+
+You can audit a project you have a **superuser connstring for but no PAT** - the
+customer-audit path, equivalent to `supabase inspect db` plus ranked findings,
+advisors, and trends. With no `SUPABASE_ACCESS_TOKEN` resolvable but a `--db-url`
+(or `SBPERF_DB_URL` / `sbperf.databases.json`), sbperf runs transport-free:
+
+- SQL diagnostics via the superuser connstring;
+- advisors from the self-hosted splinter lints (both **performance** and
+  **security**);
+- 30-day trends from Grafana if configured (below).
+
+Management-API-only planes (compute/disk provisioning, backups, pooler config,
+the metrics scrape, edge/API analytics) are skipped, and the report says so.
+
+Force it with `--no-pat` (or `SBPERF_NO_PAT=1`) so a resolvable **CLI** token
+(`~/.supabase/access-token`) is ignored - otherwise a customer audit would
+silently try PAT mode against a project it can't see:
+
+```bash
+bun run src/index.ts full --no-pat --db-config sbperf.databases.json
+```
+
+#### One-file work profile: `--profile`
+
+For a repeatable customer-audit setup, put everything in one gitignored JSON and
+run `full --profile <file>`. It carries forced-no-PAT, the region-mapped Grafana
+credentials (each region is a separate load balancer, so a **per-region**
+cookie), and the customer databases:
+
+```json
+{
+  "noPat": true,
+  "grafana": {
+    "hostTemplate": "https://grafana-{region}.example.com",
+    "datasourceUid": "<prometheus-datasource-uid>",
+    "matcher": "<label>=\"<prefix>-{ref}\"",
+    "regions": {
+      "ap-southeast-1": { "cookie": "<that region's session cookie>" },
+      "eu-central-1":   { "cookie": "<...>", "uid": "<per-region uid override>" }
+    }
+  },
+  "databases": [
+    { "name": "cust-a", "dbUrl": "postgresql://<role>.<ref>:PW@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres" },
+    { "name": "cust-b", "dbUrl": "postgresql://<role>.<ref>:PW@aws-0-eu-central-1.pooler.supabase.com:6543/postgres" }
+  ]
+}
+```
+
+```bash
+cp sbperf.profile.example.json sbperf.profile.json   # gitignored; fill it in
+bun run src/index.ts full --profile sbperf.profile.json
+```
+
+The sweep derives each project's **region** from its connstring, maps it to that
+region's Grafana host/uid/cookie, and substitutes the project `{ref}` into the
+matcher - so one profile spans customers across regions, each hitting its own
+regional Grafana. A region absent from the map just skips that project's trends
+(SQL + advisors still run). The filename is free (it's passed to `--profile`);
+keep it matching the `sbperf.profile.json` / `sbperf.*.profile.json` gitignore
+pattern so the cookies + connstrings are never committed.
+
 ## 30-day trends
 
 No Supabase API returns 30 days of infra history - the metrics endpoint is a
@@ -287,6 +349,14 @@ bun run src/index.ts full --ref <ref> --prometheus http://localhost:9090
 ```
 
 `--prometheus` trends take precedence over the history store when both exist.
+For an **auth'd** datasource - e.g. a Grafana datasource-proxy path
+(`.../api/datasources/proxy/uid/<uid>`) - add auth: `--prometheus-token <t>` (a
+service-account bearer) or, when Grafana sits behind an an SSO proxy that a
+token can't traverse, `--prometheus-cookie '<session cookie>'` (env:
+`SBPERF_PROMETHEUS_{TOKEN,COOKIE}`). If the scraper's project label isn't the
+default `supabase_project_ref="{ref}"`, override with `--prometheus-matcher
+'<label>="{ref}"'`. (The `--profile` JSON above wraps all of this per-region for
+the no-PAT customer-audit case.)
 
 ### Bring your own history (CSV / JSON import)
 
