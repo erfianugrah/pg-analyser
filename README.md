@@ -10,11 +10,11 @@ string and no manual dashboard screenshots to assemble.
 
 ## Requirements
 
-| For | You need | If missing |
-|---|---|---|
-| Running from source | [Bun](https://bun.sh) (`curl -fsSL https://bun.sh/install \| bash`) | `bun: command not found` at the shell. Or use the compiled binary (below), which needs nothing. |
-| Auth (always) | A Supabase **Personal Access Token** - `SUPABASE_ACCESS_TOKEN`, or run `supabase login` | The tool exits with `config error: no access token ...` and the token URL. |
-| `pdf` / `full` only | A system **Chrome/Chromium** on PATH (or `SBPERF_CHROME=/path/to/chrome`) | `pdf`/`full` exit with `no Chrome/Chromium found ...`. `analyze` and `report` (HTML) work without it. |
+| For                 | You need                                                                                | If missing                                                                                            |
+| ------------------- | --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| Running from source | [Bun](https://bun.sh) (`curl -fsSL https://bun.sh/install \| bash`)                     | `bun: command not found` at the shell. Or use the compiled binary (below), which needs nothing.       |
+| Auth (always)       | A Supabase **Personal Access Token** - `SUPABASE_ACCESS_TOKEN`, or run `supabase login` | The tool exits with `config error: no access token ...` and the token URL.                            |
+| `pdf` / `full` only | A system **Chrome/Chromium** on PATH (or `SBPERF_CHROME=/path/to/chrome`)               | `pdf`/`full` exit with `no Chrome/Chromium found ...`. `analyze` and `report` (HTML) work without it. |
 
 sbperf checks each of these and fails with an actionable message - it never
 silently produces a broken report.
@@ -48,8 +48,8 @@ bun run src/index.ts import-trends ./reports/myproject series.csv  # merge exter
 `report`/`pdf` emit a single combined document (`report.html` / `report.pdf`)
 structured as a pyramid: verdict + executive summary up top, then a **Resource
 snapshot** (30-day capacity/cost charts), **What's looking good**, and
-**Findings worth addressing** - each finding framed as *what's happening / why
-it matters (business + technical impact) / what to do* - over the full evidence
+**Findings worth addressing** - each finding framed as _what's happening / why
+it matters (business + technical impact) / what to do_ - over the full evidence
 drill-down. `summary` remains as an optional standalone plain-language one-pager
 for a non-engineering audience.
 
@@ -170,6 +170,7 @@ history store (`snapshot` -> trends) - that's the only way to see beyond ~7 days
 ## Auth
 
 Either:
+
 - set `SUPABASE_ACCESS_TOKEN` (a Personal Access Token), or
 - just run `supabase login` - sbperf reads the CLI's stored token from
   `~/.supabase/access-token` automatically when the env var is unset.
@@ -217,8 +218,15 @@ Or a config file (`sbperf.databases.json`, gitignored - it holds connstrings):
 
 ```json
 [
-  { "name": "prod", "dbUrl": "postgresql://supabase_admin.<ref>:...@...:5432/postgres" },
-  { "name": "legacy", "ref": "myref", "dbUrl": "postgresql://user:...@host:5432/db" }
+  {
+    "name": "prod",
+    "dbUrl": "postgresql://supabase_admin.<ref>:...@...:5432/postgres"
+  },
+  {
+    "name": "legacy",
+    "ref": "myref",
+    "dbUrl": "postgresql://user:...@host:5432/db"
+  }
 ]
 ```
 
@@ -267,12 +275,18 @@ cookie), and the customer databases:
     "matcher": "<label>=\"<prefix>-{ref}\"",
     "regions": {
       "ap-southeast-1": { "cookie": "<that region's session cookie>" },
-      "eu-central-1":   { "cookie": "<...>", "uid": "<per-region uid override>" }
+      "eu-central-1": { "cookie": "<...>", "uid": "<per-region uid override>" }
     }
   },
   "databases": [
-    { "name": "cust-a", "dbUrl": "postgresql://<role>.<ref>:PW@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres" },
-    { "name": "cust-b", "dbUrl": "postgresql://<role>.<ref>:PW@aws-0-eu-central-1.pooler.supabase.com:6543/postgres" }
+    {
+      "name": "cust-a",
+      "dbUrl": "postgresql://<role>.<ref>:PW@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres"
+    },
+    {
+      "name": "cust-b",
+      "dbUrl": "postgresql://<role>.<ref>:PW@aws-0-eu-central-1.pooler.supabase.com:6543/postgres"
+    }
   ]
 }
 ```
@@ -370,7 +384,7 @@ bun run src/index.ts full --ref <ref> --prometheus http://localhost:9090
 `--prometheus` trends take precedence over the history store when both exist.
 For an **auth'd** datasource - e.g. a Grafana datasource-proxy path
 (`.../api/datasources/proxy/uid/<uid>`) - add auth: `--prometheus-token <t>` (a
-service-account bearer) or, when Grafana sits behind an an SSO proxy that a
+service-account bearer) or, when Grafana sits behind an SSO proxy that a
 token can't traverse, `--prometheus-cookie '<session cookie>'` (env:
 `SBPERF_PROMETHEUS_{TOKEN,COOKIE}`). If the scraper's project label isn't the
 default `supabase_project_ref="{ref}"`, override with `--prometheus-matcher
@@ -469,20 +483,20 @@ Every field is optional and overrides the default:
   give `logoSvg`/`faviconSvg` directly. A logo with no explicit favicon is reused
   as the favicon.
 - Precedence: `--brand` > `SBPERF_BRAND` > `./sbperf.brand.json` > Supabase default.
-- The report *title* stays "Supabase performance report" (it analyses Supabase);
+- The report _title_ stays "Supabase performance report" (it analyses Supabase);
   branding controls who delivers it. `sbperf.brand.json` is gitignored.
 
 ## Troubleshooting
 
-| Symptom | Fix |
-|---|---|
-| `SUPABASE_ACCESS_TOKEN is required` | Set the PAT (https://supabase.com/dashboard/account/tokens). |
-| `cannot read project <ref>` / 401 | Wrong ref or the token lacks access to that project's org. |
-| `no Chrome/Chromium found` | Install `chromium`, or `export SBPERF_CHROME=/path/to/chrome`. `analyze`/`report` work without it - only `pdf` needs it. |
-| `no analysis.json in <dir>` | Run `analyze` (or `full`) before `report`/`pdf`/`narrate`. |
-| `narrate needs an LLM: set SBPERF_LLM_...` | Set `SBPERF_LLM_BASE_URL` + `SBPERF_LLM_MODEL` (see the Narrative section). |
+| Symptom                                              | Fix                                                                                                                                  |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `SUPABASE_ACCESS_TOKEN is required`                  | Set the PAT (https://supabase.com/dashboard/account/tokens).                                                                         |
+| `cannot read project <ref>` / 401                    | Wrong ref or the token lacks access to that project's org.                                                                           |
+| `no Chrome/Chromium found`                           | Install `chromium`, or `export SBPERF_CHROME=/path/to/chrome`. `analyze`/`report` work without it - only `pdf` needs it.             |
+| `no analysis.json in <dir>`                          | Run `analyze` (or `full`) before `report`/`pdf`/`narrate`.                                                                           |
+| `narrate needs an LLM: set SBPERF_LLM_...`           | Set `SBPERF_LLM_BASE_URL` + `SBPERF_LLM_MODEL` (see the Narrative section).                                                          |
 | Footer says advisor lint SQL drifted / catalog stale | Re-vendor `src/splinter.sql` from `supabase/splinter`, or re-review `docs/heuristics.md`. Advisory only; `--no-sync-check` skips it. |
-| Report shows a degraded/empty state | Project is paused or unreachable - empty sections mean "not collected", not "clean". The collection-notes section lists why. |
+| Report shows a degraded/empty state                  | Project is paused or unreachable - empty sections mean "not collected", not "clean". The collection-notes section lists why.         |
 
 ## Staying in sync with the API
 
@@ -496,7 +510,7 @@ silent drift in two layers:
    actually accepts. A renamed/removed endpoint fails CI (exit 1).
 2. **Cross-check (advisory)** - diffs the live spec against the
    version-controlled copy in `supabase/supabase` (`apps/docs/spec`). That copy
-   is generated *from* the API and can lag a deploy, so a divergence is an early
+   is generated _from_ the API and can lag a deploy, so a divergence is an early
    warning that upstream is mid-change. Emitted as a GitHub Actions `::warning::`
    annotation; never fails the build on its own.
 

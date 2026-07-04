@@ -76,10 +76,10 @@ Flags:
   --prometheus <url>   trends from a scraper's Prometheus instead of the history store
   --prometheus-token <t>  bearer token for an auth'd datasource - e.g. a Grafana
                        datasource proxy (/api/datasources/proxy/uid/<uid>) or an
-                       auth'd Prometheus / Prometheus (env: SBPERF_PROMETHEUS_TOKEN)
-  --prometheus-cookie <c> session Cookie header for a datasource behind an SSO /
-                       SSO proxy that a bearer token can't traverse (the same
-                       auth the Grafana UI uses). Token wins if both are set.
+                       auth'd Prometheus (env: SBPERF_PROMETHEUS_TOKEN)
+  --prometheus-cookie <c> session Cookie header for a datasource behind an SSO
+                       proxy that a bearer token can't traverse (the same auth
+                       the Grafana UI uses). Token wins if both are set.
                        (env: SBPERF_PROMETHEUS_COOKIE)
   --prometheus-matcher <m> project-label selector template for a scraper whose
                        schema isn't the default supabase_project_ref="{ref}";
