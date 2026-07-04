@@ -129,8 +129,6 @@ export async function fetchTrends(
   opts: { token?: string; cookie?: string; matcher?: string } = {},
 ): Promise<TrendSeries[]> {
   const end = Math.floor(Date.now() / 1000);
-  const start = end - days * 86400;
-  const step = Math.max(300, Math.floor((end - start) / 200)); // ~200 points max
   const base = baseUrl.replace(/\/+$/, "");
   // Project matcher template. Default = the self-scrape schema
   // (`supabase_project_ref="<ref>"`, one label per project). A scraper that
@@ -150,12 +148,41 @@ export async function fetchTrends(
   if (opts.token) headers.Authorization = `Bearer ${opts.token}`;
   else if (opts.cookie) headers.Cookie = opts.cookie;
   const init: RequestInit | undefined = Object.keys(headers).length > 0 ? { headers } : undefined;
-
   // Don't silently follow a redirect to an SSO login page - a 3xx means the
   // cookie/token didn't authenticate, and following it yields a 200 HTML page
   // that only fails later at JSON parse with a confusing error.
   const reqInit: RequestInit = { ...(init ?? {}), redirect: "manual" };
 
+  // Pass 1: the requested window.
+  let series = await queryWindow(base, panels, end - days * 86400, end, reqInit, refMatcher);
+  // Auto-scope to the real data span: a young project (created days ago) has no
+  // data across most of a 30/90-day window, so a fixed step smears a handful of
+  // points across mostly-empty time. Detect where data actually starts and, if
+  // it fills well under the requested window, re-query [dataStart, now] so the
+  // step gives full resolution over the span that exists. No created_at needed
+  // (no-PAT has none) - inferred from the returned series.
+  const starts = series.flatMap((s) => (s.points.length ? [s.points[0]!.t] : []));
+  if (starts.length) {
+    const dataStart = Math.min(...starts);
+    const spanDays = (end - dataStart) / 86400;
+    if (spanDays > 0 && spanDays < days * 0.6)
+      series = await queryWindow(base, panels, Math.floor(dataStart), end, reqInit, refMatcher);
+  }
+  return series;
+}
+
+/** Fetch every panel over [start, end] at a ~200-point step. Throws (for the
+ * caller's safe() to record) on auth redirect, non-JSON, a query error, or when
+ * every panel returns 0 series (matcher/ref mismatch). */
+async function queryWindow(
+  base: string,
+  panels: Array<{ title: string; unit: string; query: string }>,
+  start: number,
+  end: number,
+  reqInit: RequestInit,
+  refMatcher: string,
+): Promise<TrendSeries[]> {
+  const step = Math.max(300, Math.floor((end - start) / 200));
   const out: TrendSeries[] = [];
   let emptyPanels = 0;
   for (const panel of panels) {

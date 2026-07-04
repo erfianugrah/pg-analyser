@@ -277,11 +277,25 @@ function sparkline(s: Analysis["trends"][number]): string {
     span === 0
       ? `flat at ${esc(fmtVal(last, s.unit))}`
       : `${esc(fmtVal(min, s.unit))} - ${esc(fmtVal(max, s.unit))}`;
+  // The actual data window, derived from the point timestamps (fetchTrends
+  // auto-scopes to a young project's real span, so a 30d request can yield 7d
+  // of data - label what's actually there, not the requested window).
+  const spanSec = n >= 2 ? s.points[n - 1]!.t - s.points[0]!.t : 0;
+  const windowLabel = spanSec > 0 ? `${fmtSpan(spanSec)} &middot; ` : "";
   return `<figure class=spark>
     <figcaption>${esc(s.title)} <b>${esc(fmtVal(last, s.unit))}</b></figcaption>
     <svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}" preserveAspectRatio="none">${shape}</svg>
-    <span class=note>${range} &middot; ${n} pt${n === 1 ? "" : "s"}</span>
+    <span class=note>${range} &middot; ${windowLabel}${n} pt${n === 1 ? "" : "s"}</span>
   </figure>`;
+}
+
+/** Human span for a trend window: 45m / 18h / 7d / 31d. */
+function fmtSpan(sec: number): string {
+  const days = sec / 86400;
+  if (days >= 1) return `${Math.round(days)}d`;
+  const hours = sec / 3600;
+  if (hours >= 1) return `${Math.round(hours)}h`;
+  return `${Math.max(1, Math.round(sec / 60))}m`;
 }
 
 function trendsSection(a: Analysis): string {

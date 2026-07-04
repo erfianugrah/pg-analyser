@@ -201,3 +201,46 @@ describe("fetchTrends ref scoping", () => {
     ).rejects.toThrow(/all \d+ panels returned 0 series.*Name="x-r1"/);
   });
 });
+
+describe("fetchTrends adaptive window (auto-scope to real data span)", () => {
+  const now = Math.floor(Date.now() / 1000);
+  // Mock every panel to return 3 points spanning `spanDays`, capturing URLs.
+  function mockSpanningDays(spanDays: number): string[] {
+    const urls: string[] = [];
+    const pts = [
+      [now - spanDays * 86400, "1"],
+      [now - (spanDays * 86400) / 2, "2"],
+      [now, "3"],
+    ];
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      urls.push(String(url));
+      return new Response(
+        JSON.stringify({ status: "success", data: { result: [{ values: pts }] } }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }) as typeof fetch;
+    return urls;
+  }
+  const distinctStarts = (urls: string[]) =>
+    [...new Set(urls.map((u) => Number(new URL(u).searchParams.get("start"))))].sort(
+      (a, b) => a - b,
+    );
+
+  test("young project (data fills << requested window) re-queries at its actual span", async () => {
+    const urls = mockSpanningDays(7); // only 7d of data
+    await fetchTrends("http://vm", 30, "r1"); // but we requested 30d
+    const starts = distinctStarts(urls);
+    expect(starts.length).toBe(2); // pass 1 (30d back) + re-query (7d back)
+    expect(now - starts[0]!).toBeGreaterThan(28 * 86400); // pass 1 ~30d
+    expect(now - starts[1]!).toBeLessThan(9 * 86400); // re-query ~7d
+  });
+
+  test("mature project (data fills the window) does NOT re-query", async () => {
+    const urls = mockSpanningDays(30); // data spans the full 30d
+    await fetchTrends("http://vm", 30, "r1");
+    expect(distinctStarts(urls).length).toBe(1); // single pass
+  });
+});
