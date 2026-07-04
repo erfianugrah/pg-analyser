@@ -487,9 +487,17 @@ function auditFindings(findings: Finding[], degraded: boolean): string {
     .join("");
 }
 
+/** Latest disk-used% from the trend (the only disk-fill signal in no-PAT mode,
+ * where the Management provisioning plane - size/IOPS - is absent). */
+function diskUsedPctTrend(a: Analysis): number | null {
+  const v = a.trends.find((t) => t.title === "Disk used (%)")?.points.at(-1)?.v;
+  return v == null ? null : Math.round(v);
+}
+
 /** Compact vitals for the front page (full detail stays in Infrastructure). */
 function vitalsMini(a: Analysis): string {
   const d = a.disk;
+  const diskPct = diskUsedPctTrend(a);
   const rows: [string, string][] = [
     ["Postgres", esc(a.meta.pgVersion ?? "-")],
     ["DB size", esc(a.sql.dbSize ?? "-")],
@@ -498,7 +506,9 @@ function vitalsMini(a: Analysis): string {
       "Disk used",
       d?.usedBytes != null
         ? `${bytes(d.usedBytes)} / ${bytes((d.usedBytes ?? 0) + (d.availBytes ?? 0))}`
-        : "-",
+        : diskPct != null
+          ? `${diskPct}% of /data`
+          : "-",
     ],
   ];
   return `<table class=vitals><tbody>${rows
@@ -690,10 +700,13 @@ export function render(
   const diskLine = disk
     ? `${disk.sizeGb} GB ${esc(disk.type)} / ${disk.iops ?? "-"} IOPS / ${disk.throughputMibps ?? "-"} MiB/s`
     : "-";
+  const diskPctTrend = diskUsedPctTrend(a);
   const diskUsed =
     disk && disk.usedBytes != null
       ? `used ${bytes(disk.usedBytes)} / ${bytes((disk.usedBytes ?? 0) + (disk.availBytes ?? 0))}`
-      : "";
+      : diskPctTrend != null
+        ? `${diskPctTrend}% of /data used (from trend; provisioning n/a without a PAT)`
+        : "";
   const up = a.upgrade;
   const upgradeNote =
     up?.current_app_version &&

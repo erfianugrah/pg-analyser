@@ -571,3 +571,48 @@ describe("trend-driven capacity findings (data-aware)", () => {
     expect(deriveFindings(slow).some((x) => x.title.includes("filling"))).toBe(false);
   });
 });
+
+describe("trend-driven tuning findings", () => {
+  const DAY = 86400;
+  const flat = (n: number, spanDays: number, v: number) =>
+    Array.from({ length: n }, (_, i) => ({ t: Math.floor((i * spanDays * DAY) / (n - 1)), v }));
+
+  test("checkpoint pressure fires when requested checkpoints dominate, not when timed", () => {
+    const hot = base();
+    hot.trends = [
+      { title: "Requested checkpoints/s", unit: "", points: flat(15, 10, 0.5) },
+      { title: "Timed checkpoints/s", unit: "", points: flat(15, 10, 0.5) },
+    ];
+    expect(deriveFindings(hot).some((f) => f.title.includes("Checkpoint pressure"))).toBe(true);
+
+    const calm = base();
+    calm.trends = [
+      { title: "Requested checkpoints/s", unit: "", points: flat(15, 10, 0.05) },
+      { title: "Timed checkpoints/s", unit: "", points: flat(15, 10, 1) },
+    ];
+    expect(deriveFindings(calm).some((f) => f.title.includes("Checkpoint pressure"))).toBe(false);
+  });
+
+  test("WAL archival backlog fires on sustained pending files", () => {
+    const a = base();
+    a.trends = [{ title: "WAL files pending archival", unit: "", points: flat(15, 10, 3) }];
+    const f = deriveFindings(a).find((x) => x.title.includes("WAL archival falling behind"));
+    expect(f?.severity).toBe("high");
+  });
+
+  test("connections ceiling fires when peak nears max_connections (from pgSettings)", () => {
+    const near = base();
+    near.sql.pgSettings = [{ name: "max_connections", setting: "100" }];
+    near.trends = [{ title: "DB connections", unit: "", points: flat(15, 10, 90) }];
+    expect(deriveFindings(near).some((f) => f.title.includes("Connections near ceiling"))).toBe(
+      true,
+    );
+
+    const fine = base();
+    fine.sql.pgSettings = [{ name: "max_connections", setting: "100" }];
+    fine.trends = [{ title: "DB connections", unit: "", points: flat(15, 10, 40) }];
+    expect(deriveFindings(fine).some((f) => f.title.includes("Connections near ceiling"))).toBe(
+      false,
+    );
+  });
+});

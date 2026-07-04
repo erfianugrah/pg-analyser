@@ -70,6 +70,25 @@ function buildPanels(refMatcher: string): Array<{ title: string; unit: string; q
       query: `sum(${rate5("node_disk_writes_completed_total")})`,
     },
     { title: "Deadlocks/s", unit: "", query: `sum(${rate5("pg_stat_database_deadlocks_total")})` },
+    // Checkpoints: requested (WAL filled before the interval) vs timed (regular
+    // checkpoint_timeout). A high requested share -> raise max_wal_size.
+    {
+      title: "Requested checkpoints/s",
+      unit: "",
+      query: `sum(${rate5("pg_stat_bgwriter_checkpoints_req_total")})`,
+    },
+    {
+      title: "Timed checkpoints/s",
+      unit: "",
+      query: `sum(${rate5("pg_stat_bgwriter_checkpoints_timed_total")})`,
+    },
+    // WAL files waiting to be archived - sustained > 0 = archival lagging
+    // (PITR / backup risk).
+    {
+      title: "WAL files pending archival",
+      unit: "",
+      query: `max(${sel("pg_ls_archive_statusdir_wal_pending_count")})`,
+    },
     // Memory-pressure evidence: sustained major page faults / swap-in mean the
     // working set doesn't fit RAM (invisible to a MemAvailable snapshot).
     { title: "Major page faults/s", unit: "", query: `sum(${rate5("node_vmstat_pgmajfault")})` },

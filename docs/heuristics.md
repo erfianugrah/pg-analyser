@@ -146,6 +146,7 @@ only decide the default.
 | `role_conn_high` | a role's connections / its `conn_limit` | >= 80% | med | HAVE |
 | _(display)_ role-usage table shown | max role conn / limit >= `roleConnShowFrac` 50% | - | presentation gate |
 | `pooler_clients_waiting` | `pgbouncer_pools_client_waiting_connections` | > 0 | med | HAVE |
+| `connections_ceiling` | peak `pg_stat_database_num_backends` (trend) vs `max_connections` (pg_settings) | peak >= 80% of max | high | HAVE (trend) |
 | `txn_pooler_prepared_stmts` | txn-mode pool (port 6543) + prepared statements | pool_mode=transaction | low | NEW (informational) |
 
 Notes:
@@ -240,6 +241,7 @@ Sources: Supabase Compute & Disk docs; Supabase High Disk I/O docs.
 | `disk_fill_projection` | rising disk-used% slope projected to 100% (trend; horizon capped to ~3x observed span so a short history can't claim a far-future date) | on track to full within <=120d | high/med | HAVE (trend) |
 | `wal_retained_inactive_slot` | inactive replication slot retaining WAL | any | high | HAVE |
 | `wal_slot_lag` | active slot retained WAL | >= 1GB | med | HAVE |
+| `wal_archival_backlog` | `pg_ls_archive_statusdir_wal_pending_count` (trend) | sustained avg >= 1 pending | high | HAVE (trend) |
 
 Per-compute disk limits (Supabase Compute & Disk docs; gp3 default 3,000 IOPS /
 125 MB/s baseline; effective = min(compute-supported, provisioned-disk)):
@@ -278,6 +280,7 @@ High Disk I/O troubleshooting.
 | `idle_in_txn_timeout_off` | `idle_in_transaction_session_timeout = 0` | =0 | low | HAVE |
 | `statement_timeout_off` | `statement_timeout = 0` | =0 | low | HAVE |
 | `work_mem_spill` | `pg_stat_database_temp_bytes_total` rising (sorts/hashes spill to disk) | rate >= 1MB/s (trend) | med | HAVE |
+| `checkpoint_pressure` | `pg_stat_bgwriter_checkpoints_req_total` vs `_timed_total` rate (trend) | requested >= 30% of checkpoints -> raise max_wal_size | med | HAVE (trend) |
 | `shared_buffers_ratio` | `shared_buffers` vs RAM | not ~25% (warn > 40%) | low | NEW |
 | `deadlocks` | `pg_stat_database_deadlocks_total` | >= 5 cumulative | low | HAVE |
 

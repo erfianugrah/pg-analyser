@@ -68,7 +68,7 @@ type GaugeDef = {
   unit: string;
   name: string;
   filter?: Record<string, string>;
-  agg: "sum" | "avg";
+  agg: "sum" | "avg" | "max";
 };
 
 // Raw node_load1 / MemAvailable / DiskFree gauges were retired in favour of the
@@ -91,18 +91,25 @@ const GAUGES: GaugeDef[] = [
     name: "aws_ec2_ebsbyte_balance_percent_minimum",
     agg: "avg",
   },
+  // WAL files waiting to be archived. Sustained > 0 = archival falling behind
+  // (PITR / backup risk). A gauge - meaningful from a single scrape.
+  {
+    title: "WAL files pending archival",
+    unit: "",
+    name: "pg_ls_archive_statusdir_wal_pending_count",
+    agg: "max",
+  },
 ];
 
 function gaugeSeries(snaps: SnapshotForTrends[], def: GaugeDef): TrendSeries | null {
   const points: TrendPoint[] = [];
   for (const snap of snaps) {
     if (!has(snap.samples, def.name, def.filter)) continue;
+    const matching = snap.samples.filter((s) => s.name === def.name && matches(s, def.filter));
     const total = sumOf(snap.samples, def.name, def.filter);
     let v = total;
-    if (def.agg === "avg") {
-      const n = snap.samples.filter((s) => s.name === def.name && matches(s, def.filter)).length;
-      v = n ? total / n : total;
-    }
+    if (def.agg === "avg") v = matching.length ? total / matching.length : total;
+    else if (def.agg === "max") v = matching.length ? Math.max(...matching.map((s) => s.value)) : 0;
     points.push({ t: snap.ts, v });
   }
   return points.length ? { title: def.title, unit: def.unit, points } : null;
@@ -143,6 +150,14 @@ const RATES: RateDef[] = [
   { title: "Network TX (bytes/s)", unit: "bytes", name: "node_network_transmit_bytes_total" },
   { title: "Temp file bytes/s", unit: "bytes", name: "pg_stat_database_temp_bytes_total" },
   { title: "Deadlocks/s", unit: "", name: "pg_stat_database_deadlocks_total" },
+  // Checkpoints: `requested` (forced because WAL filled) vs `timed` (the regular
+  // checkpoint_timeout interval). A high requested share = raise max_wal_size.
+  {
+    title: "Requested checkpoints/s",
+    unit: "",
+    name: "pg_stat_bgwriter_checkpoints_req_total",
+  },
+  { title: "Timed checkpoints/s", unit: "", name: "pg_stat_bgwriter_checkpoints_timed_total" },
   // Memory-pressure evidence (rate; a snapshot of MemAvailable can't see it).
   { title: "Major page faults/s", unit: "", name: "node_vmstat_pgmajfault" },
   { title: "Swap-in pages/s", unit: "", name: "node_vmstat_pswpin" },
