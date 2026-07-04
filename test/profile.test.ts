@@ -59,6 +59,16 @@ describe("parseProfile", () => {
   });
 });
 
+describe("shipped example stays schema-valid", () => {
+  test("sbperf.profile.example.json parses against the Profile schema", async () => {
+    const p = parseProfile(await Bun.file("sbperf.profile.example.json").text());
+    expect(p.databases.length).toBeGreaterThan(0);
+    expect(p.trendDays).toBe(30);
+    // the region-override demo entry
+    expect(p.databases.some((d) => d.region === "eu-central-1")).toBe(true);
+  });
+});
+
 describe("profileEntries", () => {
   test("maps databases to raw db-target entries", () => {
     const p = parseProfile(JSON.stringify(full));
