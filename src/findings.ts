@@ -1,6 +1,7 @@
 import { meta, THRESHOLDS } from "./heuristics.ts";
 import { lintFix } from "./lints.ts";
 import type { Analysis, SqlRow } from "./schemas.ts";
+import { projectDaysTo, sufficient, sustainedFrac, trendStat } from "./trendstats.ts";
 
 export type Severity = "high" | "med" | "low";
 export type Category = "Performance" | "Security" | "Capacity";
@@ -502,6 +503,75 @@ export function deriveFindings(a: Analysis): Finding[] {
       anchor: "#trends",
       ...meta("disk_iops_high"),
     });
+  }
+
+  // --- Trend-driven capacity findings (data-aware) --------------------------
+  // These read the 30/90-day series via trendstats. Each is gated by
+  // sufficient() so it NEVER fires from a single snapshot - it lights up when a
+  // Grafana source gives real history (or enough store snapshots accrue). This
+  // is where the no-PAT + Grafana path earns its keep: the Management-API
+  // provisioning planes are gone, so the trend IS the capacity signal.
+  const pointsOf = (title: string) => a.trends.find((t) => t.title === title)?.points ?? [];
+
+  // CPU sizing, both directions.
+  const cpuPts = pointsOf("CPU utilization (%)");
+  if (sufficient(cpuPts)) {
+    const s = trendStat(cpuPts)!;
+    const hotFrac = sustainedFrac(cpuPts, THRESHOLDS.cpuSustainedHighPct, ">=");
+    if (hotFrac >= THRESHOLDS.cpuSustainedFrac) {
+      out.push({
+        severity: "high",
+        category: "Capacity",
+        title: `CPU sustained high: ${Math.round(hotFrac * 100)}% of ${Math.round(s.spanDays)}d at >=${THRESHOLDS.cpuSustainedHighPct}% (avg ${Math.round(s.mean)}%, peak ${Math.round(s.max)}%)`,
+        anchor: "#trends",
+        ...meta("cpu_saturated"),
+      });
+    } else if (s.spanDays >= THRESHOLDS.cpuOversizeMinDays && s.p95 <= THRESHOLDS.cpuOversizePct) {
+      out.push({
+        severity: "low",
+        category: "Capacity",
+        title: `CPU consistently idle: p95 ${Math.round(s.p95)}% over ${Math.round(s.spanDays)}d (peak ${Math.round(s.max)}%) - likely over-provisioned`,
+        anchor: "#trends",
+        ...meta("cpu_oversized"),
+      });
+    }
+  }
+
+  // Memory sustained near the ceiling.
+  const memPts = pointsOf("Memory used (%)");
+  if (sufficient(memPts)) {
+    const s = trendStat(memPts)!;
+    const frac = sustainedFrac(memPts, THRESHOLDS.memSustainedHighPct, ">=");
+    if (frac >= THRESHOLDS.memSustainedFrac) {
+      out.push({
+        severity: "med",
+        category: "Capacity",
+        title: `Memory sustained high: ${Math.round(frac * 100)}% of ${Math.round(s.spanDays)}d at >=${THRESHOLDS.memSustainedHighPct}% (avg ${Math.round(s.mean)}%, peak ${Math.round(s.max)}%)`,
+        anchor: "#trends",
+        ...meta("mem_saturated"),
+      });
+    }
+  }
+
+  // Disk fill projection - rising disk-used% -> days to full, capped to a
+  // horizon we can actually see (~3x the observed span) so we never extrapolate
+  // a far-future date off a short history.
+  const diskPts = pointsOf("Disk used (%)");
+  if (sufficient(diskPts)) {
+    const s = trendStat(diskPts)!;
+    if (s.direction === "rising") {
+      const daysToFull = projectDaysTo(s, 100);
+      const trustHorizon = Math.min(THRESHOLDS.diskFillHorizonDays, 3 * s.spanDays);
+      if (daysToFull != null && daysToFull <= trustHorizon) {
+        out.push({
+          severity: daysToFull <= 30 ? "high" : "med",
+          category: "Capacity",
+          title: `Disk filling: ${Math.round(s.last)}% used, +${s.slopePerDay.toFixed(2)}%/day over ${Math.round(s.spanDays)}d -> ~${Math.round(daysToFull)} days to full`,
+          anchor: "#trends",
+          ...meta("disk_fill_projection"),
+        });
+      }
+    }
   }
 
   out.sort(
