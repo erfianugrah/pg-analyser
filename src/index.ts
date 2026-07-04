@@ -271,6 +271,7 @@ async function doAllDbs(
         prometheusUrl: graf?.url ?? prometheusUrl,
         prometheusCookie: graf?.cookie,
         prometheusMatcher: graf?.matcher,
+        trendDays: activeProfile?.trendDays,
         interval,
         sqlRunner: runner,
         syncCheck,

@@ -33,6 +33,9 @@ const GrafanaMap = z.object({
 export const Profile = z.object({
   /** Force no-PAT mode (default true - a profile is the customer-audit path). */
   noPat: z.boolean().default(true),
+  /** Trend query window in days (Grafana/Prometheus range; default 30). The
+   * dashboards go to 90d - it's a TSDB, not the ~7-day analytics cap. */
+  trendDays: z.number().int().positive().max(365).optional(),
   /** Region-mapped Grafana trend credentials (optional - omit for SQL-only). */
   grafana: GrafanaMap.optional(),
   /** Customer databases: superuser connstrings (ref/region derived if absent). */

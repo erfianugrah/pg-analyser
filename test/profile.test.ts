@@ -38,6 +38,19 @@ describe("parseProfile", () => {
     expect(() => parseProfile(JSON.stringify({ databases: [] }))).toThrow();
   });
 
+  test("trendDays is optional and validated (positive int)", () => {
+    expect(
+      parseProfile(JSON.stringify({ trendDays: 90, databases: [{ dbUrl: "x" }] })).trendDays,
+    ).toBe(90);
+    expect(parseProfile(JSON.stringify({ databases: [{ dbUrl: "x" }] })).trendDays).toBeUndefined();
+    expect(() =>
+      parseProfile(JSON.stringify({ trendDays: 0, databases: [{ dbUrl: "x" }] })),
+    ).toThrow();
+    expect(() =>
+      parseProfile(JSON.stringify({ trendDays: -5, databases: [{ dbUrl: "x" }] })),
+    ).toThrow();
+  });
+
   test("defaults the matcher when grafana omits it", () => {
     const p = parseProfile(
       JSON.stringify({ databases: [{ dbUrl: "postgresql://a" }], grafana: { regions: {} } }),

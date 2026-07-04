@@ -1,5 +1,6 @@
 {
   "noPat": true,
+  "trendDays": 30,
   "grafana": {
     "hostTemplate": "https://grafana-{region}.example.com",
     "datasourceUid": "REPLACE_WITH_PROMETHEUS_DATASOURCE_UID",

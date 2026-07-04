@@ -21,6 +21,7 @@ export async function collect(
     prometheusToken?: string;
     prometheusCookie?: string;
     prometheusMatcher?: string;
+    trendDays?: number;
     interval?: string;
     sqlRunner?: SqlRunner;
     syncCheck?: boolean;
@@ -185,11 +186,21 @@ export async function collect(
   const promToken = opts.prometheusToken ?? process.env.SBPERF_PROMETHEUS_TOKEN;
   const promCookie = opts.prometheusCookie ?? process.env.SBPERF_PROMETHEUS_COOKIE;
   const promMatcher = opts.prometheusMatcher ?? process.env.SBPERF_PROMETHEUS_MATCHER;
+  // Trend query window (days). Grafana/Prometheus is a TSDB, so this can be well
+  // past the ~7-day analytics cap - the dashboards go to 90d. Profile/opts wins,
+  // then SBPERF_TREND_DAYS, then 30. Not internal - just a knob, so it's config.
+  const envDays = Number(process.env.SBPERF_TREND_DAYS);
+  const trendDays =
+    opts.trendDays && opts.trendDays > 0
+      ? opts.trendDays
+      : Number.isFinite(envDays) && envDays > 0
+        ? envDays
+        : 30;
   const trends = promUrl
     ? await safe(
         "trends",
         () =>
-          fetchTrends(promUrl, 30, ref, {
+          fetchTrends(promUrl, trendDays, ref, {
             token: promToken,
             cookie: promCookie,
             matcher: promMatcher,
