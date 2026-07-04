@@ -517,3 +517,57 @@ describe("deriveFindings", () => {
     expect(f?.title).toContain("IOPS");
   });
 });
+
+describe("trend-driven capacity findings (data-aware)", () => {
+  const DAY = 86400;
+  // n points evenly spaced over spanDays, values start..end linearly.
+  const series = (n: number, spanDays: number, start: number, end: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      t: Math.floor((i * spanDays * DAY) / (n - 1)),
+      v: start + (i * (end - start)) / (n - 1),
+    }));
+
+  test("CPU sustained high -> cpu_saturated (high); a single snapshot does NOT fire", () => {
+    const hot = base();
+    hot.trends = [{ title: "CPU utilization (%)", unit: "%", points: series(15, 10, 85, 88) }];
+    const f = deriveFindings(hot).find((x) => x.title.includes("CPU sustained high"));
+    expect(f?.severity).toBe("high");
+
+    // same values but only 3 points -> insufficient history -> dormant
+    const thin = base();
+    thin.trends = [{ title: "CPU utilization (%)", unit: "%", points: series(3, 10, 85, 88) }];
+    expect(deriveFindings(thin).some((x) => x.title.includes("CPU sustained"))).toBe(false);
+  });
+
+  test("CPU idle over a long window -> cpu_oversized (downsize)", () => {
+    const idle = base();
+    idle.trends = [{ title: "CPU utilization (%)", unit: "%", points: series(15, 15, 8, 12) }];
+    const f = deriveFindings(idle).find((x) => x.title.includes("consistently idle"));
+    expect(f?.severity).toBe("low");
+
+    // idle but only 5 days of history -> not confident enough to suggest downsize
+    const short = base();
+    short.trends = [{ title: "CPU utilization (%)", unit: "%", points: series(15, 5, 8, 12) }];
+    expect(deriveFindings(short).some((x) => x.title.includes("consistently idle"))).toBe(false);
+  });
+
+  test("Memory sustained high -> mem_saturated", () => {
+    const m = base();
+    m.trends = [{ title: "Memory used (%)", unit: "%", points: series(15, 10, 90, 92) }];
+    expect(deriveFindings(m).some((x) => x.title.includes("Memory sustained high"))).toBe(true);
+  });
+
+  test("Disk filling fast -> projection fires; slow fill (beyond trust horizon) does NOT", () => {
+    const fast = base();
+    fast.trends = [{ title: "Disk used (%)", unit: "%", points: series(15, 10, 50, 80) }];
+    const f = deriveFindings(fast).find((x) => x.title.includes("Disk filling"));
+    expect(f).toBeDefined();
+    expect(f?.severity).toBe("high"); // ~7 days to full
+    expect(f?.title).toContain("days to full");
+
+    // rising, but so slowly that 100% is ~490 days out (>> 3x the 10d span) -> suppressed
+    const slow = base();
+    slow.trends = [{ title: "Disk used (%)", unit: "%", points: series(15, 10, 50, 51) }];
+    expect(deriveFindings(slow).some((x) => x.title.includes("Disk filling"))).toBe(false);
+  });
+});

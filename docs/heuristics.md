@@ -200,7 +200,9 @@ war story; dev.to 2B-XID war story; AWS XID-wraparound blog.
 
 | id | signal | threshold | sev | status |
 |---|---|---|---|---|
-| `cpu_saturated` | `node_cpu_seconds_total` derived util (needs >=2 snapshots) | sustained >= 80% | med | PARTIAL (trend) |
+| `cpu_saturated` | sustained CPU-util fraction (trend; `sufficient()`-gated: >=12 pts over >=3d) | >=50% of window at >=80% util | high | HAVE (trend) |
+| `cpu_oversized` | low CPU-util p95 over a long window (downsize candidate) | p95 <= 20% over >=14d | low | HAVE (trend) |
+| `mem_saturated` | sustained memory-used% fraction (trend) | >=30% of window at >=85% | med | HAVE (trend) |
 | `load_high` | `node_load1/5/15` vs vCPU count | load1 > vCPUs | med | NEW |
 | `mem_pressure` | `node_memory_MemAvailable_bytes / MemTotal` | avail < ~10% | med | NEW |
 | `mem_pressure_paging` | sustained `node_vmstat_pgmajfault` / `pswpin` rate (needs >=2 snapshots / a Prometheus) | major faults >= 20/s OR swap-in >= 2 pages/s | med | HAVE (trend) |
@@ -235,6 +237,7 @@ Sources: Supabase Compute & Disk docs; Supabase High Disk I/O docs.
 | `disk_throughput_high` | derived MB/s / provisioned | >= 80% | med | NEW (trend) |
 | `disk_io_budget_depleted` | small instance bursting then throttled to baseline | sustained at baseline under load | med | NEW |
 | `ebs_balance_low` | `aws_ec2_ebsiobalance_percent_minimum` / `aws_ec2_ebsbyte_balance_percent_minimum` (CloudWatch-backed source only) | worst point <= 20% | high | HAVE (trend) |
+| `disk_fill_projection` | rising disk-used% slope projected to 100% (trend; horizon capped to ~3x observed span so a short history can't claim a far-future date) | on track to full within <=120d | high/med | HAVE (trend) |
 | `wal_retained_inactive_slot` | inactive replication slot retaining WAL | any | high | HAVE |
 | `wal_slot_lag` | active slot retained WAL | >= 1GB | med | HAVE |
 

@@ -61,6 +61,22 @@ export const THRESHOLDS = {
   /** EBS burst-balance % at/below which AWS gp2/gp3 throttling is imminent
    * (I/O or throughput credit depletion - a latency cliff in-guest metrics miss). */
   ebsBalancePct: 20,
+  /** CPU sustained-high: fire when >= cpuSustainedFrac of the trend window sits
+   * at/above cpuSustainedHighPct util. A trend signal (needs a real window). */
+  cpuSustainedHighPct: 80,
+  cpuSustainedFrac: 0.5,
+  /** CPU over-provisioned (downsize candidate): p95 util at/below cpuOversizePct
+   * across a window of at least cpuOversizeMinDays (long enough to be confident
+   * before recommending a smaller tier). */
+  cpuOversizePct: 20,
+  cpuOversizeMinDays: 14,
+  /** Memory sustained-high: >= memSustainedFrac of the window at/above this %. */
+  memSustainedHighPct: 85,
+  memSustainedFrac: 0.3,
+  /** Disk-fill projection horizon: warn when a rising disk-used% trend is on
+   * track to hit 100% within this many days (capped to ~3x the observed span
+   * so we never extrapolate far past the data we actually have). */
+  diskFillHorizonDays: 120,
   /** Cumulative deadlocks (since stats reset) worth surfacing point-in-time. */
   deadlockMin: 5,
   /** Sustained temp-file spill rate (bytes/s, from >=2 snapshots) worth flagging. */
@@ -355,6 +371,54 @@ export const HEURISTICS: Record<string, Heuristic> = {
       "AWS gp2/gp3 volumes serve burst I/O from a credit balance. When the balance depletes, throughput and IOPS are throttled HARD to the baseline - a sudden latency cliff that in-guest disk metrics cannot explain (the disk isn't full or busy by its own numbers; the cloud is throttling it). A depleting balance is an early warning before the cliff hits.",
     remediation:
       "Provision baseline IOPS/throughput to cover sustained demand (gp3 lets you buy IOPS/throughput independently of size), or reduce burst I/O via indexing, cache hit, and batching. Sizing to the sustained rate stops the credit balance from draining.",
+    docUrl: "https://supabase.com/docs/guides/platform/compute-and-disk",
+    reviewed: R,
+  },
+  cpu_saturated: {
+    id: "cpu_saturated",
+    plane: "Compute",
+    howToVerify:
+      "Re-check the CPU-utilization trend after sizing up / shedding load - the sustained-high fraction should drop well below threshold.",
+    whyItMatters:
+      "Sustained high CPU (not a brief spike) means queries are queueing for cores - latency rises and throughput plateaus. A point-in-time reading can miss it; the fraction of the window spent hot is the real signal.",
+    remediation:
+      "Size up the compute tier, or cut CPU demand: fix the heaviest pg_stat_statements queries (missing indexes, seq scans), reduce connection churn, and offload read traffic. Compute Nano..2XL can burst; Large+ is predictable (no burst) - a sustained-hot small tier is running on burst credits.",
+    docUrl: "https://supabase.com/docs/guides/platform/compute-and-disk",
+    reviewed: R,
+  },
+  cpu_oversized: {
+    id: "cpu_oversized",
+    plane: "Compute",
+    howToVerify:
+      "Confirm the CPU trend stays low across peak periods (not just quiet hours) over a couple of weeks before downsizing, then re-audit after the change.",
+    whyItMatters:
+      "A tier whose CPU sits near-idle for weeks is paying for headroom it never uses. Right-sizing down cuts cost with no performance loss - the counterpart to catching saturation.",
+    remediation:
+      "Consider a smaller compute tier. Verify memory and I/O also have headroom first (downsizing compute usually cuts RAM too), and keep enough margin for known traffic peaks / batch jobs.",
+    docUrl: "https://supabase.com/docs/guides/platform/compute-and-disk",
+    reviewed: R,
+  },
+  mem_saturated: {
+    id: "mem_saturated",
+    plane: "Compute",
+    howToVerify:
+      "After sizing up / cutting memory demand, confirm the memory-used% trend spends far less of the window near the ceiling (and paging - major faults / swap-in - stays low).",
+    whyItMatters:
+      "Memory sustained near the ceiling leaves no room for the page cache and pushes the working set toward swap - each spill becomes disk I/O and latency. Sustained high memory% is the leading indicator before the paging/OOM signals fire.",
+    remediation:
+      "Size up the tier, or cut demand: lower work_mem and max_connections, shrink the hot working set, add indexes so scans touch fewer pages. Pair with the paging (mem_pressure_paging) and OOM (oom_kill) signals to confirm it's real pressure, not healthy cache use.",
+    docUrl: "https://supabase.com/docs/guides/platform/compute-and-disk",
+    reviewed: R,
+  },
+  disk_fill_projection: {
+    id: "disk_fill_projection",
+    plane: "Storage",
+    howToVerify:
+      "Re-run after freeing space / growing the disk - the disk-used% slope should flatten and the projected days-to-full should recede.",
+    whyItMatters:
+      "A disk that hits 100% takes the database read-only (or down). Projecting the current growth slope to full gives lead time to act before the cliff, instead of finding out at the wall. The projection is only made within the span the data supports - a short history won't claim a far-future date.",
+    remediation:
+      "Grow the disk ahead of the projected date (Supabase disk auto-scales, but with a cooldown - don't rely on it under fast growth), and attack the growth source: prune/rotate large tables, drop dead bloat (VACUUM FULL / pg_repack in a window), archive cold data, and check for runaway WAL or unvacuumed dead tuples.",
     docUrl: "https://supabase.com/docs/guides/platform/compute-and-disk",
     reviewed: R,
   },
