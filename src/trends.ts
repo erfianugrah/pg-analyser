@@ -227,8 +227,12 @@ function memUsedPctSeries(snaps: SnapshotForTrends[]): TrendSeries | null {
  * Disk used % on /data = (1 - avail/size) * 100 per snapshot. Computed gauge;
  * mirrors the Prometheus panel of the same title.
  */
-function diskUsedPctSeries(snaps: SnapshotForTrends[]): TrendSeries | null {
-  const f = { mountpoint: "/data" };
+function fsUsedPctSeries(
+  snaps: SnapshotForTrends[],
+  mountpoint: string,
+  title: string,
+): TrendSeries | null {
+  const f = { mountpoint };
   const points: TrendPoint[] = [];
   for (const snap of snaps) {
     if (!has(snap.samples, "node_filesystem_size_bytes", f)) continue;
@@ -237,7 +241,7 @@ function diskUsedPctSeries(snaps: SnapshotForTrends[]): TrendSeries | null {
     if (size <= 0) continue;
     points.push({ t: snap.ts, v: Math.max(0, Math.min(100, (1 - avail / size) * 100)) });
   }
-  return points.length ? { title: "Disk used (%)", unit: "%", points } : null;
+  return points.length ? { title, unit: "%", points } : null;
 }
 
 /**
@@ -277,7 +281,8 @@ export function computeTrends(
 
   push(cpuUtilSeries(snaps));
   push(memUsedPctSeries(snaps));
-  push(diskUsedPctSeries(snaps));
+  push(fsUsedPctSeries(snaps, "/data", "Disk used (%)"));
+  push(fsUsedPctSeries(snaps, "/", "Root FS used (%)"));
   push(swapUsedSeries(snaps));
   for (const g of GAUGES) push(gaugeSeries(snaps, g));
   for (const r of RATES) push(rateSeries(snaps, r));

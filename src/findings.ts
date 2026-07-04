@@ -553,24 +553,28 @@ export function deriveFindings(a: Analysis): Finding[] {
     }
   }
 
-  // Disk fill projection - rising disk-used% -> days to full, capped to a
-  // horizon we can actually see (~3x the observed span) so we never extrapolate
-  // a far-future date off a short history.
-  const diskPts = pointsOf("Disk used (%)");
-  if (sufficient(diskPts)) {
-    const s = trendStat(diskPts)!;
-    if (s.direction === "rising") {
-      const daysToFull = projectDaysTo(s, 100);
-      const trustHorizon = Math.min(THRESHOLDS.diskFillHorizonDays, 3 * s.spanDays);
-      if (daysToFull != null && daysToFull <= trustHorizon) {
-        out.push({
-          severity: daysToFull <= 30 ? "high" : "med",
-          category: "Capacity",
-          title: `Disk filling: ${Math.round(s.last)}% used, +${s.slopePerDay.toFixed(2)}%/day over ${Math.round(s.spanDays)}d -> ~${Math.round(daysToFull)} days to full`,
-          anchor: "#trends",
-          ...meta("disk_fill_projection"),
-        });
-      }
+  // Disk fill projection - rising used% -> days to full, capped to a horizon we
+  // can actually see (~3x the observed span) so we never extrapolate a
+  // far-future date off a short history. Checks BOTH the data disk (/data, where
+  // the DB grows) and the root FS (/) - either filling takes the box down.
+  for (const [title, label] of [
+    ["Disk used (%)", "Data disk"],
+    ["Root FS used (%)", "Root FS"],
+  ] as const) {
+    const pts = pointsOf(title);
+    if (!sufficient(pts)) continue;
+    const s = trendStat(pts)!;
+    if (s.direction !== "rising") continue;
+    const daysToFull = projectDaysTo(s, 100);
+    const trustHorizon = Math.min(THRESHOLDS.diskFillHorizonDays, 3 * s.spanDays);
+    if (daysToFull != null && daysToFull <= trustHorizon) {
+      out.push({
+        severity: daysToFull <= 30 ? "high" : "med",
+        category: "Capacity",
+        title: `${label} filling: ${Math.round(s.last)}% used, +${s.slopePerDay.toFixed(2)}%/day over ${Math.round(s.spanDays)}d -> ~${Math.round(daysToFull)} days to full`,
+        anchor: "#trends",
+        ...meta("disk_fill_projection"),
+      });
     }
   }
 
@@ -594,8 +598,52 @@ export function derivePositives(a: Analysis): Positive[] {
   const set = settingsMap(a.sql.pgSettings);
   const publicRows = (rows: SqlRow[]) => rows.filter((r) => String(r.schema ?? "") === "public");
 
-  // Never claim health when diagnostics were incomplete.
-  if (a.meta.status !== "ACTIVE_HEALTHY" || errored.has("sql:dbSize")) return out;
+  // Never claim health when diagnostics were incomplete. In no-PAT mode the
+  // project status is simply unknown (no Management API) - that's NOT degraded,
+  // full SQL + trends were still collected - so gate on status only when the
+  // Management API was available (mirrors the report banner logic).
+  const degraded = a.meta.managementApi !== false && a.meta.status !== "ACTIVE_HEALTHY";
+  if (degraded || errored.has("sql:dbSize")) return out;
+
+  // Trend-health counterweights to the capacity findings (data-aware: only when
+  // there's a real window). A finding and its positive are mutually exclusive.
+  const tpoints = (title: string) => a.trends.find((t) => t.title === title)?.points ?? [];
+  const cpuPts = tpoints("CPU utilization (%)");
+  if (sufficient(cpuPts)) {
+    const s = trendStat(cpuPts)!;
+    const hot =
+      sustainedFrac(cpuPts, THRESHOLDS.cpuSustainedHighPct, ">=") >= THRESHOLDS.cpuSustainedFrac;
+    const oversized =
+      s.spanDays >= THRESHOLDS.cpuOversizeMinDays && s.p95 <= THRESHOLDS.cpuOversizePct;
+    if (!hot && !oversized)
+      out.push({
+        category: "Capacity",
+        title: `CPU well-provisioned: avg ${Math.round(s.mean)}%, peak ${Math.round(s.max)}% over ${Math.round(s.spanDays)}d`,
+      });
+  }
+  const memPts = tpoints("Memory used (%)");
+  if (sufficient(memPts)) {
+    const s = trendStat(memPts)!;
+    if (sustainedFrac(memPts, THRESHOLDS.memSustainedHighPct, ">=") < THRESHOLDS.memSustainedFrac)
+      out.push({
+        category: "Capacity",
+        title: `Memory within healthy range: avg ${Math.round(s.mean)}%, peak ${Math.round(s.max)}% over ${Math.round(s.spanDays)}d`,
+      });
+  }
+  const diskPts = tpoints("Disk used (%)");
+  if (sufficient(diskPts)) {
+    const s = trendStat(diskPts)!;
+    const daysToFull = projectDaysTo(s, 100);
+    const filling =
+      s.direction === "rising" &&
+      daysToFull != null &&
+      daysToFull <= Math.min(THRESHOLDS.diskFillHorizonDays, 3 * s.spanDays);
+    if (!filling)
+      out.push({
+        category: "Capacity",
+        title: `Disk stable: ${Math.round(s.last)}% used, no fill risk over ${Math.round(s.spanDays)}d`,
+      });
+  }
 
   if (a.sql.cacheHitPct != null && a.sql.cacheHitPct >= THRESHOLDS.cacheHitPct) {
     out.push({

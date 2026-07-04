@@ -94,6 +94,9 @@ Flags:
                        + customer databases. full --profile <file> sweeps them,
                        resolving each project's regional Grafana by the region
                        derived from its connstring. See sbperf.profile.example.json.
+  --trend-days <n>     trend query window in days (default 30; the store/Grafana
+                       is a TSDB so 90 is fine). profile.trendDays wins for a
+                       profile run. (env: SBPERF_TREND_DAYS)
   --no-sync-check      skip the on-by-default upstream sync check (offline runs)
   --narrative          report/pdf: embed the narrative summary (run 'narrate' first)
   --print-prompt       narrate: write the grounded prompt to prompt.md for copy-paste
@@ -145,6 +148,7 @@ type Flags = {
   prometheusMatcher?: string;
   noPat?: boolean;
   profile?: string;
+  trendDays?: string;
   store?: string;
   retentionDays?: number;
   interval?: string;
@@ -187,6 +191,7 @@ function parseFlags(argv: string[]): Flags {
     else if (a === "--prometheus-matcher") out.prometheusMatcher = argv[++i];
     else if (a === "--no-pat") out.noPat = true;
     else if (a === "--profile") out.profile = argv[++i];
+    else if (a === "--trend-days") out.trendDays = argv[++i];
     else if (a === "--store") out.store = argv[++i];
     else if (a === "--retention-days") out.retentionDays = Number(argv[++i]);
     else if (a === "--interval") out.interval = argv[++i];
@@ -929,6 +934,7 @@ async function main(): Promise<void> {
   if (flags.prometheusCookie) process.env.SBPERF_PROMETHEUS_COOKIE = flags.prometheusCookie;
   if (flags.prometheusMatcher) process.env.SBPERF_PROMETHEUS_MATCHER = flags.prometheusMatcher;
   if (flags.noPat) process.env.SBPERF_NO_PAT = "1";
+  if (flags.trendDays) process.env.SBPERF_TREND_DAYS = flags.trendDays;
 
   // A --profile <file.json> is the whole work config in one gitignored JSON:
   // force-no-PAT + region-mapped Grafana creds + customer databases. Loaded

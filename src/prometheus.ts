@@ -42,6 +42,11 @@ function buildPanels(refMatcher: string): Array<{ title: string; unit: string; q
       unit: "%",
       query: `100 - (avg(${sel("node_filesystem_avail_bytes", 'mountpoint="/data"')}) * 100 / avg(${sel("node_filesystem_size_bytes", 'mountpoint="/data"')}))`,
     },
+    {
+      title: "Root FS used (%)",
+      unit: "%",
+      query: `100 - (avg(${sel("node_filesystem_avail_bytes", 'mountpoint="/"', 'fstype!="rootfs"')}) * 100 / avg(${sel("node_filesystem_size_bytes", 'mountpoint="/"', 'fstype!="rootfs"')}))`,
+    },
     { title: "Database size", unit: "bytes", query: `sum(${sel("pg_database_size_bytes")})` },
     { title: "DB connections", unit: "", query: `sum(${sel("pg_stat_database_num_backends")})` },
     {
