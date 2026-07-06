@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import pkg from "../package.json" with { type: "json" };
 import { type Brand, DEFAULT_BRAND, loadBrand } from "./brand.ts";
+import { evaluateGate, type GateOptions, renderGateText } from "./check.ts";
 import { collect } from "./collect.ts";
 import { ConfigError, loadConfig, loadConfigOptional } from "./config.ts";
 import {
@@ -13,6 +14,7 @@ import {
   regionFromConnstring,
   resolveTargets,
 } from "./dbtargets.ts";
+import { computeDiff, renderDiffText } from "./diff.ts";
 import { deriveFindings } from "./findings.ts";
 import { mergeTrends, parseTrendsFile } from "./importtrends.ts";
 import { Management } from "./management.ts";
@@ -64,6 +66,9 @@ Usage:
   sbperf full     --ref-file <refs.txt|.csv>   ...refs from a file (one per line / CSV)
   sbperf full     --all [--org <slug>]         audit every project + index.html
   sbperf snapshot --ref <ref> [--store <db>]   collect + append to the history store
+  sbperf diff     <oldDir> <newDir>            compare two analysis.json runs (findings delta + query regressions)
+  sbperf diff     --ref <ref> [--store <db>]   compare the two most recent store snapshots
+  sbperf check    <dir> [--fail-on <sev>]      CI gate: exit nonzero if findings breach the threshold
   sbperf export-prometheus <dir> [--ref <ref>] history store -> OpenMetrics for promtool backfill
   sbperf scrape-init --ref <ref> [--dir <d>]   write the Prometheus+Grafana stack
 
@@ -104,6 +109,9 @@ Flags:
   --trend-days <n>     trend query window in days (default 30; the store/Grafana
                        is a TSDB so 90 is fine). profile.trendDays wins for a
                        profile run. (env: SBPERF_TREND_DAYS)
+  --fail-on <sev>      check: gate severity - high|med|low (default high); exit 1 if breached
+  --category <cat>     check/diff: restrict the gate to Performance|Security|Capacity
+  --new-since <dir>    check: gate only on findings NEW vs the baseline dir's analysis.json
   --no-sync-check      skip the on-by-default upstream sync check (offline runs)
   --narrative          report/pdf: embed the narrative summary (run 'narrate' first)
   --print-prompt       narrate: write the grounded prompt to prompt.md for copy-paste
@@ -162,6 +170,9 @@ type Flags = {
   dbUrls: string[];
   dbConfig?: string;
   noSyncCheck?: boolean;
+  failOn?: string;
+  category?: string;
+  newSince?: string;
   narrative?: boolean;
   printPrompt?: boolean;
   import?: string;
@@ -207,6 +218,9 @@ function parseFlags(argv: string[]): Flags {
     else if (a === "--brand") out.brand = argv[++i];
     else if (a === "--overlay") out.overlay = argv[++i];
     else if (a === "--all") out.all = true;
+    else if (a === "--fail-on") out.failOn = argv[++i];
+    else if (a === "--category") out.category = argv[++i];
+    else if (a === "--new-since") out.newSince = argv[++i];
     else if (a === "--no-sync-check") out.noSyncCheck = true;
     else if (a === "--narrative") out.narrative = true;
     else if (a === "--print-prompt") out.printPrompt = true;
@@ -669,6 +683,69 @@ async function doAnalyze(
   return jsonPath;
 }
 
+/**
+ * Compare two runs into a findings-delta + query-regression report. Either two
+ * report dirs ('diff <old> <new>') or the two most recent store snapshots for a
+ * ref ('diff --ref <ref>'). Purely informational - always exits 0; use 'check'
+ * to gate CI on severity.
+ */
+async function doDiff(
+  argA: string | undefined,
+  argB: string | undefined,
+  ref: string | undefined,
+  storePath: string,
+): Promise<void> {
+  let a: Analysis;
+  let b: Analysis;
+  if (argA && argB) {
+    a = await loadAnalysis(argA);
+    b = await loadAnalysis(argB);
+  } else if (ref) {
+    const store = HistoryStore.open(storePath);
+    try {
+      const recent = store.recentAnalyses(ref, 2);
+      if (recent.length < 2)
+        throw new Error(
+          `need >= 2 snapshots for ${ref} in ${storePath} (have ${recent.length}) - run 'sbperf snapshot --ref ${ref}' on a schedule first`,
+        );
+      b = recent[0]!; // newest = current
+      a = recent[1]!; // older = baseline
+    } finally {
+      store.close();
+    }
+  } else {
+    throw new Error(
+      "diff needs two report dirs ('sbperf diff <old> <new>') or --ref <ref> to compare the two latest store snapshots",
+    );
+  }
+  console.log(renderDiffText(computeDiff(a, b)));
+}
+
+const CATEGORIES = ["Performance", "Security", "Capacity"] as const;
+
+/**
+ * CI gate over a run's findings. Exits nonzero (via process.exit(1)) when a
+ * finding breaches --fail-on (default high), optionally scoped to a --category
+ * or to only findings NEW since a --new-since baseline dir.
+ */
+async function doCheck(dir: string, flags: Flags): Promise<void> {
+  const failOn = (flags.failOn ?? "high").toLowerCase();
+  if (failOn !== "high" && failOn !== "med" && failOn !== "low")
+    throw new Error("--fail-on must be one of: high | med | low");
+  if (flags.category && !CATEGORIES.includes(flags.category as (typeof CATEGORIES)[number]))
+    throw new Error(`--category must be one of: ${CATEGORIES.join(" | ")}`);
+  const a = await loadAnalysis(dir);
+  const baseline = flags.newSince ? await loadAnalysis(flags.newSince) : null;
+  const opts: GateOptions = {
+    failOn,
+    category: flags.category as GateOptions["category"],
+    newOnly: !!flags.newSince,
+  };
+  const result = evaluateGate(a, baseline, opts);
+  console.log(renderGateText(result));
+  if (!result.pass) process.exit(1);
+}
+
 async function loadAnalysis(dir: string) {
   const { Analysis } = await import("./schemas.ts");
   const path = join(dir, "analysis.json");
@@ -1081,6 +1158,16 @@ async function main(): Promise<void> {
         const dir = flags._[0];
         if (!dir) usage();
         await doSummary(dir);
+        break;
+      }
+      case "diff": {
+        await doDiff(flags._[0], flags._[1], flags.ref, flags.store ?? DEFAULT_STORE);
+        break;
+      }
+      case "check": {
+        const dir = flags._[0];
+        if (!dir) usage();
+        await doCheck(dir, flags);
         break;
       }
       case "pdf": {

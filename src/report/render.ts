@@ -197,6 +197,86 @@ function functionsSection(a: Analysis): string {
   return `${list}<p class=note>Invocation stats (last day)</p>${sqlTable(stats as unknown as SqlRow[], { mono: ["slug"] })}`;
 }
 
+/**
+ * Security-config plane (auth / network / SSL) as a plain key/value table. The
+ * findings above carry the what/why/how; this section is the substantiating
+ * evidence drill. Null in no-PAT mode (no Management API).
+ */
+function securityConfigSection(a: Analysis): string {
+  const s = a.security;
+  if (!s) return "<p class=empty>not collected (no Management API in this mode)</p>";
+  const yn = (v: boolean | undefined, goodWhenTrue = true): string =>
+    v === undefined
+      ? "-"
+      : `<span class="badge ${v === goodWhenTrue ? "ok" : "warn"}">${v ? "on" : "off"}</span>`;
+  const rows: string[] = [];
+  const nr = s.networkRestrictions;
+  if (nr) {
+    const cidrs = [...(nr.config?.dbAllowedCidrs ?? []), ...(nr.config?.dbAllowedCidrsV6 ?? [])];
+    const restricted = cidrs.length > 0 && !cidrs.some((c) => c === "0.0.0.0/0" || c === "::/0");
+    rows.push(
+      `<tr><td>Network restrictions</td><td class=mono>${esc(cidrs.join(", ") || "(none)")}</td><td><span class="badge ${restricted ? "ok" : "warn"}">${restricted ? "restricted" : "open to any IP"}</span></td></tr>`,
+    );
+  }
+  if (s.sslEnforcement)
+    rows.push(
+      `<tr><td>SSL enforcement</td><td class=mono>database</td><td>${yn(s.sslEnforcement.currentConfig.database)}</td></tr>`,
+    );
+  const auth = s.auth;
+  if (auth) {
+    const anyMfa =
+      auth.mfa_totp_verify_enabled === true ||
+      auth.mfa_phone_verify_enabled === true ||
+      auth.mfa_web_authn_verify_enabled === true;
+    const mfaKnown = [
+      auth.mfa_totp_verify_enabled,
+      auth.mfa_phone_verify_enabled,
+      auth.mfa_web_authn_verify_enabled,
+    ].some((v) => v !== undefined);
+    if (auth.mailer_autoconfirm !== undefined)
+      rows.push(
+        `<tr><td>Email confirmation required</td><td class=mono>mailer_autoconfirm=${auth.mailer_autoconfirm}</td><td>${yn(!auth.mailer_autoconfirm)}</td></tr>`,
+      );
+    if (mfaKnown)
+      rows.push(
+        `<tr><td>MFA factor enabled</td><td class=mono>totp/phone/webauthn</td><td>${yn(anyMfa)}</td></tr>`,
+      );
+    if (auth.password_min_length !== undefined)
+      rows.push(
+        `<tr><td>Password min length</td><td class=mono>${auth.password_min_length}</td><td>${auth.password_min_length >= THRESHOLDS.passwordMinLength ? '<span class="badge ok">ok</span>' : '<span class="badge warn">weak</span>'}</td></tr>`,
+      );
+    if (auth.password_hibp_enabled !== undefined)
+      rows.push(
+        `<tr><td>Leaked-password (HIBP) check</td><td class=mono>password_hibp_enabled</td><td>${yn(auth.password_hibp_enabled)}</td></tr>`,
+      );
+    if (auth.external_anonymous_users_enabled !== undefined)
+      rows.push(
+        `<tr><td>Anonymous sign-ins</td><td class=mono>external_anonymous_users_enabled</td><td>${yn(auth.external_anonymous_users_enabled, false)}</td></tr>`,
+      );
+    if (auth.jwt_exp !== undefined)
+      rows.push(
+        `<tr><td>Access-token TTL</td><td class=mono>${Math.round(auth.jwt_exp / 60)} min</td><td>${auth.jwt_exp <= THRESHOLDS.jwtExpMaxSec ? '<span class="badge ok">ok</span>' : '<span class="badge warn">long</span>'}</td></tr>`,
+      );
+  }
+  if (!rows.length) return "<p class=empty>no security-config fields returned</p>";
+  return `<table class=kv>${rows.join("")}</table>`;
+}
+
+/**
+ * Installed-extension inventory + pgvector index health. The findings carry the
+ * fix; this is the substantiating evidence (which extensions, which columns).
+ */
+function extensionsSection(a: Analysis): string {
+  const exts = a.sql.extensions;
+  const vecs = a.sql.unindexedVectors;
+  if (!exts.length && !vecs.length) return "<p class=empty>none collected</p>";
+  let html = "";
+  if (exts.length) html += sqlTable(exts, { mono: ["name"] });
+  if (vecs.length)
+    html += `<p class=note>pgvector columns without an ANN index (ivfflat/hnsw) - exact-scanned on distance queries</p>${sqlTable(vecs, { mono: ["table", "column"], hide: ["schema"] })}`;
+  return html;
+}
+
 const METRICS_GUIDE = "https://supabase.com/docs/guides/telemetry/metrics";
 
 /**
@@ -561,7 +641,15 @@ export function renderIndex(
   collectedAt: string,
   brand: Brand = DEFAULT_BRAND,
 ): string {
-  const body = rows
+  // Worst-first so a fleet index is scannable at scale: collection errors, then
+  // by high / med / low finding count, then name. A stable presentation sort -
+  // it never touches the underlying data.
+  const sorted = [...rows].sort((a, b) => {
+    const err = (a.error != null ? 1 : 0) - (b.error != null ? 1 : 0);
+    if (err) return -err;
+    return b.high - a.high || b.med - a.med || b.low - a.low || a.name.localeCompare(b.name);
+  });
+  const body = sorted
     .map((r) => {
       const healthy = r.status === "ACTIVE_HEALTHY";
       // No-PAT rows have no platform status; a red "unknown" badge reads as
@@ -796,12 +884,15 @@ ${auditFindings(findings, degraded)}
 
 ${drill("rls", "RLS policies", "auth.*() should be wrapped: (select auth.uid())", errored.has("sql:rlsPolicies") ? '<p class="empty warn-text">not collected - see notes</p>' : rlsTable(a.sql.rlsPolicies))}
 
+${drill("seccfg", "Security configuration", "auth policy, network restrictions, SSL enforcement (Management API)", securityConfigSection(a))}
+
 <h2 id="adv-perf">Advisors - performance <span class=count>${a.advisors.performance.length}</span></h2>${errored.has("advisors:performance") ? '<p class="empty warn-text">not collected</p>' : advisorTable(a.advisors.performance)}
 <h2 id="adv-sec">Advisors - security <span class=count>${a.advisors.security.length}</span></h2>${errored.has("advisors:security") ? '<p class="empty warn-text">not collected</p>' : advisorTable(a.advisors.security)}
 
-${drill("outliers", "Query outliers", outliersNote, chartFor(a.sql.topStatements, errored.has("sql:topStatements"), { labelKey: "query", valueKey: "pct", display: (r) => `${r.pct}% (${r.total_ms}ms)`, limit: 5 }) + sec(a.sql.topStatements, "sql:topStatements", { mono: ["query"], limit: 5 }))}
-${drill("calls", "Most-frequent queries", "top 5 by call count - chatty / hot-path app workload (platform/migration/DDL noise filtered)", chartFor(a.sql.topByCalls, errored.has("sql:topByCalls"), { labelKey: "query", valueKey: "pct_calls", display: (r) => `${r.pct_calls}% (${r.calls} calls)`, limit: 5 }) + sec(a.sql.topByCalls, "sql:topByCalls", { mono: ["query"], limit: 5 }))}
+${drill("outliers", "Query outliers", outliersNote, chartFor(a.sql.topStatements, errored.has("sql:topStatements"), { labelKey: "query", valueKey: "pct", display: (r) => `${r.pct}% (${r.total_ms}ms)`, limit: 5 }) + sec(a.sql.topStatements, "sql:topStatements", { mono: ["query"], hide: ["queryid"], limit: 5 }))}
+${drill("calls", "Most-frequent queries", "top 5 by call count - chatty / hot-path app workload (platform/migration/DDL noise filtered)", chartFor(a.sql.topByCalls, errored.has("sql:topByCalls"), { labelKey: "query", valueKey: "pct_calls", display: (r) => `${r.pct_calls}% (${r.calls} calls)`, limit: 5 }) + sec(a.sql.topByCalls, "sql:topByCalls", { mono: ["query"], hide: ["queryid"], limit: 5 }))}
 ${drill("tables", "Biggest tables", "", sec(a.sql.biggestTables, "sql:biggestTables", { mono: ["table"], hide: ["schema"], limit: 20 }))}
+${drill("extensions", "Extensions", "installed extensions + versions; pgvector ANN-index health", errored.has("sql:extensions") ? '<p class="empty warn-text">not collected</p>' : extensionsSection(a))}
 ${drill("unused", "Index usage", "all indexes by size; unused = never scanned, non-constraint", sec(a.sql.indexStats, "sql:indexStats", { mono: ["index", "table"], hide: ["schema"] }))}
 ${drill("dupidx", "Duplicate indexes", "identical index definitions on one table - keep one, drop the rest", errored.has("sql:duplicateIndexes") ? '<p class="empty warn-text">not collected</p>' : a.sql.duplicateIndexes.length ? sqlTable(a.sql.duplicateIndexes, { mono: ["indexes"], hide: ["schema"] }) : "<p class=empty>none found</p>")}
 ${drill("rlsunindexed", "RLS columns without an index", "policy-compared column with no covering index -> seq scan per row check", errored.has("sql:rlsUnindexed") ? '<p class="empty warn-text">not collected</p>' : a.sql.rlsUnindexed.length ? sqlTable(a.sql.rlsUnindexed, { mono: ["table", "column"], hide: ["schema"] }) : "<p class=empty>none found</p>")}

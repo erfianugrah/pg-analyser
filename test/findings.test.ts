@@ -24,6 +24,7 @@ function base(): Analysis {
     functions: [],
     functionStats: [],
     buckets: [],
+    security: null,
     advisors: { performance: [], security: [] },
     apiCounts: [],
     sql: {
@@ -51,6 +52,8 @@ function base(): Analysis {
       locks: [],
       blocking: [],
       storageUsage: [],
+      extensions: [],
+      unindexedVectors: [],
     },
     metrics: { available: false, samples: [] },
     trends: [],
@@ -614,5 +617,133 @@ describe("trend-driven tuning findings", () => {
     expect(deriveFindings(fine).some((f) => f.title.includes("Connections near ceiling"))).toBe(
       false,
     );
+  });
+});
+
+describe("securityConfigFindings", () => {
+  function withSec(sec: NonNullable<Analysis["security"]>): Analysis {
+    const a = base();
+    a.security = sec;
+    return a;
+  }
+  const emptySec = {
+    auth: null,
+    networkRestrictions: null,
+    sslEnforcement: null,
+  } as NonNullable<Analysis["security"]>;
+
+  test("no-PAT (security null) -> no security-config findings", () => {
+    expect(deriveFindings(base()).some((f) => f.anchor === "#seccfg")).toBe(false);
+  });
+
+  test("empty network restrictions -> med finding, reachable from any IP", () => {
+    const a = withSec({ ...emptySec, networkRestrictions: { config: {} } });
+    const f = deriveFindings(a).find((x) => x.heuristicId === "network_restrictions_open");
+    expect(f?.category).toBe("Security");
+    expect(f?.severity).toBe("med");
+    expect(f?.title).toContain("any IP");
+  });
+
+  test("0.0.0.0/0 allowlist -> still flagged as open", () => {
+    const a = withSec({
+      ...emptySec,
+      networkRestrictions: { config: { dbAllowedCidrs: ["0.0.0.0/0"] } },
+    });
+    expect(deriveFindings(a).some((f) => f.heuristicId === "network_restrictions_open")).toBe(true);
+  });
+
+  test("restricted CIDRs -> no finding, positive instead", () => {
+    const a = withSec({
+      ...emptySec,
+      networkRestrictions: { config: { dbAllowedCidrs: ["10.0.0.0/8"] } },
+    });
+    expect(deriveFindings(a).some((f) => f.heuristicId === "network_restrictions_open")).toBe(
+      false,
+    );
+    expect(
+      derivePositives(a).some((p) => p.title.includes("network restrictions are configured")),
+    ).toBe(true);
+  });
+
+  test("ssl enforcement off -> med finding; on -> positive", () => {
+    const off = withSec({ ...emptySec, sslEnforcement: { currentConfig: { database: false } } });
+    expect(deriveFindings(off).some((f) => f.heuristicId === "ssl_not_enforced")).toBe(true);
+    const on = withSec({ ...emptySec, sslEnforcement: { currentConfig: { database: true } } });
+    expect(deriveFindings(on).some((f) => f.heuristicId === "ssl_not_enforced")).toBe(false);
+    expect(derivePositives(on).some((p) => p.title.includes("SSL enforcement is on"))).toBe(true);
+  });
+
+  test("email auto-confirm -> med; MFA absent among known fields -> low", () => {
+    const a = withSec({
+      ...emptySec,
+      auth: { mailer_autoconfirm: true, mfa_totp_verify_enabled: false },
+    });
+    const f = deriveFindings(a);
+    expect(f.find((x) => x.heuristicId === "auth_email_autoconfirm")?.severity).toBe("med");
+    expect(f.find((x) => x.heuristicId === "auth_mfa_disabled")?.severity).toBe("low");
+  });
+
+  test("MFA enabled -> no MFA finding, positive instead", () => {
+    const a = withSec({ ...emptySec, auth: { mfa_totp_verify_enabled: true } });
+    expect(deriveFindings(a).some((f) => f.heuristicId === "auth_mfa_disabled")).toBe(false);
+    expect(derivePositives(a).some((p) => p.title.includes("MFA factor is enabled"))).toBe(true);
+  });
+
+  test("weak password policy (short min length) -> med", () => {
+    const a = withSec({
+      ...emptySec,
+      auth: { password_min_length: 6, password_hibp_enabled: false },
+    });
+    const f = deriveFindings(a).find((x) => x.heuristicId === "auth_weak_password_policy");
+    expect(f?.severity).toBe("med");
+    expect(f?.evidence).toContain("min length 6");
+  });
+
+  test("anonymous users + long jwt -> low findings", () => {
+    const a = withSec({
+      ...emptySec,
+      auth: { external_anonymous_users_enabled: true, jwt_exp: 7200 },
+    });
+    const f = deriveFindings(a);
+    expect(f.find((x) => x.heuristicId === "auth_anonymous_users")?.severity).toBe("low");
+    const jwt = f.find((x) => x.heuristicId === "auth_long_jwt");
+    expect(jwt?.severity).toBe("low");
+    expect(jwt?.title).toContain("120 min");
+  });
+
+  test("MFA fields entirely absent -> no MFA finding (can't assert)", () => {
+    const a = withSec({ ...emptySec, auth: { jwt_exp: 3600 } });
+    expect(deriveFindings(a).some((f) => f.heuristicId === "auth_mfa_disabled")).toBe(false);
+  });
+});
+
+describe("extension health findings", () => {
+  test("outdated extension -> low finding with version evidence", () => {
+    const a = base();
+    a.sql.extensions = [
+      { name: "pg_stat_statements", installed: "1.10", latest: "1.10", outdated: false },
+      { name: "postgis", installed: "3.3.2", latest: "3.4.0", outdated: true },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "extensions_outdated");
+    expect(f?.severity).toBe("low");
+    expect(f?.evidence).toContain("postgis 3.3.2->3.4.0");
+  });
+
+  test("unindexed pgvector column -> med finding", () => {
+    const a = base();
+    a.sql.unindexedVectors = [{ schema: "public", table: "docs", column: "embedding" }];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "pgvector_unindexed");
+    expect(f?.severity).toBe("med");
+    expect(f?.evidence).toContain("public.docs.embedding");
+  });
+
+  test("pg_cron installed -> review nudge", () => {
+    const a = base();
+    a.sql.extensions = [{ name: "pg_cron", installed: "1.6", latest: "1.6", outdated: false }];
+    expect(deriveFindings(a).some((x) => x.heuristicId === "pg_cron_review")).toBe(true);
+  });
+
+  test("no extension data -> no extension findings", () => {
+    expect(deriveFindings(base()).some((f) => f.anchor === "#extensions")).toBe(false);
   });
 });

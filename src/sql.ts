@@ -98,9 +98,14 @@ export const QUERIES = {
     )
     order by name`,
 
-  // App workload only - platform/introspection noise filtered out.
+  // App workload only - platform/introspection noise filtered out. queryid is
+  // pg_stat_statements' stable per-normalized-query identity (survives literal
+  // changes; resets on pg_stat_statements_reset()) - it keys `sbperf diff`'s
+  // query-level regression detection, so the same statement is matched across
+  // snapshots even when its truncated text collides with another's.
   topStatements: /* sql */ `
     select
+      queryid::text as queryid,
       round(total_exec_time::numeric, 1) as total_ms,
       calls,
       round(mean_exec_time::numeric, 2) as mean_ms,
@@ -116,6 +121,7 @@ export const QUERIES = {
   // statements that are individually cheap but dominate round-trips.
   topByCalls: /* sql */ `
     select
+      queryid::text as queryid,
       calls,
       round(total_exec_time::numeric, 1) as total_ms,
       round(mean_exec_time::numeric, 2) as mean_ms,
@@ -487,6 +493,53 @@ export const QUERIES = {
     join pg_stat_activity ka on kl.pid = ka.pid
     where not bl.granted
     limit 20`,
+
+  // Installed extensions vs the latest version the platform makes available.
+  // Always safe (pg_extension + pg_available_extension_versions are core
+  // catalogs). Powers a report inventory + an "extension behind latest" nudge
+  // that works in the PAT read-only tier too, where the vendored splinter
+  // extension_versions_outdated lint can't run. Also surfaces pg_cron/pg_net
+  // presence so the report can nudge on scheduled-job / async-queue health.
+  extensions: /* sql */ `
+    select
+      e.extname as name,
+      e.extversion as installed,
+      av.default_version as latest,
+      (e.extversion <> av.default_version) as outdated
+    from pg_extension e
+    left join pg_available_extensions av on av.name = e.extname
+    where e.extname not in ('plpgsql')
+    order by e.extname`,
+
+  // pgvector columns with no approximate-nearest-neighbour index (ivfflat or
+  // hnsw). Always safe: if pgvector isn't installed the 'vector' type doesn't
+  // exist so t.typname='vector' matches nothing (zero rows), and the ANN index
+  // AMs simply aren't present. A vector column queried by distance without an
+  // ANN index does an exact scan of every row - the classic pgvector slow path.
+  unindexedVectors: /* sql */ `
+    select
+      n.nspname as schema,
+      c.relname as table,
+      a.attname as column
+    from pg_attribute a
+    join pg_class c on c.oid = a.attrelid
+    join pg_namespace n on n.oid = c.relnamespace
+    join pg_type t on t.oid = a.atttypid
+    where t.typname = 'vector'
+      and c.relkind = 'r'
+      and a.attnum > 0
+      and not a.attisdropped
+      and n.nspname not in ('pg_catalog', 'information_schema')
+      and not exists (
+        select 1
+        from pg_index i
+        join pg_class ic on ic.oid = i.indexrelid
+        join pg_am am on am.oid = ic.relam
+        where i.indrelid = c.oid
+          and am.amname in ('ivfflat', 'hnsw')
+          and a.attnum = any (i.indkey)
+      )
+    order by n.nspname, c.relname, a.attname`,
 } as const;
 
 export type QueryKey = keyof typeof QUERIES;

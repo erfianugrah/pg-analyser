@@ -30,6 +30,7 @@ function makeAnalysis(opts: {
     functions: [],
     functionStats: [],
     buckets: [],
+    security: null,
     advisors: { performance: [], security: [] },
     apiCounts: [],
     sql: {
@@ -57,6 +58,8 @@ function makeAnalysis(opts: {
       locks: [],
       blocking: [],
       storageUsage: [],
+      extensions: [],
+      unindexedVectors: [],
     },
     metrics: { available: (opts.samples?.length ?? 0) > 0, samples: opts.samples ?? [] },
     trends: [],

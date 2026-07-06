@@ -53,6 +53,17 @@ const ENDPOINTS: ReadonlyArray<{ method: string; path: string; used: string }> =
   { method: "get", path: "/v1/projects/{ref}/functions", used: "edge function inventory" },
   { method: "get", path: "/v1/projects/{ref}/storage/buckets", used: "storage buckets" },
   { method: "get", path: "/v1/projects/{ref}/upgrade/eligibility", used: "pg upgrade drift" },
+  { method: "get", path: "/v1/projects/{ref}/config/auth", used: "auth security config plane" },
+  {
+    method: "get",
+    path: "/v1/projects/{ref}/network-restrictions",
+    used: "DB network restriction (IP allowlist) security finding",
+  },
+  {
+    method: "get",
+    path: "/v1/projects/{ref}/ssl-enforcement",
+    used: "SSL enforcement security finding",
+  },
   { method: "get", path: "/v1/projects/{ref}/advisors/performance", used: "performance advisors" },
   { method: "get", path: "/v1/projects/{ref}/advisors/security", used: "security advisors" },
   {

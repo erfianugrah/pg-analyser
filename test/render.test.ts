@@ -35,6 +35,7 @@ function fixture(overrides: Partial<Analysis> = {}): Analysis {
     functions: [],
     functionStats: [],
     buckets: [],
+    security: null,
     advisors: {
       performance: [
         { name: "x", title: "Multiple Permissive Policies", level: "WARN", detail: "detail here" },
@@ -72,6 +73,8 @@ function fixture(overrides: Partial<Analysis> = {}): Analysis {
       locks: [],
       blocking: [],
       storageUsage: [],
+      extensions: [],
+      unindexedVectors: [],
     },
     metrics: {
       available: true,
@@ -452,6 +455,8 @@ describe("renderSummary", () => {
         locks: [],
         blocking: [],
         storageUsage: [],
+        extensions: [],
+        unindexedVectors: [],
       },
     });
     const html = renderSummary(clean);
@@ -544,5 +549,21 @@ describe("renderIndex", () => {
     );
     expect(html).not.toContain('class="badge bad">unknown'); // no misleading red badge
     expect(html).toContain("1 / 0 / 3");
+  });
+
+  test("rows are sorted worst-first (errors, then high/med/low, then name)", () => {
+    const html = renderIndex(
+      [
+        { name: "clean", ref: "a", status: "ACTIVE_HEALTHY", high: 0, med: 0, low: 1, dir: "a" },
+        { name: "hot", ref: "b", status: "ACTIVE_HEALTHY", high: 3, med: 0, low: 0, dir: "b" },
+        { name: "broken", ref: "c", status: "?", high: 0, med: 0, low: 0, dir: "c", error: "x" },
+        { name: "warm", ref: "d", status: "ACTIVE_HEALTHY", high: 0, med: 4, low: 0, dir: "d" },
+      ],
+      "2026-07-02T00:00:00Z",
+    );
+    const order = ["broken", "hot", "warm", "clean"].map((n) => html.indexOf(`>${n}</a>`));
+    // every name present and in strictly increasing document position
+    expect(order.every((p) => p >= 0)).toBe(true);
+    expect(order).toEqual([...order].sort((x, y) => x - y));
   });
 });

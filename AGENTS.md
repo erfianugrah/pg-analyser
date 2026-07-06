@@ -22,6 +22,9 @@ HTML + PDF report. No superuser `--db-url`, no manual Grafana screenshots.
 | `bun run src/index.ts pdf <dir>` | `analysis.json` -> `report.pdf` |
 | `bun run src/index.ts narrate <dir>` | `analysis.json` -> `narrative.md` (LLM pass; needs `SBPERF_LLM_*`) |
 | `bun run src/index.ts import-trends <dir> <file...>` | merge external CSV/JSON series into `analysis.trends` (vendor-neutral; no dashboard coupling) |
+| `bun run src/index.ts diff <dirA> <dirB>` | findings delta + per-query (queryid) regressions between two runs |
+| `bun run src/index.ts diff --ref <ref>` | same, over the two most recent history-store snapshots |
+| `bun run src/index.ts check <dir> --fail-on <sev>` | CI gate: exit nonzero if findings breach the threshold (`--category`, `--new-since`) |
 | `bun run src/index.ts full --ref <ref>` | analyze + report + pdf |
 | `bun run src/index.ts full --ref <r1>,<r2> ...` / `--ref-file <f>` | audit a subset of projects -> combined org/project index (PAT-only). `--ref` repeatable + comma/space lists; `--ref-file` reads a .txt/.csv (ref-shaped tokens only) |
 | `bun run src/index.ts full --all [--org <slug>]` | audit every project -> `index.html` |
@@ -117,7 +120,9 @@ src/
                  Supabase ref (pooler role.ref / db.<ref> host). `full` sweeps
                  targets -> per-DB reports + index; `snapshot` records each.
   sql.ts         the perf query set - superset of `supabase inspect db`:
-                 pg_stat_statements (by time + calls), index-stats, bloat,
+                 pg_stat_statements (by time + calls, WITH queryid for cross-
+                 snapshot query identity that powers `diff`), index-stats, bloat,
+                 extension inventory (+ pgvector ANN-index health, pg_cron nudge),
                  traffic-profile, threshold-aware vacuum, txid wraparound,
                  replication slots, role-stats, point-in-time locks/blocking/
                  long-running, cache-hit + stats-reset age, RLS audit
@@ -126,6 +131,16 @@ src/
   collect.ts     orchestrate all planes -> validated Analysis (per-source errors
                  captured); captures the COMPLETE metrics corpus (all ~321
                  families, no curation) - the corpus is the product
+  check.ts       CI gate: evaluateGate turns deriveFindings into a pass/fail by
+                 severity (--fail-on), optional --category scope + --new-since
+                 baseline (gate only on NEWLY-appeared findings). CLI exits 1 on
+                 breach. Pure; reuses deriveFindings + diff so the gate sees
+                 exactly what the report ranks.
+  diff.ts        computeDiff(baseline, current): findings appeared/resolved/
+                 severity-changed (keyed on a number-normalized title so a moved
+                 value isn't a spurious resolve+appear pair) + query regressions
+                 matched by pg_stat_statements queryid (>=1.5x mean-exec-time =
+                 regression) + headline scalar deltas. renderDiffText for CLI.
   heuristics.ts  evergreen THRESHOLDS + per-finding metadata (whyItMatters,
                  howToVerify, remediation, optional sql, docUrl) attached to each
                  Finding by meta(); the deterministic report's what/why/how/verify.
@@ -133,6 +148,16 @@ src/
                  {plainTitle, whatToDo, sql?, howToVerify}; makes advisor findings
                  a one-stop shop (concrete fix, not "go to the Advisor"). Kept in
                  sync with splinter.sql by scripts/check-lints-drift.ts.
+  (security)     collect also pulls three security-config Management planes -
+                 config/auth (GoTrue: MFA/password/signup/anon/jwt_exp),
+                 network-restrictions (DB IP allowlist), ssl-enforcement - into
+                 analysis.security (null in no-PAT mode). findings.ts's
+                 securityConfigFindings() turns these into sbperf-ORIGINAL
+                 Security findings (network open to any IP, SSL off, email auto-
+                 confirm, no MFA, weak password policy, anon sign-ins, long JWT) -
+                 the first Security findings that aren't advisor-lint passthrough.
+                 Field names verified against the live OpenAPI spec; endpoints
+                 registered in check-api-drift.
   findings.ts    deriveFindings/derivePositives: the deterministic ranking pass.
                  Turns the raw Analysis (advisors + SQL + metrics + trends) into
                  ordered Finding[] (Performance/Security/Capacity, high/med/low)

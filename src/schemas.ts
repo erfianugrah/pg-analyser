@@ -110,6 +110,51 @@ export const UpgradeEligibility = z.object({
   latest_app_version: z.string().optional(),
 });
 
+// --- Security config planes (Management API) ---
+// GoTrue auth config. Only the security-relevant fields are declared; unknown
+// keys are stripped (non-strict), so the ~90-field response parses cleanly and
+// upstream additions never break us. Field names verified against the live
+// OpenAPI spec (AuthConfigResponse) - a wrong name would silently no-op a check.
+export const AuthConfig = z.object({
+  disable_signup: z.boolean().optional(),
+  external_anonymous_users_enabled: z.boolean().optional(),
+  jwt_exp: z.number().optional(),
+  mailer_autoconfirm: z.boolean().optional(),
+  mfa_totp_enroll_enabled: z.boolean().optional(),
+  mfa_totp_verify_enabled: z.boolean().optional(),
+  mfa_phone_verify_enabled: z.boolean().optional(),
+  mfa_web_authn_verify_enabled: z.boolean().optional(),
+  password_hibp_enabled: z.boolean().optional(),
+  password_min_length: z.number().optional(),
+  password_required_characters: z.string().optional(),
+  security_captcha_enabled: z.boolean().optional(),
+  refresh_token_rotation_enabled: z.boolean().optional(),
+  security_update_password_require_reauthentication: z.boolean().optional(),
+});
+export type AuthConfig = z.infer<typeof AuthConfig>;
+
+// GET /v1/projects/{ref}/network-restrictions. An empty/absent dbAllowedCidrs
+// (or the wide-open 0.0.0.0/0) means the database is reachable from any IP.
+export const NetworkRestrictions = z.object({
+  entitlement: z.string().optional(),
+  config: z
+    .object({
+      dbAllowedCidrs: z.array(z.string()).optional(),
+      dbAllowedCidrsV6: z.array(z.string()).optional(),
+    })
+    .optional(),
+  status: z.string().optional(),
+});
+export type NetworkRestrictions = z.infer<typeof NetworkRestrictions>;
+
+// GET /v1/projects/{ref}/ssl-enforcement. currentConfig.database=false means
+// unencrypted DB connections are accepted.
+export const SslEnforcement = z.object({
+  currentConfig: z.object({ database: z.boolean() }),
+  appliedSuccessfully: z.boolean().optional(),
+});
+export type SslEnforcement = z.infer<typeof SslEnforcement>;
+
 export const Advisor = z.object({
   name: z.string(),
   title: z.string(),
@@ -216,6 +261,18 @@ export const Analysis = z.object({
   functions: EdgeFunctions,
   functionStats: z.array(FunctionUsage),
   buckets: StorageBuckets,
+  // Security config planes (auth / network / SSL). Null in no-PAT mode (no
+  // Management API); nullable + defaulted for back-compat with analysis.json
+  // written before this plane existed. Each sub-plane is independently nullable
+  // (a single endpoint can 403 on a restricted PAT without nulling the rest).
+  security: z
+    .object({
+      auth: AuthConfig.nullable(),
+      networkRestrictions: NetworkRestrictions.nullable(),
+      sslEnforcement: SslEnforcement.nullable(),
+    })
+    .nullable()
+    .default(null),
   advisors: z.object({
     performance: z.array(Advisor),
     security: z.array(Advisor),
@@ -246,6 +303,12 @@ export const Analysis = z.object({
     locks: SqlRows,
     blocking: SqlRows,
     storageUsage: SqlRows,
+    // Extension inventory + pgvector index health. Defaulted for back-compat
+    // with analysis.json written before these queries existed (an internal
+    // composed field, not an external API response - the no-.default rule is
+    // about masking upstream API shape drift, which does not apply here).
+    extensions: SqlRows.default([]),
+    unindexedVectors: SqlRows.default([]),
   }),
   metrics: z.object({
     available: z.boolean(),

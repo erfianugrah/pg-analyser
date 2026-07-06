@@ -99,6 +99,9 @@ export async function collect(
     pooler,
     backups,
     upgrade,
+    authConfig,
+    networkRestrictions,
+    sslEnforcement,
     functions,
     buckets,
     perfAdvisors,
@@ -127,6 +130,8 @@ export async function collect(
     locks,
     blocking,
     storageUsage,
+    extensions,
+    unindexedVectors,
     metricsText,
   ] = await Promise.all([
     mgmt("health", (mm) => mm.health(ref), []),
@@ -136,6 +141,9 @@ export async function collect(
     mgmt("pooler", (mm) => mm.pooler(ref), null),
     mgmt("backups", (mm) => mm.backups(ref), null),
     mgmt("upgrade", (mm) => mm.upgrade(ref), null),
+    mgmt("authConfig", (mm) => mm.authConfig(ref), null),
+    mgmt("networkRestrictions", (mm) => mm.networkRestrictions(ref), null),
+    mgmt("sslEnforcement", (mm) => mm.sslEnforcement(ref), null),
     mgmt("functions", (mm) => mm.functions(ref), []),
     mgmt("buckets", (mm) => mm.buckets(ref), []),
     mgmt("advisors:performance", (mm) => mm.advisors(ref, "performance"), []),
@@ -164,6 +172,8 @@ export async function collect(
     sql("locks"),
     sql("blocking"),
     sql("storageUsage"),
+    sql("extensions"),
+    sql("unindexedVectors"),
     transport
       ? safe(
           "metrics",
@@ -316,6 +326,10 @@ export async function collect(
     functions,
     functionStats,
     buckets,
+    // Security config planes - absent entirely in no-PAT mode (no Management
+    // API). In PAT mode each sub-plane is whatever mgmt() resolved (null on a
+    // per-endpoint 403/beta-gate, the parsed config otherwise).
+    security: noPat ? null : { auth: authConfig, networkRestrictions, sslEnforcement },
     advisors: { performance: performanceAdvisors, security: securityAdvisors },
     apiCounts,
     sql: {
@@ -343,6 +357,8 @@ export async function collect(
       locks,
       blocking,
       storageUsage,
+      extensions,
+      unindexedVectors,
     },
     metrics: { available: metricsText != null, samples },
     trends,

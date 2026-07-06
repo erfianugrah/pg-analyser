@@ -79,6 +79,23 @@ export class Management {
     );
   }
 
+  /** GoTrue auth config (MFA / password policy / signup / anonymous / JWT TTL). */
+  authConfig(ref: string) {
+    return this.#json(`/v1/projects/${ref}/config/auth`).then((d) => S.AuthConfig.parse(d));
+  }
+
+  /** DB network restrictions (allowed CIDRs); empty = reachable from any IP. */
+  networkRestrictions(ref: string) {
+    return this.#json(`/v1/projects/${ref}/network-restrictions`).then((d) =>
+      S.NetworkRestrictions.parse(d),
+    );
+  }
+
+  /** SSL enforcement (whether unencrypted DB connections are refused). */
+  sslEnforcement(ref: string) {
+    return this.#json(`/v1/projects/${ref}/ssl-enforcement`).then((d) => S.SslEnforcement.parse(d));
+  }
+
   advisors(ref: string, type: "performance" | "security") {
     return this.#json(`/v1/projects/${ref}/advisors/${type}`).then((d) =>
       S.AdvisorResponse.parse(d),
