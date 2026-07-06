@@ -1,19 +1,25 @@
 # sbperf
 
-Supabase performance analysis, PAT-only. Pulls advisors, read-only SQL
-diagnostics, project config, and infra metrics, and renders a self-contained
-**HTML + PDF** report you can drag straight into an email or Slack.
+Supabase performance analysis. Pulls advisors, read-only SQL diagnostics,
+project config, and infra metrics, and renders a self-contained **HTML + PDF**
+report you can drag straight into an email or Slack.
 
-One reproducible command produces the whole report from the Management API,
-read-only SQL, and the project metrics endpoint - no superuser connection
-string and no manual dashboard screenshots to assemble.
+**PAT-first**: one reproducible command produces the whole report from just a
+Personal Access Token - the Management API, read-only SQL, and the project
+metrics endpoint, no superuser connection string and no manual dashboard
+screenshots to assemble. Two optional tiers extend it: a superuser `--db-url`
+adds full-access SQL (real `inspect`, all schemas, any Postgres) on top of the
+PAT, and a **no-PAT** mode audits a customer project you only have a DB
+connstring for (superuser SQL + self-hosted splinter advisors + Grafana trends,
+all driven by one `--profile` JSON). See the [superuser](#superuser-sql-your-own-projects---db-url)
+and [no-PAT](#no-pat-customer-audits---no-pat----profile) sections below.
 
 ## Requirements
 
 | For                 | You need                                                                                | If missing                                                                                            |
 | ------------------- | --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
 | Running from source | [Bun](https://bun.sh) (`curl -fsSL https://bun.sh/install \| bash`)                     | `bun: command not found` at the shell. Or use the compiled binary (below), which needs nothing.       |
-| Auth (always)       | A Supabase **Personal Access Token** - `SUPABASE_ACCESS_TOKEN`, or run `supabase login` | The tool exits with `config error: no access token ...` and the token URL.                            |
+| Auth (PAT modes)    | A Supabase **Personal Access Token** - `SUPABASE_ACCESS_TOKEN`, or run `supabase login` | The tool exits with `config error: no access token ...` and the token URL. (Not needed in no-PAT mode, which runs on a superuser `--db-url` instead.) |
 | `pdf` / `full` only | A system **Chrome/Chromium** on PATH (or `SBPERF_CHROME=/path/to/chrome`)               | `pdf`/`full` exit with `no Chrome/Chromium found ...`. `analyze` and `report` (HTML) work without it. |
 
 sbperf checks each of these and fails with an actionable message - it never
@@ -43,6 +49,17 @@ bun run src/index.ts pdf     ./reports/myproject    # report.pdf
 bun run src/index.ts summary ./reports/myproject    # optional plain-language one-pager (summary.html)
 bun run src/index.ts narrate ./reports/myproject    # executive summary (optional LLM pass / copy-paste)
 bun run src/index.ts import-trends ./reports/myproject series.csv  # merge external trends
+```
+
+Two run-comparison commands work over a pair of report dirs (or the two most
+recent history-store snapshots via `--ref`):
+
+```bash
+bun run src/index.ts diff  ./reports/before ./reports/after   # findings delta + per-queryid regressions
+bun run src/index.ts diff  --ref <ref>                         # same, over the two latest snapshots
+bun run src/index.ts check ./reports/myproject --fail-on high  # CI gate: exit 1 if findings breach the threshold
+#   --category Performance|Security|Capacity   scope the gate to one category
+#   --new-since ./reports/baseline             gate only on NEWLY-appeared findings
 ```
 
 `report`/`pdf` emit a single combined document (`report.html` / `report.pdf`)
@@ -112,15 +129,31 @@ bun run src/index.ts report <dir>            # draws trends from accumulated sna
 
 ## What it collects
 
-- **Advisors** - performance + security lints (Management API; richer than the CLI)
-- **Read-only SQL** - `pg_stat_statements` outliers + most-frequent queries,
-  table/index cache-hit % (with stats-window age), biggest tables, unused
-  indexes, duplicate indexes, sequential-scan-heavy tables, threshold-aware
-  autovacuum lag, txid wraparound, replication-slot lag, connection state +
-  per-role usage
+- **Advisors** - performance + security lints (Management API; richer than the
+  CLI). With a superuser `--db-url`, self-hosted `splinter.sql` runs as a
+  fallback when the hosted advisor endpoint 400s, and is the sole advisor source
+  in no-PAT mode
+- **Read-only SQL** - `pg_stat_statements` outliers + most-frequent queries
+  (keyed by `queryid` for cross-run regression tracking), **per-query I/O depth**
+  (temp-file spill, disk-read miss, latency variance), table/index cache-hit %
+  (with stats-window age), biggest tables, unused indexes, duplicate indexes,
+  sequential-scan-heavy tables, estimated bloat, traffic profile (read/write
+  ratio), threshold-aware autovacuum lag, txid wraparound, replication-slot lag,
+  connection state + per-role usage, and **point-in-time contention** (locks,
+  blocking, long-running + idle-in-transaction backends, captioned as snapshots)
 - **RLS policy audit** - flags policies re-evaluating `auth.*()` per row (should
   be wrapped in `(select ...)`; 94-99% latency win per Supabase's guide) and RLS
   policy columns without a covering index (seq scan per row check)
+- **Security config** - the DB IP allowlist (network restrictions), SSL
+  enforcement, and GoTrue auth config (MFA required, password policy, anonymous
+  sign-ins, JWT expiry, email auto-confirm) turned into sbperf-original Security
+  findings (not just advisor-lint passthrough)
+- **Auth adoption** - user / confirmed / 30-day-active counts + MFA enrolment,
+  from `auth.*` (SQL, so it works in no-PAT mode too)
+- **Scheduled jobs (pg_cron)** - per-job run health over the last 7 days
+  (failed-run count, last run) - the ETL/automation plane the advisor can't see
+- **Extensions** - full extension inventory + an outdated-version nudge, plus
+  pgvector ANN-index health (a vector column with no HNSW/IVFFlat index)
 - **Metrics-derived signals** - cumulative deadlocks, work_mem spill to disk
   (temp-file rate), and a `postgres_changes` -> Broadcast nudge for realtime at
   scale (swap is kept as a trend series, not a finding - static swap occupancy
@@ -352,7 +385,10 @@ exactly the panels a Grafana node_exporter dashboard shows. History is not
 retroactive; it accrues from your first `snapshot`.
 
 Flags: `--store <db>` (default `~/.sbperf/history.db`, keyed by ref so one
-store holds every project), `--retention-days <n>`.
+store holds every project), `--retention-days <n>`. The trend **query window**
+is `--trend-days <n>` (default 30; `SBPERF_TREND_DAYS`, or a profile's
+`trendDays`, also set it) and auto-scopes down to a project's real data span, so
+a young project re-queries at its actual span instead of a mostly-empty 30d.
 
 ### Feed the corpus to Grafana (retroactive)
 
@@ -486,6 +522,41 @@ Every field is optional and overrides the default:
 - The report _title_ stays "Supabase performance report" (it analyses Supabase);
   branding controls who delivers it. `sbperf.brand.json` is gitignored.
 
+## Review overlays (per-project annotations)
+
+A review **overlay** is a presentation-only layer keyed by project ref: hide
+specific evidence drill-down sections and append reviewer notes, without ever
+touching `analysis.json` or the narrate input.
+
+```bash
+cp sbperf.overlay.example.json sbperf.overlays/<ref>.json   # auto-loaded by ref
+# ...or: --overlay path/to/overlay.json  /  SBPERF_OVERLAY=path/to/overlay.json
+bun run src/index.ts report ./reports/myproject
+```
+
+- Hideable ids are the `drill()` section ids; notes are appended as Markdown.
+- Precedence: `--overlay` > `SBPERF_OVERLAY` > `./sbperf.overlays/<ref>.json` >
+  `~/.sbperf/overlays/<ref>.json` > none.
+- Purely cosmetic - the underlying data and findings are unchanged. Overlays are
+  gitignored (keep the `.example`).
+
+## Logging
+
+Structured logs go to **stderr** (stdout is reserved for report/JSON output, so
+`diff`/`check`/`... > out.json` stay pipe-clean). Control with env vars:
+
+- `SBPERF_LOG_LEVEL` = `debug | info | warn | error` (default `info`).
+- `SBPERF_LOG=json` emits one JSON object per line (for log shippers); the
+  default is a compact pretty format.
+- `SBPERF_DEBUG=1` prints full error stack traces instead of a one-line message.
+
+A **multi-project sweep** (`full --profile` / `full --all` / `full --db-url`)
+quiets routine per-plane INFO by default so the live progress bar stays
+readable - each project leaves one summary line (`ok - N findings (3.1s, 19
+trend pts, 2 notes)`) and only WARN/ERROR interrupt it. Set
+`SBPERF_LOG_LEVEL=info` (or `debug`) to restore the full per-plane stream during
+a sweep.
+
 ## Troubleshooting
 
 | Symptom                                              | Fix                                                                                                                                  |
@@ -497,6 +568,7 @@ Every field is optional and overrides the default:
 | `narrate needs an LLM: set SBPERF_LLM_...`           | Set `SBPERF_LLM_BASE_URL` + `SBPERF_LLM_MODEL` (see the Narrative section).                                                          |
 | Footer says advisor lint SQL drifted / catalog stale | Re-vendor `src/splinter.sql` from `supabase/splinter`, or re-review `docs/heuristics.md`. Advisory only; `--no-sync-check` skips it. |
 | Report shows a degraded/empty state                  | Project is paused or unreachable - empty sections mean "not collected", not "clean". The collection-notes section lists why.         |
+| A sweep is too quiet / you want per-plane detail     | Set `SBPERF_LOG_LEVEL=info` (or `debug`); a multi-project sweep quiets routine INFO by default (see Logging).                        |
 
 ## Staying in sync with the API
 

@@ -58,6 +58,8 @@ date tracks when we last confirmed them against upstream.
 | `duplicate_index` | two indexes with identical column set on a table | any pair | med | HAVE |
 | `top_time_query` | `pg_stat_statements` top by total_exec_time | >= 10% of DB time | med | PARTIAL |
 | `functional_predicate` | WHERE wraps an indexed col in a function (e.g. `left(id::text,n)`) defeats the index -> seq scan | any on large table | med | NEW (best-effort; narrate diagnoses root cause) |
+| `query_temp_spill` | a single query's `pg_stat_statements.temp_blks_written` (sorts/hashes spilling to disk) | >= `tempSpillBlocks` 12500 blks (~100MB) | med | HAVE |
+| `query_high_variance` | a query's coefficient of variation (stddev/mean exec time), floored on mean | cv >= `queryCvWarn` 2 AND mean >= `queryCvMinMeanMs` 10ms | low | HAVE |
 
 Notes:
 - Duplicate indexes: each copy is maintained on every write for zero read
@@ -147,6 +149,7 @@ only decide the default.
 | _(display)_ role-usage table shown | max role conn / limit >= `roleConnShowFrac` 50% | - | presentation gate |
 | `pooler_clients_waiting` | `pgbouncer_pools_client_waiting_connections` | > 0 | med | HAVE |
 | `connections_ceiling` | peak `pg_stat_database_num_backends` (trend) vs `max_connections` (pg_settings) | peak >= 80% of max | high | HAVE (trend) |
+| `idle_in_txn_open` | a backend in `idle in transaction` at collection time (`pg_stat_activity` max state age) - pins locks + xmin horizon | >= `idleInTxnAgeS` 300s | med | HAVE |
 | `txn_pooler_prepared_stmts` | txn-mode pool (port 6543) + prepared statements | pool_mode=transaction | low | NEW (informational) |
 
 Notes:
@@ -315,6 +318,11 @@ tuning references.
 | `auth_rate_limited` | 429s on `/auth/v1/*` (token bucket, cap 30) | any sustained | med | NEW |
 | `auth_5xx` | 500 on `/auth/v1/*` (usually a DB trigger/function on `auth.users`) | any | high | NEW |
 | `auth_email_default_smtp` | built-in email provider (2 emails/hr cap) | using default SMTP | low | NEW (config) |
+| `auth_email_autoconfirm` | GoTrue `mailer_autoconfirm = true` (signups auto-confirmed without verifying the address) | enabled | med | HAVE |
+| `auth_mfa_disabled` | no `mfa_*_verify_enabled` factor enabled project-wide (fields present) | none enabled | low | HAVE |
+| `auth_weak_password_policy` | `password_min_length < 8` OR `password_hibp_enabled = false` | len < `passwordMinLength` 8 (med) / HIBP off (low) | med/low | HAVE |
+| `auth_anonymous_users` | `external_anonymous_users_enabled = true` (awareness - confirm RLS + rate limits) | enabled | low | HAVE |
+| `auth_long_jwt` | access-token TTL `jwt_exp` above the 1h default | > `jwtExpMaxSec` 3600s | low | HAVE |
 
 Rate-limit quotas (Supabase Auth rate-limit docs; token-bucket cap 30, per IP
 unless noted; some customizable in Authentication > Rate Limits):
@@ -393,7 +401,7 @@ Sources: production war stories; Supabase system-design best-practices.
 | id | signal | threshold | sev | status |
 |---|---|---|---|---|
 | `pg_update_available` | `current_app_version != latest_app_version` | mismatch | low | HAVE |
-| `pitr_disabled` | `backups.pitr_enabled = false` on a production project | disabled | low | NEW (informational) |
+| `pitr_absent` | no-PAT + superuser sees no live WAL archiving (`archive_mode` off, or on with `archived_count = 0`); gated to no-PAT so it never contradicts `backups.pitr_enabled` | not archiving | low | HAVE |
 | `storage_bucket_public` | a bucket is public | any (security note, cross-ref advisor) | low | NEW (informational) |
 
 Notes: PITR / backup posture and public-bucket exposure are informational
@@ -401,6 +409,45 @@ hygiene, not perf - surfaced low-severity so the "what to check" story is
 complete without alarming.
 
 Sources: Supabase Backups / Storage docs; live advisors for the security angle.
+
+---
+
+## 12. Security configuration (network / SSL / pg_hba)
+
+| id | signal | threshold | sev | status |
+|---|---|---|---|---|
+| `network_restrictions_open` | `dbAllowedCidrs`/`dbAllowedCidrsV6` empty or contains `0.0.0.0/0` or `::/0` (Postgres port reachable from any IP) | no allowlist or open CIDR | med | HAVE |
+| `ssl_not_enforced` | `sslEnforcement.currentConfig.database = false` (server accepts unencrypted connections) | SSL enforcement off | med | HAVE |
+| `hba_weak_auth` | `pg_hba_file_rules` trust/password/ident rule for a non-loopback, non-replication address (superuser --db-url only) | any such rule | med | HAVE |
+
+These are sbperf-ORIGINAL Security findings derived from Management-API config
+planes (network-restrictions, ssl-enforcement) plus a superuser `pg_hba_file_rules`
+check - not advisor-lint passthrough. `hba_weak_auth` needs a TRUE superuser
+(`supabase_admin`) and fires only on a real auth bypass (a non-`scram-sha-256`
+rule from a non-loopback address), NOT on host-vs-hostssl (Supabase terminates
+TLS at the proxy, so its standard pg_hba is all `host ... scram-sha-256`).
+
+Sources: Supabase Network Restrictions / SSL Enforcement docs; PG docs pg_hba.conf.
+
+---
+
+## 13. Extensions & scheduled jobs (pgvector, pg_cron)
+
+| id | signal | threshold | sev | status |
+|---|---|---|---|---|
+| `pgvector_unindexed` | a `vector` column with no ANN (ivfflat/hnsw) index | any | med | HAVE |
+| `extensions_outdated` | installed extension behind `pg_available_extensions.default_version` | any | low | HAVE |
+| `cron_job_failing` | `cron.job_run_details` failed runs in the last 7 days | failed_runs > 0 | med | HAVE |
+| `pg_cron_review` | pg_cron installed but no run-detail visibility (fallback nudge) | pg_cron present + 0 cron jobs seen | low | HAVE |
+
+Notes: the pg_cron plane is the ETL/automation health the advisor can't see; a
+failed scheduled job is a real (often silent) outage. pgvector without an ANN
+index forces an exact full scan on every similarity search. Both run as pure SQL,
+so they work in no-PAT mode too. A missing `cron.*` schema is an expected absence
+(logged debug "plane absent", not a warn) on a DB without pg_cron.
+
+Sources: Supabase pgvector / AI & Vectors docs; pg_cron docs; supabase/cli
+inspect SQL.
 
 ---
 
@@ -425,6 +472,9 @@ function of the measured value), `title(ctx)`, `evidence(ctx)`, `remediation`,
   routine vacuuming.
 - Supabase Auth Rate Limits; Auth Error Codes; JWT Signing Keys.
 - Supabase Realtime Limits / Subscribing to DB Changes / Architecture.
+- Supabase Network Restrictions / SSL Enforcement; PG docs pg_hba.conf.
+- Supabase AI & Vectors (pgvector); pg_cron docs; Supabase Cron.
+- Supabase GoTrue auth config (MFA / password policy / anonymous sign-ins / JWT).
 - supabase/cli inspect SQL (github.com/supabase/cli apps/cli-go/internal/inspect);
   supabase/splinter (vendored splinter.sql).
 - War stories: trigger.dev xmin-horizon; dev.to 2B-XID; GaryAustin1/RLS-
