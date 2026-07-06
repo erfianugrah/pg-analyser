@@ -105,6 +105,31 @@ describe("buildNarrativeInput", () => {
     expect(input.trends[0]).toHaveProperty("perDay");
   });
 
+  test("digest surfaces the new per-query I/O, auth, and cron signals", () => {
+    const a = base();
+    a.sql.queryIoStats = [
+      {
+        query: "select big()",
+        calls: 200,
+        mean_ms: 40,
+        cv: 3,
+        temp_written: "120 MB",
+        miss_pct: 40,
+      },
+      { query: "noise", calls: 5, mean_ms: 1, cv: 0, temp_blks_written: 0, shared_blks_read: 0 },
+    ];
+    a.sql.authAudit = [{ total_users: 100, confirmed_users: 90, active_30d: 40 }];
+    a.sql.authMfa = [{ mfa_users: 12 }];
+    a.sql.cronJobs = [{ jobname: "etl", failed_runs: 2, runs_7d: 7 }];
+    const input = buildNarrativeInput(a);
+    // only the signal-carrying io row is passed (the noise row is filtered)
+    expect(input.evidence.queryIoOutliers).toHaveLength(1);
+    expect(input.evidence.queryIoOutliers[0]?.temp_written).toBe("120 MB");
+    // auth adoption merges the separate MFA query
+    expect(input.evidence.authAdoption).toMatchObject({ total_users: 100, mfa_users: 12 });
+    expect(input.evidence.scheduledJobs).toHaveLength(1);
+  });
+
   test("flags degraded collection so the model can caveat", () => {
     const a = base();
     a.meta.status = "INACTIVE";
