@@ -457,9 +457,14 @@ export const QUERIES = {
       last_failed_time::text as last_failed_time
     from pg_stat_archiver`,
 
-  // Host-based auth rules (pg_hba_file_rules, superuser-only view). The no-PAT
-  // proxy for the ssl-enforcement plane: a `host`/`hostnossl` TCP rule with a
-  // non-reject auth method means the DB layer admits UNENCRYPTED connections.
+  // Host-based auth rules (pg_hba_file_rules). The no-PAT proxy for the
+  // ssl-enforcement plane: a `host`/`hostnossl` TCP rule with a non-reject auth
+  // method means the DB layer admits UNENCRYPTED connections.
+  // Needs a TRUE superuser: verified against the Supabase postgres image, the
+  // `postgres` role is NOT superuser (no pg_read_all_settings) and is DENIED;
+  // only `supabase_admin` (rolsuper) can read it. So this populates only when
+  // --db-url is the supabase_admin connstring; other roles degrade to [] via
+  // safe() - which is exactly why the finding is gated to no-PAT.
   // PARTIAL signal only - Supabase terminates TLS at the pooler/proxy, so this
   // reflects DB-layer pg_hba, not the platform SSL toggle. Evidence + a hedged
   // low finding, used only when the authoritative plane is absent. database and
