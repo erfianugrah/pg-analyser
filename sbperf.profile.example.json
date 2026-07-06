@@ -2,15 +2,15 @@
   "noPat": true,
   "trendDays": 30,
   "grafana": {
-    "hostTemplate": "https://grafana-{region}.example.com",
+    "hostTemplate": "https://grafana-{identifier}.example.com",
     "datasourceUid": "REPLACE_WITH_PROMETHEUS_DATASOURCE_UID",
     "matcher": "REPLACE_with_your_scrapers_project_label_selector__e.g__<label>=\"<prefix>-{ref}\"__or__supabase_project_ref=\"{ref}\"__(a wrong/unset matcher matches 0 series; {ref} is substituted per project)",
     "regions": {
       "ap-southeast-1": {
-        "cookie": "REPLACE_WITH_THE_ap-southeast-1_SESSION_COOKIE_HEADER"
+        "cookie": "REPLACE_WITH_THE_SESSION_COOKIE_HEADER"
       },
       "eu-central-1": {
-        "cookie": "REPLACE_WITH_THE_eu-central-1_SESSION_COOKIE_HEADER",
+        "cookie": "REPLACE_WITH_THE_SESSION_COOKIE_HEADER",
         "uid": "OPTIONAL_PER_REGION_DATASOURCE_UID_OVERRIDE",
         "host": "https://grafana-eu-central-1.example.com"
       }
