@@ -1,5 +1,26 @@
 # TODO
 
+## Shipped 2026-07-06
+No-PAT parity, security posture, run-comparison, and report/CLI polish:
+- [x] no-PAT customer-audit mode: superuser `--db-url` as the SOLE source (no
+      token), splinter advisors fill perf+security, trends via Grafana; the whole
+      config in one gitignored `--profile` JSON (region-mapped Grafana creds +
+      customer DBs). SQL fill-ins: buckets, pgConfig, PITR-via-WAL-archiving,
+      pg_hba weak-auth.
+- [x] security-config Security findings (sbperf-original, not advisor passthrough):
+      network restrictions open, SSL not enforced, email auto-confirm, no MFA,
+      weak password policy, anon sign-ins, long JWT. Field names verified live.
+- [x] `diff` (findings delta + per-queryid regressions, run-to-run or over the two
+      latest snapshots) and `check` (CI gate: `--fail-on`/`--category`/`--new-since`).
+- [x] per-query I/O depth (temp-file spill, latency variance, disk-read miss);
+      auth adoption + pg_cron ETL health (pure SQL, so no-PAT gets them too);
+      pgvector ANN-index health; extension-outdated nudge.
+- [x] structured logging (src/log.ts, zero-dep, NOT pino) + collection timing;
+      curated changelog catalog on findings (verified-200 Supabase entries).
+- [x] CLI sweep UX: progress bar + logger cooperate (no smeared lines); routine
+      per-plane INFO quieted during a sweep (SBPERF_LOG_LEVEL restores it); a
+      missing optional relation is a debug "plane absent", not a warn.
+
 ## Shipped 2026-07-03
 New checks (grounded in docs/heuristics.md, unit-tested):
 - [x] duplicate-index check (SQL, splinter-derived) - fires over the read-only
@@ -33,10 +54,10 @@ Report + workflow:
 
 ## Remaining / ideas
 Nothing outstanding from the planned backlog. Candidate next steps (unprioritised):
-- narrate: optionally render narrative.md -> narrative.html and/or embed it in
-  report.html behind a flag.
-- import-trends: long-format CSV (time,series,value) in addition to wide.
 - sqlrunner.ts has no unit test (network-bound); consider a fake-connection test.
+
+(Shipped since last edit: narrate now writes narrative.html + `--narrative`
+embeds it in report/pdf; import-trends parses long-format CSV as well as wide.)
 
 ## Done
 - [x] PAT-only collector across Management API + read-only SQL + metrics
