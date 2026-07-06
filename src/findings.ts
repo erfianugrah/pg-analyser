@@ -260,6 +260,38 @@ export function deriveFindings(a: Analysis): Finding[] {
       ...meta("cache_hit_low"),
     });
   }
+  // Per-query work_mem spill: a repeatedly-called query writing large temp files
+  // has sorts/hashes exceeding work_mem and spilling to disk (slow + extra IOPS).
+  // More actionable than the aggregate temp-file trend - it names the query.
+  const spill = a.sql.queryIoStats.find(
+    (r) => num(r.temp_blks_written) >= THRESHOLDS.tempSpillBlocks,
+  );
+  if (spill) {
+    out.push({
+      severity: "med",
+      category: "Performance",
+      title: `A query is spilling to disk (${spill.temp_written ?? "temp files"} over ${spill.calls} calls)`,
+      anchor: "#queryio",
+      evidence: String(spill.query ?? ""),
+      ...meta("query_temp_spill"),
+    });
+  }
+  // Latency instability: high coefficient of variation (stddev/mean) on a query
+  // that isn't trivially fast - plan flips, lock waits, or cache variance make
+  // its p99 much worse than its mean suggests.
+  const vary = a.sql.queryIoStats.find(
+    (r) => num(r.cv) >= THRESHOLDS.queryCvWarn && num(r.mean_ms) >= THRESHOLDS.queryCvMinMeanMs,
+  );
+  if (vary) {
+    out.push({
+      severity: "low",
+      category: "Performance",
+      title: `A query has unstable latency (${vary.cv}x variation around a ${vary.mean_ms}ms mean)`,
+      anchor: "#queryio",
+      evidence: String(vary.query ?? ""),
+      ...meta("query_high_variance"),
+    });
+  }
   const unwrapped = a.sql.rlsPolicies.filter((r) => r.unwrapped_auth === true).length;
   if (unwrapped > 0) {
     out.push({

@@ -137,6 +137,31 @@ export const QUERIES = {
     order by calls desc
     limit 20`,
 
+  // Per-query I/O + latency-stability depth from pg_stat_statements - the signal
+  // top-by-time/calls misses: work_mem SPILL (temp_blks_written), disk-heavy
+  // reads (shared_blks miss %), and latency INSTABILITY (stddev/mean = coeff of
+  // variation). Ranks by the worst axis so one query can surface for any of them;
+  // findings read the per-row values. calls>=20 keeps one-off maintenance out.
+  queryIoStats: /* sql */ `
+    select
+      queryid::text as queryid,
+      calls,
+      round(mean_exec_time::numeric, 2) as mean_ms,
+      round(stddev_exec_time::numeric, 2) as stddev_ms,
+      round((stddev_exec_time / nullif(mean_exec_time, 0))::numeric, 2) as cv,
+      temp_blks_written,
+      pg_size_pretty(temp_blks_written * 8192::bigint) as temp_written,
+      shared_blks_read,
+      round((shared_blks_read * 100.0
+        / nullif(shared_blks_hit + shared_blks_read, 0))::numeric, 1) as miss_pct,
+      left(regexp_replace(query, '\\s+', ' ', 'g'), 160) as query
+    from extensions.pg_stat_statements
+    where query not ilike all (array[${PLATFORM_NOISE}])
+      and query !~* '${NOT_APP_STATEMENT}'
+      and calls >= 20
+    order by temp_blks_written desc, shared_blks_read desc, stddev_exec_time desc
+    limit 20`,
+
   biggestTables: /* sql */ `
     select
       schemaname as schema,

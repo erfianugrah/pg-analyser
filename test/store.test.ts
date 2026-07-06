@@ -42,6 +42,7 @@ function makeAnalysis(opts: {
       pgSettings: [],
       topStatements: [],
       topByCalls: [],
+      queryIoStats: [],
       biggestTables: [],
       indexStats: [],
       duplicateIndexes: [],

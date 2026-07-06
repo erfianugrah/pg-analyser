@@ -36,6 +36,7 @@ function base(): Analysis {
       pgSettings: [],
       topStatements: [],
       topByCalls: [],
+      queryIoStats: [],
       biggestTables: [],
       indexStats: [],
       duplicateIndexes: [],

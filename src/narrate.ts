@@ -70,6 +70,21 @@ export function buildNarrativeInput(a: Analysis) {
     pct_calls: r.pct_calls ?? null,
     calls: r.calls ?? null,
   }));
+  // Per-query I/O depth: only the rows that actually carry a signal (temp spill,
+  // disk-read miss, or latency variation) so the model reasons about the WHY.
+  const ioOutliers = a.sql.queryIoStats
+    .filter(
+      (r) => Number(r.temp_blks_written) > 0 || Number(r.shared_blks_read) > 0 || Number(r.cv) >= 1,
+    )
+    .slice(0, 6)
+    .map((r) => ({
+      query: truncate(r.query, 120),
+      calls: r.calls ?? null,
+      mean_ms: r.mean_ms ?? null,
+      cv: r.cv ?? null,
+      temp_written: r.temp_written ?? null,
+      read_miss_pct: r.miss_pct ?? null,
+    }));
   const tables = a.sql.biggestTables.slice(0, 8).map((r) => ({
     table: r.table,
     size: r.total_size ?? r.size ?? null,
@@ -124,6 +139,7 @@ export function buildNarrativeInput(a: Analysis) {
     evidence: {
       queryOutliers: outliers,
       frequentQueries: frequent,
+      queryIoOutliers: ioOutliers,
       biggestTables: tables,
       unusedIndexes: publicRows(a.sql.indexStats).filter((r) => r.unused === true).length,
       duplicateIndexes: publicRows(a.sql.duplicateIndexes).length,
