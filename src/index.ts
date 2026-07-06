@@ -357,6 +357,7 @@ function makeProgress(total: number): {
     step(l) {
       label = l;
       if (tty) {
+        if (timer) clearInterval(timer);
         paint();
         timer = setInterval(paint, 90);
       }
@@ -867,7 +868,7 @@ async function embedNarrative(dir: string, analysis: Analysis, md: string): Prom
   await Bun.write(join(dir, "narrative.html"), renderNarrativePage(analysis, activeBrand));
   console.error(`> ${path}`);
   console.error(`> ${join(dir, "narrative.html")}`);
-  console.error("> embed in the report with: sbperf report " + dir + " --narrative");
+  console.error(`> embed in the report with: sbperf report ${dir} --narrative`);
   return path;
 }
 
@@ -894,7 +895,7 @@ async function doNarrate(
           `Paste the chat LLM's ANSWER (the analysis, starting with "## Executive summary") - not prompt.md.`,
       );
     const header = `<!-- imported into sbperf from ${where}; the deterministic report.html is ground truth -->\n\n`;
-    return embedNarrative(dir, analysis, header + md + "\n");
+    return embedNarrative(dir, analysis, `${header}${md}\n`);
   }
 
   // Give the LLM (or the pasted prompt) the trend context too, without baking

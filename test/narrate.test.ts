@@ -75,11 +75,11 @@ function base(): Analysis {
 
 describe("buildNarrativeInput", () => {
   test("includes findings with remediation + doc, and bounds the evidence", () => {
-    const input = buildNarrativeInput(base()) as any;
+    const input = buildNarrativeInput(base());
     expect(Array.isArray(input.findings)).toBe(true);
-    const cache = input.findings.find((f: any) => f.title.includes("Cache hit ratio 92%"));
-    expect(cache.remediation).toBeTruthy();
-    expect(cache.doc).toContain("http");
+    const cache = input.findings.find((f) => f.title.includes("Cache hit ratio 92%"));
+    expect(cache?.remediation).toBeTruthy();
+    expect(cache?.doc).toContain("http");
     // outliers capped at 8 even though 20 were provided
     expect(input.evidence.queryOutliers).toHaveLength(8);
     expect(input.evidence.duplicateIndexes).toBe(1);
@@ -98,14 +98,14 @@ describe("buildNarrativeInput", () => {
   test("flags degraded collection so the model can caveat", () => {
     const a = base();
     a.meta.status = "INACTIVE";
-    expect((buildNarrativeInput(a) as any).degraded).toBe(true);
+    expect(buildNarrativeInput(a).degraded).toBe(true);
   });
 
   test("no-PAT mode: unknown status is NOT degraded; managementApi flagged", () => {
     const a = base();
     a.meta.managementApi = false;
     a.meta.status = "unknown";
-    const input = buildNarrativeInput(a) as any;
+    const input = buildNarrativeInput(a);
     expect(input.degraded).toBe(false); // unknown status in no-PAT != degraded
     expect(input.project.managementApi).toBe(false);
   });
@@ -142,11 +142,11 @@ describe("narrate", () => {
 describe("OpenAiCompatClient", () => {
   test("posts chat/completions with auth + model and parses the content", async () => {
     let seenUrl = "";
-    let seenBody: any = null;
+    let seenBodyRaw = "";
     let seenAuth = "";
     const fetchImpl = (async (url: string, init: RequestInit) => {
       seenUrl = url;
-      seenBody = JSON.parse(init.body as string);
+      seenBodyRaw = init.body as string;
       seenAuth = (init.headers as Record<string, string>).authorization ?? "";
       return new Response(JSON.stringify({ choices: [{ message: { content: "hi" } }] }), {
         status: 200,
@@ -156,7 +156,7 @@ describe("OpenAiCompatClient", () => {
     const out = await c.complete([{ role: "user", content: "q" }]);
     expect(out).toBe("hi");
     expect(seenUrl).toBe("https://api.example.com/v1/chat/completions");
-    expect(seenBody.model).toBe("m1");
+    expect(JSON.parse(seenBodyRaw).model).toBe("m1");
     expect(seenAuth).toBe("Bearer sk-x");
   });
 
