@@ -75,10 +75,13 @@ of planes, so a superuser `--db-url` reaches that data directly):
   add-on flag - keyed on archive_mode+count, NOT last_archived_time age (idle
   projects skip WAL backups even with PITR on). Gated to no-PAT so it never
   contradicts the authoritative `backups.pitr_enabled`.
-- **SSL enforcement proxy** <- `pg_hba_file_rules` (`hbaRules` query, superuser
-  view). Low finding `ssl_hba_nonssl` when a host/hostnossl TCP rule with a
-  non-reject auth method exists. PARTIAL signal (Supabase terminates TLS at the
-  pooler/proxy) - gated to no-PAT (ssl-enforcement plane absent).
+- **pg_hba weak-auth** <- `pg_hba_file_rules` (`hbaRules` query, needs a TRUE
+  superuser - `supabase_admin`, NOT the `postgres` role, verified vs the
+  supabase/postgres image). Med finding `hba_weak_auth` when a trust/password/
+  ident rule exists for a NON-loopback, non-replication address (a real auth
+  bypass). NOT an SSL check: Supabase's standard pg_hba is all
+  `host ... scram-sha-256` with TLS terminated at the proxy, so host-vs-hostssl
+  is noise that matches every project (this was the retune after a real run).
 - **Genuinely NOT reachable via SQL** (platform/infra, correctly left null/[]):
   service health, disk provisioning (size/IOPS/type), pooler CONFIG (Supavisor),
   GoTrue authConfig, network restrictions (cloud firewall), edge functions,
@@ -129,6 +132,12 @@ SQL diagnostics run through a `SqlRunner` (`sqlrunner.ts`):
 ```
 src/
   config.ts      zod env -> Config (access token)
+  log.ts         zero-dep structured logger (NOT pino - worker-thread
+                 transports don't survive `bun build --compile`). stderr only
+                 (stdout reserved for report/JSON); SBPERF_LOG_LEVEL +
+                 SBPERF_LOG=json; .child() binds fields, .time() emits
+                 durationMs. collect() logs per-plane timing + a summary and
+                 records meta.collectionMs (shown in the report footer).
   transport.ts   Transport interface + DirectTransport (auth + retry)
   management.ts  typed, zod-parsed Management API wrapper
   sqlrunner.ts   SQL execution tiers behind one interface: ManagementSqlRunner

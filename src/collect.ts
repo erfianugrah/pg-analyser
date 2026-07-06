@@ -1,3 +1,4 @@
+import { log } from "./log.ts";
 import { Management } from "./management.ts";
 import { parsePrometheus } from "./metrics.ts";
 import { fetchTrends } from "./prometheus.ts";
@@ -40,6 +41,9 @@ export async function collect(
   const m = transport ? new Management(transport) : null;
   const noPat = m === null;
   const errors: CollectError[] = [];
+  const startedAt = performance.now();
+  const clog = log.child({ ref, mode: noPat ? "no-pat" : "pat" });
+  clog.info("collect start", { interval: opts.interval ?? "1day" });
   if (noPat && !opts.sqlRunner) {
     throw new Error(
       "no PAT (SUPABASE_ACCESS_TOKEN unset) and no superuser SQL runner: nothing to collect. " +
@@ -68,10 +72,16 @@ export async function collect(
     opts.syncCheck === false ? Promise.resolve(null) : computeSyncStatus();
 
   const safe = async <T>(source: string, fn: () => Promise<T>, fallback: T): Promise<T> => {
+    const done = clog.time("plane", { source });
     try {
-      return await fn();
+      const r = await fn();
+      done({ ok: true });
+      return r;
     } catch (err) {
-      errors.push({ source, message: err instanceof Error ? err.message : String(err) });
+      const message = err instanceof Error ? err.message : String(err);
+      errors.push({ source, message });
+      done({ ok: false });
+      clog.warn("plane failed", { source, error: message });
       return fallback;
     }
   };
@@ -322,10 +332,12 @@ export async function collect(
       securityAdvisors = all.filter((l) => (l.categories ?? []).includes("SECURITY"));
   }
 
+  const collectionMs = Math.round(performance.now() - startedAt);
   const analysis: Analysis = {
     meta: {
       ref,
       name: project?.name ?? opts.name ?? ref,
+      collectionMs,
       region: project?.region ?? opts.region ?? "unknown",
       status: project?.status ?? "unknown",
       // PAT gives the platform version; no-PAT falls back to server_version from
@@ -402,5 +414,12 @@ export async function collect(
     errors,
   };
 
+  clog.info("collect done", {
+    collectionMs,
+    errors: errors.length,
+    metrics: analysis.metrics.available,
+    trends: trends.length,
+    samples: samples.length,
+  });
   return analysis;
 }

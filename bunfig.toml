@@ -1,0 +1,4 @@
+[test]
+# Silence the structured logger during tests (real runs default to info).
+# Preload runs before test files import src/*, so log.ts reads this at load.
+preload = ["./test/setup.ts"]
