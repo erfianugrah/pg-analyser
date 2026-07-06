@@ -887,7 +887,7 @@ ${drill("rls", "RLS policies", "auth.*() should be wrapped: (select auth.uid())"
 
 ${drill("seccfg", "Security configuration", "auth policy, network restrictions, SSL enforcement (Management API)", securityConfigSection(a))}
 
-${a.sql.hbaRules.length ? drill("hba", "Host-based auth (pg_hba)", "pg_hba_file_rules (superuser SQL); host/hostnossl entries admit non-SSL TCP - a DB-layer signal, not the platform SSL toggle", sqlTable(a.sql.hbaRules, { mono: ["address", "user_name"] })) : ""}
+${a.sql.hbaRules.length ? drill("hba", "Host-based auth (pg_hba)", "pg_hba_file_rules (superuser SQL); auth method per source. trust/password/ident from a non-loopback address is a real risk - SSL posture is proxy-terminated and not shown here", sqlTable(a.sql.hbaRules, { mono: ["address", "user_name"] })) : ""}
 
 <h2 id="adv-perf">Advisors - performance <span class=count>${a.advisors.performance.length}</span></h2>${errored.has("advisors:performance") ? '<p class="empty warn-text">not collected</p>' : advisorTable(a.advisors.performance)}
 <h2 id="adv-sec">Advisors - security <span class=count>${a.advisors.security.length}</span></h2>${errored.has("advisors:security") ? '<p class="empty warn-text">not collected</p>' : advisorTable(a.advisors.security)}

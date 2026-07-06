@@ -47,6 +47,7 @@ function fixture(overrides: Partial<Analysis> = {}): Analysis {
       dbSize: "20 MB",
       cacheHitPct: 100,
       indexHitPct: 99.9,
+      cacheBlocksAccessed: null,
       statsResetAge: "8 days 01:02:03",
       pgSettings: [
         { name: "max_connections", setting: "60", unit: null },
@@ -460,6 +461,7 @@ describe("renderSummary", () => {
         dbSize: "20 MB",
         cacheHitPct: 100,
         indexHitPct: 100,
+        cacheBlocksAccessed: null,
         statsResetAge: null,
         pgSettings: [],
         topStatements: [],

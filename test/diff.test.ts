@@ -31,6 +31,7 @@ function base(ref = "r", collectedAt = "2026-01-01T00:00:00Z"): Analysis {
       dbSize: null,
       cacheHitPct: null,
       indexHitPct: null,
+      cacheBlocksAccessed: null,
       statsResetAge: null,
       pgSettings: [],
       topStatements: [],

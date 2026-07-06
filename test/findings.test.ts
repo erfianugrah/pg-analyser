@@ -31,6 +31,7 @@ function base(): Analysis {
       dbSize: null,
       cacheHitPct: null,
       indexHitPct: null,
+      cacheBlocksAccessed: null,
       statsResetAge: null,
       pgSettings: [],
       topStatements: [],
@@ -86,6 +87,45 @@ describe("deriveFindings", () => {
     const a = base();
     a.sql.cacheHitPct = 92;
     expect(deriveFindings(a).some((f) => f.title.includes("Cache hit ratio 92%"))).toBe(true);
+  });
+
+  test("cache hit NOT flagged on a tiny/idle DB (below the access-volume floor)", () => {
+    // Real-world footgun: a 20MB nearly-idle project reports ~59% cache hit,
+    // which is cold-start noise, not a tuning problem. Gate on block volume.
+    const a = base();
+    a.sql.cacheHitPct = 59;
+    a.sql.cacheBlocksAccessed = 500; // well under the floor
+    expect(deriveFindings(a).some((f) => f.title.includes("Cache hit ratio"))).toBe(false);
+    // ...and no false "healthy cache" praise either at low volume
+    a.sql.cacheHitPct = 99.9;
+    expect(derivePositives(a).some((p) => p.title.includes("Cache hit"))).toBe(false);
+  });
+
+  test("cache hit flagged once the DB has done enough block access", () => {
+    const a = base();
+    a.sql.cacheHitPct = 92;
+    a.sql.cacheBlocksAccessed = 5_000_000; // well over the floor
+    expect(deriveFindings(a).some((f) => f.title.includes("Cache hit ratio 92%"))).toBe(true);
+  });
+
+  test("finding: idle-in-transaction backend past the age threshold", () => {
+    const a = base();
+    a.sql.connections = [
+      { state: "active", connections: 3, max_state_age_s: 2 },
+      { state: "idle in transaction", connections: 1, max_state_age_s: 900 },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "idle_in_txn_open");
+    expect(f?.severity).toBe("med");
+    expect(f?.title).toContain("Idle-in-transaction backend open 15 min");
+  });
+
+  test("finding: idle-in-transaction ignored when short-lived / plain idle", () => {
+    const a = base();
+    a.sql.connections = [
+      { state: "idle in transaction", connections: 1, max_state_age_s: 30 },
+      { state: "idle", connections: 6, max_state_age_s: 63568 },
+    ];
+    expect(deriveFindings(a).some((x) => x.heuristicId === "idle_in_txn_open")).toBe(false);
   });
 
   test("advisors grouped: plain-English title, scale in evidence, catalogued fix", () => {
@@ -447,40 +487,63 @@ describe("deriveFindings", () => {
     expect(deriveFindings(a).some((x) => x.title.includes("WAL archiving"))).toBe(false);
   });
 
-  test("finding: ssl_hba_nonssl fires in no-PAT when pg_hba admits non-SSL TCP", () => {
-    const a = base();
-    a.sql.hbaRules = [
-      { type: "host", database: "all", user_name: "all", address: "0.0.0.0/0", auth_method: "md5" },
-    ];
-    const f = deriveFindings(a).map((x) => x.title);
-    expect(f.some((t) => t.includes("non-SSL TCP connections"))).toBe(true);
-  });
-
-  test("finding: ssl_hba_nonssl silent when only hostssl rules exist", () => {
+  test("finding: hba_weak_auth fires on trust auth from a non-loopback address", () => {
     const a = base();
     a.sql.hbaRules = [
       {
-        type: "hostssl",
+        type: "host",
         database: "all",
         user_name: "all",
-        address: "0.0.0.0/0",
-        auth_method: "md5",
+        address: "10.0.0.0",
+        auth_method: "trust",
       },
     ];
-    expect(deriveFindings(a).some((x) => x.title.includes("non-SSL"))).toBe(false);
+    const f = deriveFindings(a).map((x) => x.title);
+    expect(f.some((t) => t.includes("weak/no authentication"))).toBe(true);
   });
 
-  test("finding: ssl_hba_nonssl suppressed when the ssl-enforcement plane is present (PAT)", () => {
+  test("finding: hba_weak_auth silent on standard Supabase scram host rules (no noise)", () => {
     const a = base();
-    a.security = {
-      auth: null,
-      networkRestrictions: null,
-      sslEnforcement: { currentConfig: { database: true } },
-    };
+    // The real-world Supabase default: all host rules use scram-sha-256.
     a.sql.hbaRules = [
-      { type: "host", database: "all", user_name: "all", address: "0.0.0.0/0", auth_method: "md5" },
+      {
+        type: "host",
+        database: "all",
+        user_name: "all",
+        address: "0.0.0.0",
+        auth_method: "scram-sha-256",
+      },
+      {
+        type: "host",
+        database: "all",
+        user_name: "all",
+        address: "::",
+        auth_method: "scram-sha-256",
+      },
     ];
-    expect(deriveFindings(a).some((x) => x.title.includes("non-SSL TCP"))).toBe(false);
+    expect(deriveFindings(a).some((x) => x.title.includes("weak/no authentication"))).toBe(false);
+  });
+
+  test("finding: hba_weak_auth ignores loopback trust and replication rules", () => {
+    const a = base();
+    a.sql.hbaRules = [
+      {
+        type: "host",
+        database: "all",
+        user_name: "all",
+        address: "127.0.0.1",
+        auth_method: "trust",
+      },
+      { type: "host", database: "all", user_name: "all", address: "::1", auth_method: "trust" },
+      {
+        type: "host",
+        database: "replication",
+        user_name: "all",
+        address: "0.0.0.0",
+        auth_method: "trust",
+      },
+    ];
+    expect(deriveFindings(a).some((x) => x.title.includes("weak/no authentication"))).toBe(false);
   });
 
   test("positives: nothing asserted on a degraded/unreachable project", () => {

@@ -288,6 +288,11 @@ export async function collect(
   const dbSize = (dbSizeRows[0]?.db_size as string | undefined) ?? null;
   const rawCacheHit = cacheHitRows[0]?.cache_hit_pct;
   const cacheHitPct = rawCacheHit == null ? null : Number(rawCacheHit);
+  const rawBlksAccessed = cacheHitRows[0]?.heap_blks_accessed;
+  const cacheBlocksAccessed =
+    rawBlksAccessed == null || !Number.isFinite(Number(rawBlksAccessed))
+      ? null
+      : Number(rawBlksAccessed);
   const rawIndexHit = cacheHitRows[0]?.index_hit_pct;
   const indexHitPct = rawIndexHit == null ? null : Number(rawIndexHit);
   const statsResetAge = (statsResetRows[0]?.stats_age as string | undefined) ?? null;
@@ -363,6 +368,7 @@ export async function collect(
       dbSize,
       cacheHitPct: Number.isFinite(cacheHitPct) ? cacheHitPct : null,
       indexHitPct: indexHitPct != null && Number.isFinite(indexHitPct) ? indexHitPct : null,
+      cacheBlocksAccessed,
       statsResetAge,
       pgSettings,
       topStatements,
