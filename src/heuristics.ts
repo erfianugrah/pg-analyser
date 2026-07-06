@@ -818,6 +818,19 @@ export const HEURISTICS: Record<string, Heuristic> = {
     docUrl: "https://supabase.com/docs/guides/database/extensions",
     reviewed: R,
   },
+  cron_job_failing: {
+    id: "cron_job_failing",
+    plane: "Config",
+    sql: "-- inspect the failures (message column carries the error):\nSELECT j.jobname, r.status, r.return_message, r.start_time\nFROM cron.job_run_details r JOIN cron.job j ON j.jobid = r.jobid\nWHERE r.status = 'failed' AND r.start_time > now() - interval '7 days'\nORDER BY r.start_time DESC;",
+    howToVerify:
+      "After fixing, cron.job_run_details shows status='succeeded' for the job's subsequent runs and no new failed rows.",
+    whyItMatters:
+      "A scheduled job that fails is a silent automation outage - the ETL/refresh/cleanup it does just stops, and nothing surfaces it until data is stale or something downstream breaks. This is read straight from the run log, so it's a confirmed failure, not a nudge.",
+    remediation:
+      "Read the failing job's return_message in cron.job_run_details, fix the underlying command (permissions, missing object, timeout), and re-run it. If the job is obsolete, unschedule it with cron.unschedule().",
+    docUrl: "https://supabase.com/docs/guides/database/extensions/pg_cron",
+    reviewed: R,
+  },
   pg_cron_review: {
     id: "pg_cron_review",
     plane: "Config",

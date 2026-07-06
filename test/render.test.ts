@@ -79,6 +79,9 @@ function fixture(overrides: Partial<Analysis> = {}): Analysis {
       unindexedVectors: [],
       walArchiving: [],
       hbaRules: [],
+      authAudit: [],
+      authMfa: [],
+      cronJobs: [],
     },
     metrics: {
       available: true,
@@ -489,6 +492,9 @@ describe("renderSummary", () => {
         unindexedVectors: [],
         walArchiving: [],
         hbaRules: [],
+        authAudit: [],
+        authMfa: [],
+        cronJobs: [],
       },
     });
     const html = renderSummary(clean);

@@ -58,6 +58,9 @@ function base(): Analysis {
       unindexedVectors: [],
       walArchiving: [],
       hbaRules: [],
+      authAudit: [],
+      authMfa: [],
+      cronJobs: [],
     },
     metrics: { available: false, samples: [] },
     trends: [],
@@ -917,10 +920,35 @@ describe("extension health findings", () => {
     expect(f?.evidence).toContain("public.docs.embedding");
   });
 
-  test("pg_cron installed -> review nudge", () => {
+  test("pg_cron installed, no run visibility -> review nudge", () => {
     const a = base();
     a.sql.extensions = [{ name: "pg_cron", installed: "1.6", latest: "1.6", outdated: false }];
     expect(deriveFindings(a).some((x) => x.heuristicId === "pg_cron_review")).toBe(true);
+  });
+
+  test("failing cron jobs -> med finding naming them; supersedes the nudge", () => {
+    const a = base();
+    a.sql.extensions = [{ name: "pg_cron", installed: "1.6", latest: "1.6", outdated: false }];
+    a.sql.cronJobs = [
+      { jobname: "nightly-etl", schedule: "0 2 * * *", active: true, failed_runs: 3, runs_7d: 7 },
+      { jobname: "cleanup", schedule: "*/5 * * * *", active: true, failed_runs: 0, runs_7d: 2016 },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "cron_job_failing");
+    expect(f?.severity).toBe("med");
+    expect(f?.title).toContain("1 scheduled job");
+    expect(f?.evidence).toContain("nightly-etl");
+    // run visibility exists -> the generic nudge must NOT also fire
+    expect(deriveFindings(a).some((x) => x.heuristicId === "pg_cron_review")).toBe(false);
+  });
+
+  test("healthy cron jobs -> no finding", () => {
+    const a = base();
+    a.sql.extensions = [{ name: "pg_cron", installed: "1.6", latest: "1.6", outdated: false }];
+    a.sql.cronJobs = [
+      { jobname: "cleanup", schedule: "*/5 * * * *", active: true, failed_runs: 0, runs_7d: 2016 },
+    ];
+    expect(deriveFindings(a).some((x) => x.anchor === "#cron")).toBe(false);
+    expect(deriveFindings(a).some((x) => x.heuristicId === "pg_cron_review")).toBe(false);
   });
 
   test("no extension data -> no extension findings", () => {
