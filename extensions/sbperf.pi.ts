@@ -202,7 +202,7 @@ const sbperfTool = defineTool({
         const args = [
           a,
           ...collectFlags(),
-          ...(p.all ? ["--all"] : []),
+          ...(p.all && a === "full" ? ["--all"] : []),
           ...(p.out ? ["--out", p.out] : []),
           ...(a === "full" ? renderFlags() : []),
         ];

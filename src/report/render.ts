@@ -396,7 +396,6 @@ function humanList(items: string[]): string {
  * outcomes - never "will", never imperatives).
  */
 function execSummarySection(
-  a: Analysis,
   findings: Finding[],
   positives: Positive[],
   degraded: boolean,
@@ -766,7 +765,7 @@ export function render(
     <div class=sc-vitals><div class=sc-sub>At a glance</div>${vitalsMini(a)}<p class=hbadges>${healthBadges(a)}</p></div>
   </div>
 </section>
-${execSummarySection(a, findings, positives, degraded, narrativeHtml)}${
+${execSummarySection(findings, positives, degraded, narrativeHtml)}${
   overlay.notes.top
     ? `
 <section class="overlay-note">${mdToHtml(overlay.notes.top)}</section>`
