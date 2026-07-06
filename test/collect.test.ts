@@ -74,6 +74,19 @@ describe("collect", () => {
     expect(backupsUnused).toBeDefined();
   });
 
+  test("PAT mode: Management /storage/buckets wins over the SQL fallback", async () => {
+    const t = fakeTransport({
+      onMgmt: fullRoutes({
+        "/v1/projects/ref/storage/buckets": () =>
+          jsonResponse([{ id: "from-api", name: "from-api", public: false }]),
+      }),
+      onMetrics: okMetrics,
+    });
+    const a = await collect("ref", t, "0.0.0-test", { syncCheck: false });
+    // Management value present -> SQL bucketList fallback is not consulted.
+    expect(a.buckets).toEqual([{ id: "from-api", name: "from-api", public: false }]);
+  });
+
   test("captures per-source failures without throwing", async () => {
     const t = fakeTransport({
       onMgmt: fullRoutes({ "/v1/projects/ref/config/disk": () => textResponse("boom", 500) }),
@@ -157,6 +170,13 @@ describe("collect", () => {
       run: async (q: string) => {
         if (q.includes("cache_hit_pct")) return [{ cache_hit_pct: "99.00" }];
         if (q.includes("pg_database_size")) return [{ db_size: "10 MB" }];
+        if (q.includes("from storage.buckets"))
+          return [{ id: "avatars", name: "avatars", public: true }];
+        if (q.includes("from pg_settings"))
+          return [
+            { name: "max_connections", setting: "100", unit: null },
+            { name: "work_mem", setting: "2048", unit: "kB" },
+          ];
         return [];
       },
       // splinter: leading setup statements -> [], the lint SELECT is largest
@@ -184,6 +204,11 @@ describe("collect", () => {
       // SQL diagnostics still ran through the superuser runner
       expect(a.sql.dbSize).toBe("10 MB");
       expect(a.sql.cacheHitPct).toBe(99);
+      // Tier-1 SQL fill-ins: buckets from storage.buckets, pgConfig from
+      // pg_settings - planes the Management API only proxies, reachable over
+      // the superuser connstring.
+      expect(a.buckets).toEqual([{ id: "avatars", name: "avatars", public: true }]);
+      expect(a.pgConfig).toEqual({ max_connections: "100", work_mem: "2048" });
     });
 
     test("throws when neither a PAT transport nor a SQL runner is available", async () => {

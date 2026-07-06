@@ -132,6 +132,7 @@ export async function collect(
     storageUsage,
     extensions,
     unindexedVectors,
+    bucketList,
     metricsText,
   ] = await Promise.all([
     mgmt("health", (mm) => mm.health(ref), []),
@@ -174,6 +175,7 @@ export async function collect(
     sql("storageUsage"),
     sql("extensions"),
     sql("unindexedVectors"),
+    sql("bucketList"),
     transport
       ? safe(
           "metrics",
@@ -258,6 +260,27 @@ export async function collect(
     });
   }
 
+  // No-PAT fill-ins from SQL for planes the Management API would otherwise own.
+  // Both are pure Postgres state the Management API is merely proxying, so a
+  // superuser --db-url reaches them directly. In PAT mode the Management value
+  // wins; these only fill the gap when the API plane is absent/empty.
+  //  - pgConfig: /config/database/postgres returns the user-overridable GUC
+  //    subset; pg_settings is the superset we already collect. Shape is a bare
+  //    name -> value record either way.
+  //  - buckets: /storage/buckets reads storage.buckets; bucketList is that table.
+  const pgConfigResolved =
+    pgConfig ??
+    (pgSettings.length
+      ? Object.fromEntries(pgSettings.map((r) => [String(r.name), r.setting]))
+      : null);
+  const bucketsResolved = buckets.length
+    ? buckets
+    : bucketList.map((r) => ({
+        id: r.id == null ? undefined : String(r.id),
+        name: String(r.name),
+        public: typeof r.public === "boolean" ? r.public : undefined,
+      }));
+
   const dbSize = (dbSizeRows[0]?.db_size as string | undefined) ?? null;
   const rawCacheHit = cacheHitRows[0]?.cache_hit_pct;
   const cacheHitPct = rawCacheHit == null ? null : Number(rawCacheHit);
@@ -319,13 +342,13 @@ export async function collect(
           availBytes: diskUtil?.metrics.fs_avail_bytes ?? null,
         }
       : null,
-    pgConfig,
+    pgConfig: pgConfigResolved,
     pooler,
     backups,
     upgrade,
     functions,
     functionStats,
-    buckets,
+    buckets: bucketsResolved,
     // Security config planes - absent entirely in no-PAT mode (no Management
     // API). In PAT mode each sub-plane is whatever mgmt() resolved (null on a
     // per-endpoint 403/beta-gate, the parsed config otherwise).
