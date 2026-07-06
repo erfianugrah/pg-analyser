@@ -55,6 +55,7 @@ function base(): Analysis {
       extensions: [],
       unindexedVectors: [],
       walArchiving: [],
+      hbaRules: [],
     },
     metrics: { available: false, samples: [] },
     trends: [],
@@ -429,6 +430,57 @@ describe("deriveFindings", () => {
     a.backups = null;
     a.sql.walArchiving = [{ archive_mode: "off", archived_count: 0, failed_count: 0 }];
     expect(derivePositives(a).some((x) => x.title.includes("WAL archiving"))).toBe(false);
+  });
+
+  test("finding: pitr_absent fires in no-PAT when WAL archiving is not live", () => {
+    const a = base();
+    a.backups = null;
+    a.sql.walArchiving = [{ archive_mode: "off", archived_count: 0 }];
+    const f = deriveFindings(a).map((x) => x.title);
+    expect(f.some((t) => t.includes("No continuous WAL archiving detected"))).toBe(true);
+  });
+
+  test("finding: pitr_absent suppressed when the backups plane is present (PAT)", () => {
+    const a = base();
+    a.backups = { pitr_enabled: false };
+    a.sql.walArchiving = [{ archive_mode: "off", archived_count: 0 }];
+    expect(deriveFindings(a).some((x) => x.title.includes("WAL archiving"))).toBe(false);
+  });
+
+  test("finding: ssl_hba_nonssl fires in no-PAT when pg_hba admits non-SSL TCP", () => {
+    const a = base();
+    a.sql.hbaRules = [
+      { type: "host", database: "all", user_name: "all", address: "0.0.0.0/0", auth_method: "md5" },
+    ];
+    const f = deriveFindings(a).map((x) => x.title);
+    expect(f.some((t) => t.includes("non-SSL TCP connections"))).toBe(true);
+  });
+
+  test("finding: ssl_hba_nonssl silent when only hostssl rules exist", () => {
+    const a = base();
+    a.sql.hbaRules = [
+      {
+        type: "hostssl",
+        database: "all",
+        user_name: "all",
+        address: "0.0.0.0/0",
+        auth_method: "md5",
+      },
+    ];
+    expect(deriveFindings(a).some((x) => x.title.includes("non-SSL"))).toBe(false);
+  });
+
+  test("finding: ssl_hba_nonssl suppressed when the ssl-enforcement plane is present (PAT)", () => {
+    const a = base();
+    a.security = {
+      auth: null,
+      networkRestrictions: null,
+      sslEnforcement: { currentConfig: { database: true } },
+    };
+    a.sql.hbaRules = [
+      { type: "host", database: "all", user_name: "all", address: "0.0.0.0/0", auth_method: "md5" },
+    ];
+    expect(deriveFindings(a).some((x) => x.title.includes("non-SSL TCP"))).toBe(false);
   });
 
   test("positives: nothing asserted on a degraded/unreachable project", () => {

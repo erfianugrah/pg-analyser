@@ -55,6 +55,7 @@ function base(): Analysis {
       extensions: [],
       unindexedVectors: [],
       walArchiving: [],
+      hbaRules: [],
     },
     metrics: { available: false, samples: [] },
     trends: [],

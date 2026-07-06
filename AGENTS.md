@@ -60,7 +60,31 @@ splinter lints (`collectSplinterLints` fills BOTH performance and security), SQL
 from the injected `DirectSqlRunner`, trends from Grafana if `SBPERF_PROMETHEUS_*`
 is set. `meta.managementApi=false` drives a report banner + footer stating what
 was NOT collected (provisioning/backups/pooler/metrics/analytics). This is the
-customer-audit path: a DB connstring + optional Grafana cookie, no PAT -
+customer-audit path (continued below).
+
+**No-PAT SQL fill-ins** (the Management API only PROXIES Postgres for a subset
+of planes, so a superuser `--db-url` reaches that data directly):
+- **buckets** <- `storage.buckets` (`bucketList` query) - the same table the
+  Storage API reads. Rendered, so no-PAT reports show the bucket inventory.
+- **pgConfig** <- `pg_settings` (the GUC superset we already collect;
+  `/config/database/postgres` is a subset). analysis.json only - the report's
+  "PG tuning params" section already renders `pgSettings`, so no separate UI.
+- **PITR proxy** <- `pg_stat_archiver` + `archive_mode` (`walArchiving` query).
+  Positive when archive_mode on/always + archived_count>0 ("Continuous WAL
+  archiving is active"); low finding `pitr_absent` when not. INFERENCE, not the
+  add-on flag - keyed on archive_mode+count, NOT last_archived_time age (idle
+  projects skip WAL backups even with PITR on). Gated to no-PAT so it never
+  contradicts the authoritative `backups.pitr_enabled`.
+- **SSL enforcement proxy** <- `pg_hba_file_rules` (`hbaRules` query, superuser
+  view). Low finding `ssl_hba_nonssl` when a host/hostnossl TCP rule with a
+  non-reject auth method exists. PARTIAL signal (Supabase terminates TLS at the
+  pooler/proxy) - gated to no-PAT (ssl-enforcement plane absent).
+- **Genuinely NOT reachable via SQL** (platform/infra, correctly left null/[]):
+  service health, disk provisioning (size/IOPS/type), pooler CONFIG (Supavisor),
+  GoTrue authConfig, network restrictions (cloud firewall), edge functions,
+  api/function analytics (Logflare), node_exporter host + component metrics.
+
+The customer-audit path: a DB connstring + optional Grafana cookie, no PAT -
 equivalent to `supabase inspect db` plus ranked findings, splinter advisors, and
 trends. `--all` still needs a PAT (it enumerates projects via the Management
 API); the explicit `--db-url` / `sbperf.databases.json` sweep (`doAllDbs`) is the

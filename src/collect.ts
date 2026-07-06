@@ -134,6 +134,7 @@ export async function collect(
     unindexedVectors,
     bucketList,
     walArchiving,
+    hbaRules,
     metricsText,
   ] = await Promise.all([
     mgmt("health", (mm) => mm.health(ref), []),
@@ -178,6 +179,7 @@ export async function collect(
     sql("unindexedVectors"),
     sql("bucketList"),
     sql("walArchiving"),
+    sql("hbaRules"),
     transport
       ? safe(
           "metrics",
@@ -385,6 +387,7 @@ export async function collect(
       extensions,
       unindexedVectors,
       walArchiving,
+      hbaRules,
     },
     metrics: { available: metricsText != null, samples },
     trends,

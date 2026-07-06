@@ -313,6 +313,9 @@ export const Analysis = z.object({
     // PITR when the Management API backups plane is absent. Defaulted for
     // back-compat with analysis.json written before the query existed.
     walArchiving: SqlRows.default([]),
+    // Host-based auth rules (pg_hba_file_rules) - the SQL proxy for SSL
+    // enforcement when the Management API ssl-enforcement plane is absent.
+    hbaRules: SqlRows.default([]),
   }),
   metrics: z.object({
     available: z.boolean(),

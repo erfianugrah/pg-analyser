@@ -61,6 +61,7 @@ function makeAnalysis(opts: {
       extensions: [],
       unindexedVectors: [],
       walArchiving: [],
+      hbaRules: [],
     },
     metrics: { available: (opts.samples?.length ?? 0) > 0, samples: opts.samples ?? [] },
     trends: [],
