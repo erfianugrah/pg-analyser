@@ -50,8 +50,43 @@ export function envLevel(): Level {
   return (LEVELS as readonly string[]).includes(v) ? (v as Level) : "info";
 }
 
+/**
+ * The level the user explicitly set via SBPERF_LOG_LEVEL, or null if unset /
+ * unrecognised. Lets a multi-project sweep quiet routine INFO by default while
+ * still honouring an explicit `SBPERF_LOG_LEVEL=info` (or debug).
+ */
+export function envLevelExplicit(): Level | null {
+  const raw = process.env.SBPERF_LOG_LEVEL;
+  if (!raw) return null;
+  const v = raw.toLowerCase();
+  return (LEVELS as readonly string[]).includes(v) ? (v as Level) : null;
+}
+
+/**
+ * Progress-bar coordination. When a live progress bar owns the TTY (multi-
+ * project sweeps), it binds here so the logger can erase the bar's un-terminated
+ * line before writing and repaint it after. Without this, every log line gets
+ * appended to the partial bar line (the "...(ref)INFO collect start" smear).
+ */
+export interface ProgressBinding {
+  /** Erase the current in-progress bar line (no-op when not on a TTY). */
+  clear(): void;
+  /** Repaint the bar (no-op unless a step is actively animating). */
+  repaint(): void;
+}
+let progressBinding: ProgressBinding | null = null;
+export function bindProgress(b: ProgressBinding | null): void {
+  progressBinding = b;
+}
+
 const defaultSink = (line: string): void => {
-  process.stderr.write(`${line}\n`);
+  if (progressBinding) {
+    progressBinding.clear();
+    process.stderr.write(`${line}\n`);
+    progressBinding.repaint();
+  } else {
+    process.stderr.write(`${line}\n`);
+  }
 };
 
 function fmtPretty(level: Level, msg: string, fields: Record<string, unknown>): string {

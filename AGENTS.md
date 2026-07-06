@@ -157,6 +157,17 @@ src/
                  SBPERF_LOG=json; .child() binds fields, .time() emits
                  durationMs. collect() logs per-plane timing + a summary and
                  records meta.collectionMs (shown in the report footer).
+                 collect() takes opts.logger (defaults to the process `log`);
+                 multi-project sweeps (doAllDbs/doAll) inject a warn-floor
+                 logger via sweepLogger() so routine per-plane INFO doesn't
+                 clutter the progress bar - an explicit SBPERF_LOG_LEVEL wins.
+                 bindProgress() lets the makeProgress bar and the logger
+                 cooperate on a TTY: the sink erases the bar's un-terminated
+                 line before each log line and repaints after, so WARN/ERROR
+                 never smear the animation. A missing OPTIONAL relation/schema
+                 (pg_cron/storage/auth on a DB that lacks it) is logged as a
+                 debug "plane absent", not a warn - the collection note is still
+                 recorded (folded into the sweep's per-project done() tail).
   transport.ts   Transport interface + DirectTransport (auth + retry)
   management.ts  typed, zod-parsed Management API wrapper
   sqlrunner.ts   SQL execution tiers behind one interface: ManagementSqlRunner

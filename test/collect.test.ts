@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { collect } from "../src/collect.ts";
+import { makeLogger } from "../src/log.ts";
 import advisorsPerf from "./fixtures/api/advisors-performance.json";
 import apiCounts from "./fixtures/api/api-counts.json";
 import backupsUnused from "./fixtures/api/disk.json"; // reused only for shape presence
@@ -127,6 +128,32 @@ describe("collect", () => {
     expect(seen.some((q) => q.includes("pg_stat_statements"))).toBe(true);
     // and the read-only SQL endpoint was NOT hit
     expect(t.calls.mgmt.some((p) => p.includes("query/read-only"))).toBe(false);
+  });
+
+  test("a missing optional relation is a debug 'plane absent', not a warn", async () => {
+    const lines: string[] = [];
+    const logger = makeLogger({ level: "debug", json: true, sink: (l) => lines.push(l) });
+    const runner = {
+      source: "superuser" as const,
+      run: async (q: string) => {
+        if (q.includes("cron.job")) throw new Error('relation "cron.job" does not exist');
+        return [];
+      },
+    };
+    const t = fakeTransport({ onMgmt: fullRoutes(), onMetrics: okMetrics });
+    const a = await collect("ref", t, "0.0.0-test", {
+      syncCheck: false,
+      sqlRunner: runner,
+      logger,
+    });
+    // The collection note is still recorded (so the report + notes count show it)...
+    expect(a.errors.some((e) => e.source === "sql:cronJobs")).toBe(true);
+    // ...but it was logged at debug as "plane absent", NOT warn "plane failed".
+    const cron = lines.map((l) => JSON.parse(l)).filter((o) => o.source === "sql:cronJobs");
+    const failed = cron.find((o) => o.msg === "plane failed");
+    const absent = cron.find((o) => o.msg === "plane absent");
+    expect(failed).toBeUndefined();
+    expect(absent?.level).toBe("debug");
   });
 
   test("threads --interval through to the analytics endpoints", async () => {

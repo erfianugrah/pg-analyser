@@ -1,4 +1,4 @@
-import { log } from "./log.ts";
+import { type Logger, log } from "./log.ts";
 import { Management } from "./management.ts";
 import { parsePrometheus } from "./metrics.ts";
 import { fetchTrends } from "./prometheus.ts";
@@ -32,6 +32,10 @@ export async function collect(
     // report can still show a real name/region instead of "ref (ref) - unknown".
     name?: string;
     region?: string;
+    // Logger to use for this collection. Defaults to the process-wide `log`.
+    // A multi-project sweep injects a quieter (warn-floor) logger so routine
+    // per-plane INFO doesn't clutter the progress bar; single runs use info.
+    logger?: Logger;
   } = {},
 ): Promise<Analysis> {
   // No-PAT mode: transport == null. No Supabase Management API at all - a
@@ -42,7 +46,7 @@ export async function collect(
   const noPat = m === null;
   const errors: CollectError[] = [];
   const startedAt = performance.now();
-  const clog = log.child({ ref, mode: noPat ? "no-pat" : "pat" });
+  const clog = (opts.logger ?? log).child({ ref, mode: noPat ? "no-pat" : "pat" });
   clog.info("collect start", { interval: opts.interval ?? "1day" });
   if (noPat && !opts.sqlRunner) {
     throw new Error(
@@ -81,7 +85,14 @@ export async function collect(
       const message = err instanceof Error ? err.message : String(err);
       errors.push({ source, message });
       done({ ok: false });
-      clog.warn("plane failed", { source, error: message });
+      // A missing OPTIONAL relation/schema (pg_cron, storage, auth on a non-
+      // Supabase or extension-less DB) is an expected absence, not a fault:
+      // record the collection note but log it at debug so a sweep isn't peppered
+      // with scary WARNs for planes the DB simply doesn't have. Genuine plane
+      // errors (timeouts, permission denied, unexpected SQL) stay at warn.
+      const expectedAbsence = /(relation|schema) "[^"]+" does not exist/i.test(message);
+      if (expectedAbsence) clog.debug("plane absent", { source, error: message });
+      else clog.warn("plane failed", { source, error: message });
       return fallback;
     }
   };
