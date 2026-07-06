@@ -1,5 +1,5 @@
-import { describe, expect, test } from "bun:test";
-import { makeLogger } from "../src/log.ts";
+import { afterEach, describe, expect, test } from "bun:test";
+import { bindProgress, envLevelExplicit, makeLogger } from "../src/log.ts";
 
 function capture(opts: Parameters<typeof makeLogger>[0] = {}) {
   const lines: string[] = [];
@@ -56,5 +56,66 @@ describe("logger", () => {
     expect(obj.durationMs).toBe(42);
     expect(obj.source).toBe("sql");
     expect(obj.ok).toBe(true);
+  });
+});
+
+describe("envLevelExplicit", () => {
+  const orig = process.env.SBPERF_LOG_LEVEL;
+  afterEach(() => {
+    if (orig === undefined) delete process.env.SBPERF_LOG_LEVEL;
+    else process.env.SBPERF_LOG_LEVEL = orig;
+  });
+  test("null when unset", () => {
+    delete process.env.SBPERF_LOG_LEVEL;
+    expect(envLevelExplicit()).toBeNull();
+  });
+  test("null when unrecognised (so the sweep default wins)", () => {
+    process.env.SBPERF_LOG_LEVEL = "loud";
+    expect(envLevelExplicit()).toBeNull();
+  });
+  test("returns the explicit level", () => {
+    process.env.SBPERF_LOG_LEVEL = "debug";
+    expect(envLevelExplicit()).toBe("debug");
+  });
+});
+
+describe("progress-bar coordination (bindProgress)", () => {
+  afterEach(() => bindProgress(null));
+
+  test("default sink clears the bar before a line and repaints after", () => {
+    const events: string[] = [];
+    const origWrite = process.stderr.write.bind(process.stderr);
+    // Capture the raw stderr write so we can assert ordering vs clear/repaint.
+    (process.stderr as unknown as { write: (s: string) => boolean }).write = (s: string) => {
+      events.push(`write:${s.trimEnd()}`);
+      return true;
+    };
+    try {
+      bindProgress({
+        clear: () => events.push("clear"),
+        repaint: () => events.push("repaint"),
+      });
+      // A default-sink logger (no sink override) routes through the coordinated sink.
+      makeLogger({ level: "info" }).warn("plane failed", { source: "disk" });
+    } finally {
+      (process.stderr as unknown as { write: typeof origWrite }).write = origWrite;
+    }
+    expect(events).toEqual(["clear", "write:WARN  plane failed source=disk", "repaint"]);
+  });
+
+  test("unbinding restores plain stderr writes (no clear/repaint)", () => {
+    const events: string[] = [];
+    const origWrite = process.stderr.write.bind(process.stderr);
+    (process.stderr as unknown as { write: (s: string) => boolean }).write = (s: string) => {
+      events.push(s.trimEnd());
+      return true;
+    };
+    try {
+      bindProgress(null);
+      makeLogger({ level: "info" }).info("hi");
+    } finally {
+      (process.stderr as unknown as { write: typeof origWrite }).write = origWrite;
+    }
+    expect(events).toEqual(["INFO  hi"]);
   });
 });

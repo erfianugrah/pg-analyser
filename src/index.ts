@@ -17,6 +17,7 @@ import {
 import { computeDiff, renderDiffText } from "./diff.ts";
 import { deriveFindings } from "./findings.ts";
 import { mergeTrends, parseTrendsFile } from "./importtrends.ts";
+import { bindProgress, envLevelExplicit, type Logger, makeLogger } from "./log.ts";
 import { Management } from "./management.ts";
 import { buildMessages, clientFromEnv, narrate } from "./narrate.ts";
 import { loadOverlay } from "./overlay.ts";
@@ -276,6 +277,7 @@ async function doAllDbs(
     `> auditing ${targets.length} database${targets.length === 1 ? "" : "s"} (superuser --db-url; ${transport ? "PAT for API + metrics" : "no PAT - db-url + Grafana only"})`,
   );
   const progress = makeProgress(targets.length);
+  const sweepLog = sweepLogger();
   const rows: IndexRow[] = [];
   for (const t of targets) {
     const label = t.name ?? t.ref;
@@ -303,6 +305,7 @@ async function doAllDbs(
         syncCheck,
         name: t.name,
         region: t.region ?? regionFromConnstring(t.dbUrl) ?? undefined,
+        logger: sweepLog,
       }).finally(() => runner.close());
       if (grafanaGap) analysis.errors.push({ source: "trends", message: grafanaGap });
       const counts = await emitReport(analysis, join(outBase, t.ref));
@@ -315,7 +318,7 @@ async function doAllDbs(
       });
       const n = counts.high + counts.med + counts.low;
       progress.done(
-        `ok - ${n} finding${n === 1 ? "" : "s"}${grafanaGap ? " (trends skipped)" : ""}`,
+        `ok - ${n} finding${n === 1 ? "" : "s"}${doneTail(analysis)}${grafanaGap ? " - trends skipped" : ""}`,
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -342,6 +345,27 @@ async function doAllDbs(
 }
 
 /**
+ * Logger for a multi-project sweep. Quiet routine INFO by default - the progress
+ * bar plus each project's permanent done() line already convey progress, and the
+ * suppressed collect start/done detail is folded into that line. WARN/ERROR stay
+ * visible (rendered cleanly above the bar via bindProgress). An explicit
+ * SBPERF_LOG_LEVEL wins, so `SBPERF_LOG_LEVEL=info full --profile ...` restores
+ * the full per-plane stream.
+ */
+function sweepLogger(): Logger {
+  return makeLogger({ level: envLevelExplicit() ?? "warn" });
+}
+
+/** Compact per-project summary tail for the sweep's done() line. */
+function doneTail(a: Analysis): string {
+  const bits: string[] = [];
+  if (a.meta.collectionMs != null) bits.push(`${(a.meta.collectionMs / 1000).toFixed(1)}s`);
+  if (a.trends.length) bits.push(`${a.trends.length} trend pts`);
+  if (a.errors.length) bits.push(`${a.errors.length} note${a.errors.length === 1 ? "" : "s"}`);
+  return bits.length ? ` (${bits.join(", ")})` : "";
+}
+
+/**
  * Live progress for multi-project sweeps. On a TTY it animates a spinner + bar
  * in place so the run never looks hung; when piped (CI/logs) it prints one plain
  * line per completed step. Each finished step also leaves a permanent line.
@@ -356,20 +380,28 @@ function makeProgress(total: number): {
   let completed = 0;
   let label = "";
   let frame = 0;
+  let active = false;
   let timer: ReturnType<typeof setInterval> | undefined;
   const bar = () => {
     const w = 14;
     const f = total ? Math.round((w * completed) / total) : 0;
     return `[${"#".repeat(f)}${"-".repeat(w - f)}]`;
   };
+  const clearLine = () => {
+    if (tty) process.stderr.write("\r\x1b[2K");
+  };
   const paint = () => {
     process.stderr.write(
       `\r\x1b[2K${bar()} ${completed}/${total} ${frames[frame++ % frames.length]} ${label}`,
     );
   };
+  // Let the logger erase + repaint the bar around each line so per-plane logs
+  // (esp. WARN) never smear the animated bar. repaint only while a step runs.
+  if (tty) bindProgress({ clear: clearLine, repaint: () => active && paint() });
   return {
     step(l) {
       label = l;
+      active = true;
       if (tty) {
         if (timer) clearInterval(timer);
         paint();
@@ -378,16 +410,19 @@ function makeProgress(total: number): {
     },
     done(result) {
       completed++;
+      active = false;
       if (timer) {
         clearInterval(timer);
         timer = undefined;
       }
-      if (tty) process.stderr.write("\r\x1b[2K");
+      clearLine();
       console.error(`  ${bar()} ${completed}/${total}  ${label}  ${result}`);
     },
     stop() {
+      active = false;
       if (timer) clearInterval(timer);
-      if (tty) process.stderr.write("\r\x1b[2K");
+      clearLine();
+      if (tty) bindProgress(null);
     },
   };
 }
@@ -441,6 +476,7 @@ async function doAll(
     `> auditing ${projects.length} project${projects.length === 1 ? "" : "s"} across ${groups.size} org${groups.size === 1 ? "" : "s"}`,
   );
   const progress = makeProgress(projects.length);
+  const sweepLog = sweepLogger();
 
   const usedOrgDirs = new Set<string>();
   const orgRows: OrgRow[] = [];
@@ -470,6 +506,7 @@ async function doAll(
           prometheusUrl,
           interval,
           syncCheck,
+          logger: sweepLog,
         });
         const counts = await emitReport(analysis, join(outBase, orgDir, projDir));
         rows.push({ name: p.name, ref: p.id, status: p.status, ...counts, dir: projDir });
@@ -477,7 +514,7 @@ async function doAll(
         med += counts.med;
         low += counts.low;
         const n = counts.high + counts.med + counts.low;
-        progress.done(`ok - ${n} finding${n === 1 ? "" : "s"}`);
+        progress.done(`ok - ${n} finding${n === 1 ? "" : "s"}${doneTail(analysis)}`);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         errors++;
