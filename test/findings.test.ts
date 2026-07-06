@@ -54,6 +54,7 @@ function base(): Analysis {
       storageUsage: [],
       extensions: [],
       unindexedVectors: [],
+      walArchiving: [],
     },
     metrics: { available: false, samples: [] },
     trends: [],
@@ -399,6 +400,35 @@ describe("deriveFindings", () => {
     expect(p.some((t) => t.includes("All RLS policy columns are indexed"))).toBe(true);
     expect(p.some((t) => t.includes("No unused indexes"))).toBe(true);
     expect(p.some((t) => t.includes("PITR"))).toBe(true);
+  });
+
+  test("positives: WAL-archiving proxy fires only in no-PAT mode, worded as inference", () => {
+    // No-PAT: backups plane absent, superuser SQL sees active WAL archiving.
+    const a = base();
+    a.backups = null;
+    a.sql.walArchiving = [{ archive_mode: "on", archived_count: 1234, failed_count: 0 }];
+    const p = derivePositives(a).map((x) => x.title);
+    expect(p.some((t) => t.includes("Continuous WAL archiving is active"))).toBe(true);
+    // Inference wording only - it must NOT claim the PITR add-on flag.
+    expect(p.some((t) => t === "Point-in-time recovery (PITR) is enabled")).toBe(false);
+  });
+
+  test("positives: WAL-archiving proxy suppressed when the backups plane is present (PAT)", () => {
+    // PAT mode owns the authoritative flag; the SQL proxy must not double-emit
+    // or contradict it. pitr_enabled:false + archive_mode on -> no proxy claim.
+    const a = base();
+    a.backups = { pitr_enabled: false };
+    a.sql.walArchiving = [{ archive_mode: "on", archived_count: 999, failed_count: 0 }];
+    const p = derivePositives(a).map((x) => x.title);
+    expect(p.some((t) => t.includes("WAL archiving"))).toBe(false);
+    expect(p.some((t) => t.includes("PITR"))).toBe(false);
+  });
+
+  test("positives: WAL-archiving proxy silent when archive_mode is off", () => {
+    const a = base();
+    a.backups = null;
+    a.sql.walArchiving = [{ archive_mode: "off", archived_count: 0, failed_count: 0 }];
+    expect(derivePositives(a).some((x) => x.title.includes("WAL archiving"))).toBe(false);
   });
 
   test("positives: nothing asserted on a degraded/unreachable project", () => {

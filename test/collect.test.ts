@@ -172,6 +172,8 @@ describe("collect", () => {
         if (q.includes("pg_database_size")) return [{ db_size: "10 MB" }];
         if (q.includes("from storage.buckets"))
           return [{ id: "avatars", name: "avatars", public: true }];
+        if (q.includes("from pg_stat_archiver"))
+          return [{ archive_mode: "on", archived_count: 42, failed_count: 0 }];
         if (q.includes("from pg_settings"))
           return [
             { name: "max_connections", setting: "100", unit: null },
@@ -209,6 +211,10 @@ describe("collect", () => {
       // the superuser connstring.
       expect(a.buckets).toEqual([{ id: "avatars", name: "avatars", public: true }]);
       expect(a.pgConfig).toEqual({ max_connections: "100", work_mem: "2048" });
+      // WAL-archiving proxy row flows through to analysis.sql (PITR inference).
+      expect(a.sql.walArchiving).toEqual([
+        { archive_mode: "on", archived_count: 42, failed_count: 0 },
+      ]);
     });
 
     test("throws when neither a PAT transport nor a SQL runner is available", async () => {
