@@ -104,7 +104,7 @@ const sbperfTool = defineTool({
     profile: Type.Optional(
       Type.String({
         description:
-          "full: path to a --profile JSON (forces no-PAT + region-mapped Grafana + customer DBs -> per-DB sweep).",
+          "full: path to a --profile JSON (forces no-PAT + region-mapped Grafana + target DBs -> per-DB sweep).",
       }),
     ),
     noPat: Type.Optional(

@@ -18,11 +18,11 @@
   },
   "databases": [
     {
-      "name": "customer-a",
+      "name": "project-a",
       "dbUrl": "postgresql://<role>.<ref>:PASSWORD@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres"
     },
     {
-      "name": "customer-b",
+      "name": "project-b",
       "region": "eu-central-1",
       "dbUrl": "postgresql://<role>.<ref>:PASSWORD@aws-0-eu-central-1.pooler.supabase.com:6543/postgres"
     }

@@ -167,7 +167,7 @@ export function buildNarrativeInput(a: Analysis) {
   };
 }
 
-const SYSTEM_PROMPT = `You are a senior Supabase/Postgres performance and cost engineer writing the ANALYSIS section of a database audit report shared with a customer. You are given a JSON object with the project's facts: ranked findings (each with why it matters, remediation, how to verify, a doc URL, and sometimes a changelog URL for a known platform change), healthy observations, and a bounded evidence digest (top query outliers, metrics, trends). The report ALREADY renders the structured findings, the healthy list, and the resource charts below your section - your job is the analytical layer on top: synthesise, prioritise, and review the tool's findings, adding the reasoning and cross-cutting insight the raw finding cards lack.
+const SYSTEM_PROMPT = `You are a senior Supabase/Postgres performance and cost engineer writing the ANALYSIS section of a database performance audit report. You are given a JSON object with the project's facts: ranked findings (each with why it matters, remediation, how to verify, a doc URL, and sometimes a changelog URL for a known platform change), healthy observations, and a bounded evidence digest (top query outliers, metrics, trends). The report ALREADY renders the structured findings, the healthy list, and the resource charts below your section - your job is the analytical layer on top: synthesise, prioritise, and review the tool's findings, adding the reasoning and cross-cutting insight the raw finding cards lack.
 
 Grounding (hard rules):
 - Ground every statement in the supplied JSON. Do NOT invent numbers, thresholds, table names, durations, timeouts, percentages, or URLs. If something is unknown, leave it out.

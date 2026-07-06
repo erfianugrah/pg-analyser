@@ -45,8 +45,8 @@ const VERSION = pkg.version;
 // Report branding, resolved once at startup (Supabase default; --brand /
 // SBPERF_BRAND / ./sbperf.brand.json override). Read by the render call sites.
 let activeBrand: Brand = DEFAULT_BRAND;
-// The active work profile (--profile <file.json>): force-no-PAT + region-mapped
-// Grafana creds + customer databases, all in one gitignored JSON. Consulted by
+// The active audit profile (--profile <file.json>): force-no-PAT + region-mapped
+// Grafana creds + target databases, all in one gitignored JSON. Consulted by
 // doAllDbs to resolve each project's regional Grafana. Null unless --profile.
 let activeProfile: Profile | null = null;
 
@@ -99,12 +99,12 @@ Flags:
                        "{ref}" -> the project ref (env: SBPERF_PROMETHEUS_MATCHER)
   --no-pat             force no-PAT mode: ignore any token (incl. the CLI
                        ~/.supabase/access-token fallback) and run on --db-url +
-                       Grafana alone. For a work profile auditing customer
-                       projects you have a connstring for but no PAT.
+                       Grafana alone. For a profile auditing projects you
+                       have a connstring for but no PAT.
                        (env: SBPERF_NO_PAT=1)
-  --profile <file>     one gitignored JSON = the whole work config: forced
+  --profile <file>     one gitignored JSON = the whole no-PAT config: forced
                        no-PAT + region-mapped Grafana creds (per-region cookie)
-                       + customer databases. full --profile <file> sweeps them,
+                       + target databases. full --profile <file> sweeps them,
                        resolving each project's regional Grafana by the region
                        derived from its connstring. See sbperf.profile.example.json.
   --trend-days <n>     trend query window in days (default 30; the store/Grafana
@@ -144,7 +144,7 @@ No-PAT mode: with NO SUPABASE_ACCESS_TOKEN but a --db-url (or SBPERF_DB_URL /
 sbperf.databases.json), sbperf runs on the superuser connstring alone - SQL
 diagnostics + advisors from the self-hosted splinter lints (+ Grafana trends if
 SBPERF_PROMETHEUS_* is set). Management-API planes (provisioning, backups,
-pooler, metrics, analytics) are skipped. This is the customer-audit path where
+pooler, metrics, analytics) are skipped. This is the no-PAT path where
 you have a DB connstring but no PAT. '--all' still needs a PAT.`);
   process.exit(code);
 }
@@ -579,7 +579,7 @@ function loadCfg() {
  */
 /** Forced no-PAT mode (--no-pat / SBPERF_NO_PAT). Ignores any resolvable token
  * - including the personal ~/.supabase/access-token CLI fallback - so a work
- * profile auditing customer projects never accidentally runs PAT mode. */
+ * profile auditing projects never accidentally runs PAT mode. */
 function noPatForced(): boolean {
   return ["1", "true", "yes"].includes((process.env.SBPERF_NO_PAT ?? "").trim().toLowerCase());
 }
@@ -1070,8 +1070,8 @@ async function main(): Promise<void> {
   if (flags.noPat) process.env.SBPERF_NO_PAT = "1";
   if (flags.trendDays) process.env.SBPERF_TREND_DAYS = flags.trendDays;
 
-  // A --profile <file.json> is the whole work config in one gitignored JSON:
-  // force-no-PAT + region-mapped Grafana creds + customer databases. Loaded
+  // A --profile <file.json> is the whole no-PAT config in one gitignored JSON:
+  // force-no-PAT + region-mapped Grafana creds + target databases. Loaded
   // before target resolution so its databases become the targets and noPat
   // forces the mode.
   if (flags.profile) {

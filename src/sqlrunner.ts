@@ -7,7 +7,7 @@ import type { SqlRow } from "./schemas.ts";
  *
  *  - ManagementSqlRunner: PAT-only, via the Management API read-only SQL runner
  *    (runs as `supabase_read_only_user`). The default - no password needed, so
- *    it can audit a customer project you only have a PAT for.
+ *    it can audit a project you only have a PAT for.
  *  - DirectSqlRunner: a superuser/`--db-url` connection (e.g. Supabase's
  *    `supabase_admin` connstring, or ANY Postgres). Full access - real inspect,
  *    all schemas, arbitrary/multiple databases, and the ability to window
