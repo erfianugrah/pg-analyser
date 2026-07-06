@@ -30,7 +30,7 @@ sbperf.databases.*.json
 # active white-label brand config (keep the .example); may point at private logos
 sbperf.brand.json
 
-# per-project review overlays (may reference customer context; keep the .example)
+# per-project review overlays (may reference project-specific context; keep the .example)
 sbperf.overlays/
 
 # exported Grafana dashboard JSON / local datasource config - may contain
@@ -39,8 +39,8 @@ db_exporter.json
 sbperf.grafana.json
 sbperf.grafana.*.json
 
-# work profile: the single-JSON customer-audit config (forced no-PAT +
-# region-mapped Grafana cookies + customer connstrings). keep the .example.
+# audit profile: the single-JSON no-PAT profile config (forced no-PAT +
+# region-mapped Grafana cookies + DB connstrings). keep the .example.
 # canonical: sbperf.profile.json; named variants: sbperf.<name>.profile.json
 sbperf.profile.json
 sbperf.*.profile.json

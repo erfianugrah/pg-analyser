@@ -19,7 +19,7 @@
 
 ### Decisions locked for v1
 - **Format:** JSON (matches `sbperf.brand.json`; no YAML dep). Notes are markdown strings; `\n` for line breaks. `@file` note indirection is a fast-follow, not v1.
-- **Persistence:** gitignore `sbperf.overlays/` (per-project commentary may reference customer context; mirror the `sbperf.brand.json` ignore + `.example` precedent). The global convention path is `~/.sbperf/overlays/<ref>.json`.
+- **Persistence:** gitignore `sbperf.overlays/` (per-project commentary may reference project-specific context; mirror the `sbperf.brand.json` ignore + `.example` precedent). The global convention path is `~/.sbperf/overlays/<ref>.json`.
 - **Precedence:** `--overlay <file>` (single-project `report`/`pdf` only) > `SBPERF_OVERLAY` env > `./sbperf.overlays/<ref>.json` > `~/.sbperf/overlays/<ref>.json` > empty.
 - **Out of scope (fast-follows):** `findings` annotations (ack/wontfix/comment); `@file` note indirection; tool-proposed overlays from workload-shape ("context-driven"); Quarto `--emit-qmd` export; overlay support in `summary.html`/`narrative.html`.
 
@@ -530,7 +530,7 @@ git commit -m "feat(overlay): --overlay flag + per-ref overlay on report/pdf/ful
 Append to `.gitignore` under the brand block:
 
 ```
-# per-project review overlays (may reference customer context; keep the .example)
+# per-project review overlays (may reference project-specific context; keep the .example)
 sbperf.overlays/
 ```
 

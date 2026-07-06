@@ -2,9 +2,9 @@ import { z } from "zod";
 import type { RawEntry } from "./dbtargets.ts";
 
 /**
- * A profile is the whole work config in ONE gitignored JSON: force-no-PAT, the
+ * A profile is the whole no-PAT config in ONE gitignored JSON: force-no-PAT, the
  * region-mapped Grafana credentials (each region is a separate ALB, so a
- * per-region cookie), and the customer databases. Drive it with
+ * per-region cookie), and the target databases. Drive it with
  * `sbperf full --profile <file>` - no .env, no wrapper. Nothing here is baked
  * into the repo: hosts, datasource UIDs, cookies and connstrings all live in
  * the (gitignored) profile file.
@@ -31,14 +31,14 @@ const GrafanaMap = z.object({
 });
 
 export const Profile = z.object({
-  /** Force no-PAT mode (default true - a profile is the customer-audit path). */
+  /** Force no-PAT mode (default true - a profile is the no-PAT path). */
   noPat: z.boolean().default(true),
   /** Trend query window in days (Grafana/Prometheus range; default 30). The
    * dashboards go to 90d - it's a TSDB, not the ~7-day analytics cap. */
   trendDays: z.number().int().positive().max(365).optional(),
   /** Region-mapped Grafana trend credentials (optional - omit for SQL-only). */
   grafana: GrafanaMap.optional(),
-  /** Customer databases: superuser connstrings (ref/region derived if absent). */
+  /** Target databases: superuser connstrings (ref/region derived if absent). */
   databases: z
     .array(
       z.object({

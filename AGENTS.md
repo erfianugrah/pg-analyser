@@ -28,7 +28,7 @@ HTML + PDF report. No superuser `--db-url`, no manual Grafana screenshots.
 | `bun run src/index.ts full --ref <ref>` | analyze + report + pdf |
 | `bun run src/index.ts full --ref <r1>,<r2> ...` / `--ref-file <f>` | audit a subset of projects -> combined org/project index (PAT-only). `--ref` repeatable + comma/space lists; `--ref-file` reads a .txt/.csv (ref-shaped tokens only) |
 | `bun run src/index.ts full --all [--org <slug>]` | audit every project -> `index.html` |
-| `bun run src/index.ts full --profile <file.json>` | no-PAT work sweep: force-no-PAT + per-region Grafana + customer DBs, all in one gitignored JSON -> per-DB reports + index |
+| `bun run src/index.ts full --profile <file.json>` | no-PAT sweep: force-no-PAT + per-region Grafana + target DBs, all in one gitignored JSON -> per-DB reports + index |
 | `bun run src/index.ts full --db-url <connstr>` | superuser SQL tier (augments the PAT, or SOLE source in no-PAT mode); repeatable / `--db-config <file>` for a multi-DB sweep |
 | `bun run src/index.ts snapshot --ref <ref>` | collect + append to the SQLite history store (cron this) |
 | `bun run src/index.ts export-prometheus <dir> [--ref <ref>]` | history store -> OpenMetrics for promtool backfill |
@@ -60,7 +60,7 @@ splinter lints (`collectSplinterLints` fills BOTH performance and security), SQL
 from the injected `DirectSqlRunner`, trends from Grafana if `SBPERF_PROMETHEUS_*`
 is set. `meta.managementApi=false` drives a report banner + footer stating what
 was NOT collected (provisioning/backups/pooler/metrics/analytics). This is the
-customer-audit path (continued below).
+no-PAT path (continued below).
 
 **No-PAT SQL fill-ins** (the Management API only PROXIES Postgres for a subset
 of planes, so a superuser `--db-url` reaches that data directly):
@@ -106,7 +106,7 @@ of planes, so a superuser `--db-url` reaches that data directly):
   it to the finding's heuristic); never make it dynamic. The `diff` command
   (run-to-run changelog) is likewise deterministic by design - a diff must be exact.
 
-The customer-audit path: a DB connstring + optional Grafana cookie, no PAT -
+The no-PAT path: a DB connstring + optional Grafana cookie, no PAT -
 equivalent to `supabase inspect db` plus ranked findings, splinter advisors, and
 trends. `--all` still needs a PAT (it enumerates projects via the Management
 API); the explicit `--db-url` / `sbperf.databases.json` sweep (`doAllDbs`) is the
@@ -114,7 +114,7 @@ no-PAT multi-DB path. The db-url SQL + splinter are drift-synced by
 `check:inspect` + `check:lints` (advisory) - this mode's sync guarantee the way
 `check:api` is for PAT mode.
 
-**Profile** (`--profile <file.json>`, `profile.ts`): the whole customer-audit
+**Profile** (`--profile <file.json>`, `profile.ts`): the whole no-PAT
 config in ONE gitignored JSON - `{ noPat, grafana: { hostTemplate, datasourceUid,
 matcher, regions: { <region>: { cookie, uid?, host? } } }, databases: [...] }`.
 `full --profile <f>` forces no-PAT (`profile.noPat`, default true), makes
@@ -134,7 +134,7 @@ separate presentation layer and untouched.
 
 SQL diagnostics run through a `SqlRunner` (`sqlrunner.ts`):
 - **PAT (default)** - `ManagementSqlRunner` -> the read-only SQL endpoint
-  (`supabase_read_only_user`). No password; audits a customer project you only
+  (`supabase_read_only_user`). No password; audits a project you only
   have a PAT for.
 - **Superuser (`--db-url` or `SBPERF_DB_URL`)** - `DirectSqlRunner` runs each
   query directly over a Postgres connstring (e.g. Supabase's `supabase_admin`
@@ -296,9 +296,9 @@ src/
                  scrapes the metrics endpoint (--prometheus[-token|-cookie|
                  -matcher]); scoped to one project ref. Alternate trend source to
                  the store; `report` prefers --prometheus when both exist.
-  profile.ts     --profile <file.json>: the whole work/customer-audit config in
+  profile.ts     --profile <file.json>: the whole no-PAT profile config in
                  one gitignored JSON (force-no-PAT + region-mapped Grafana creds,
-                 per-region ALB cookie, + customer databases). resolveGrafana maps
+                 per-region ALB cookie, + target databases). resolveGrafana maps
                  each project's region (from its connstring) to that region's
                  host/uid/cookie; full --profile sweeps databases[] via doAllDbs.
   promexport.ts  history store -> OpenMetrics (timestamped) for `export-prometheus`;

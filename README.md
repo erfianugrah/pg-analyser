@@ -9,10 +9,10 @@ Personal Access Token - the Management API, read-only SQL, and the project
 metrics endpoint, no superuser connection string and no manual dashboard
 screenshots to assemble. Two optional tiers extend it: a superuser `--db-url`
 adds full-access SQL (real `inspect`, all schemas, any Postgres) on top of the
-PAT, and a **no-PAT** mode audits a customer project you only have a DB
-connstring for (superuser SQL + self-hosted splinter advisors + Grafana trends,
-all driven by one `--profile` JSON). See the [superuser](#superuser-sql-your-own-projects---db-url)
-and [no-PAT](#no-pat-customer-audits---no-pat----profile) sections below.
+PAT, and a **no-PAT** mode audits a project you only have a DB connstring for
+(superuser SQL + self-hosted splinter advisors + Grafana trends, all driven by
+one `--profile` JSON). See the [superuser](#superuser-sql-your-own-projects---db-url)
+and [no-PAT](#no-pat-audit-by-connstring---no-pat----profile) sections below.
 
 ## Requirements
 
@@ -215,7 +215,7 @@ Management API per run and never written to disk.
 ### Superuser SQL (your own projects): `--db-url`
 
 The default SQL tier is the PAT read-only runner (`supabase_read_only_user`) -
-no password, so it audits a customer project you only have a PAT for. When you
+no password, so it audits a project you only have a PAT for. When you
 have superuser access (your own project's `supabase_admin` connstring, or any
 Postgres), pass `--db-url` (or `SBPERF_DB_URL`) to run the diagnostics with full
 access instead:
@@ -269,10 +269,10 @@ bun run src/index.ts full --db-config sbperf.databases.json
 
 `ref` is optional when derivable; set it explicitly for non-Supabase strings.
 
-### No PAT: customer audits (`--no-pat` / `--profile`)
+### No PAT: audit by connstring (`--no-pat` / `--profile`)
 
 You can audit a project you have a **superuser connstring for but no PAT** - the
-customer-audit path, equivalent to `supabase inspect db` plus ranked findings,
+no-PAT path, equivalent to `supabase inspect db` plus ranked findings,
 advisors, and trends. With no `SUPABASE_ACCESS_TOKEN` resolvable but a `--db-url`
 (or `SBPERF_DB_URL` / `sbperf.databases.json`), sbperf runs transport-free:
 
@@ -285,19 +285,19 @@ Management-API-only planes (compute/disk provisioning, backups, pooler config,
 the metrics scrape, edge/API analytics) are skipped, and the report says so.
 
 Force it with `--no-pat` (or `SBPERF_NO_PAT=1`) so a resolvable **CLI** token
-(`~/.supabase/access-token`) is ignored - otherwise a customer audit would
+(`~/.supabase/access-token`) is ignored - otherwise the audit would
 silently try PAT mode against a project it can't see:
 
 ```bash
 bun run src/index.ts full --no-pat --db-config sbperf.databases.json
 ```
 
-#### One-file work profile: `--profile`
+#### One-file profile: `--profile`
 
-For a repeatable customer-audit setup, put everything in one gitignored JSON and
+For a repeatable no-PAT setup, put everything in one gitignored JSON and
 run `full --profile <file>`. It carries forced-no-PAT, the region-mapped Grafana
 credentials (each region is a separate load balancer, so a **per-region**
-cookie), and the customer databases:
+cookie), and the target databases:
 
 ```json
 {
@@ -313,11 +313,11 @@ cookie), and the customer databases:
   },
   "databases": [
     {
-      "name": "cust-a",
+      "name": "db-a",
       "dbUrl": "postgresql://<role>.<ref>:PW@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres"
     },
     {
-      "name": "cust-b",
+      "name": "db-b",
       "dbUrl": "postgresql://<role>.<ref>:PW@aws-0-eu-central-1.pooler.supabase.com:6543/postgres"
     }
   ]
@@ -331,7 +331,7 @@ bun run src/index.ts full --profile sbperf.profile.json
 
 The sweep derives each project's **region** from its connstring, maps it to that
 region's Grafana host/uid/cookie, and substitutes the project `{ref}` into the
-matcher - so one profile spans customers across regions, each hitting its own
+matcher - so one profile spans projects across regions, each hitting its own
 regional Grafana. A region absent from the map just skips that project's trends
 (SQL + advisors still run). The filename is free (it's passed to `--profile`);
 keep it matching the `sbperf.profile.json` / `sbperf.*.profile.json` gitignore
@@ -434,7 +434,7 @@ token can't traverse, `--prometheus-cookie '<session cookie>'` (env:
 `SBPERF_PROMETHEUS_{TOKEN,COOKIE}`). If the scraper's project label isn't the
 default `supabase_project_ref="{ref}"`, override with `--prometheus-matcher
 '<label>="{ref}"'`. (The `--profile` JSON above wraps all of this per-region for
-the no-PAT customer-audit case.)
+the no-PAT case.)
 
 ### Bring your own history (CSV / JSON import)
 

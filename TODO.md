@@ -2,10 +2,10 @@
 
 ## Shipped 2026-07-06
 No-PAT parity, security posture, run-comparison, and report/CLI polish:
-- [x] no-PAT customer-audit mode: superuser `--db-url` as the SOLE source (no
+- [x] no-PAT audit mode: superuser `--db-url` as the SOLE source (no
       token), splinter advisors fill perf+security, trends via Grafana; the whole
       config in one gitignored `--profile` JSON (region-mapped Grafana creds +
-      customer DBs). SQL fill-ins: buckets, pgConfig, PITR-via-WAL-archiving,
+      target DBs). SQL fill-ins: buckets, pgConfig, PITR-via-WAL-archiving,
       pg_hba weak-auth.
 - [x] security-config Security findings (sbperf-original, not advisor passthrough):
       network restrictions open, SSL not enforced, email auto-confirm, no MFA,

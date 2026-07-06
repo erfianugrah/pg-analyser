@@ -80,7 +80,7 @@ function groupAdvisors(
     g.level = worse(g.level, a.level);
     byTitle.set(a.title, g);
   }
-  // Deep-link into the customer's own Advisor page (the '_' project redirects to
+  // Deep-link into the project's own Advisor page (the '_' project redirects to
   // the active project in their session when the ref is unknown).
   const page = category === "Security" ? "security" : "performance";
   const dashUrl = `https://supabase.com/dashboard/project/${ref ?? "_"}/advisors/${page}`;
