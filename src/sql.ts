@@ -436,6 +436,27 @@ export const QUERIES = {
     from pg_replication_slots
     order by pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn) desc nulls last`,
 
+  // WAL archiving state - the PROXY for PITR when the Management API's backups
+  // plane is absent (no-PAT). PITR = physical backups + continuous WAL shipping
+  // (WAL-G -> S3); archive_mode on + a non-zero archived_count means WAL is
+  // actually being archived, the mechanism PITR relies on. This is an INFERENCE
+  // about the DB, NOT the platform add-on flag (last_archived_time can be stale
+  // on an idle project even with PITR on, since Supabase skips WAL backups when
+  // there is no activity - so we key on archive_mode + archived_count, not age).
+  // pg_stat_archiver is a single-row view readable without superuser.
+  walArchiving: /* sql */ `
+    select
+      current_setting('archive_mode') as archive_mode,
+      current_setting('wal_level') as wal_level,
+      archived_count,
+      last_archived_wal,
+      last_archived_time::text as last_archived_time,
+      case when last_archived_time is null then null
+        else extract(epoch from (now() - last_archived_time))::int end as last_archived_age_s,
+      failed_count,
+      last_failed_time::text as last_failed_time
+    from pg_stat_archiver`,
+
   connections: /* sql */ `
     select
       coalesce(state, '(none)') as state,

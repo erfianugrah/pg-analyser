@@ -67,6 +67,7 @@ function base(): Analysis {
       storageUsage: [],
       extensions: [],
       unindexedVectors: [],
+      walArchiving: [],
     },
     metrics: { available: false, samples: [] },
     trends: [{ title: "CPU utilization (%)", unit: "%", points: [{ t: 1, v: 42 }] }],

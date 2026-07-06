@@ -54,6 +54,7 @@ function base(): Analysis {
       storageUsage: [],
       extensions: [],
       unindexedVectors: [],
+      walArchiving: [],
     },
     metrics: { available: false, samples: [] },
     trends: [],

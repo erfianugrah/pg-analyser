@@ -790,6 +790,7 @@ export function render(
       errored.has("sql:txidWraparound") ||
       a.sql.txidWraparound.some((r) => (Number(r.pct_wraparound) || 0) >= THRESHOLDS.txidWarnPct),
     slots: a.sql.replicationSlots.length > 0,
+    walarchiving: a.sql.walArchiving.length > 0,
     longrunning: a.sql.longRunning.length > 0,
     locks: a.sql.locks.length > 0,
     blocking: a.sql.blocking.length > 0,
@@ -903,6 +904,7 @@ ${drill("deadtuples", "Dead tuples / autovacuum", "overdue = dead tuples past th
 ${show.roles ? drill("roles", "Role connection usage", "active connections vs each role's limit (shown when a role nears its limit)", sec(a.sql.roleStats, "sql:roleStats", { mono: ["role"] })) : ""}
 ${show.txid ? drill("txid", "Transaction-ID wraparound", "age(relfrozenxid) vs 2B ceiling; shown when a table approaches the wraparound threshold", sec(a.sql.txidWraparound, "sql:txidWraparound", { mono: ["table"], hide: ["schema"] })) : ""}
 ${show.slots ? drill("slots", "Replication slots", "retained WAL; inactive slots pin disk", sqlTable(a.sql.replicationSlots, { mono: ["slot_name"], hide: ["retained_wal_bytes"] })) : ""}
+${show.walarchiving ? drill("walarchiving", "WAL archiving", "pg_stat_archiver + archive_mode (superuser SQL); continuous WAL shipping is the mechanism PITR relies on - inferred here, not the platform add-on flag", sqlTable(a.sql.walArchiving, { mono: ["last_archived_wal"] })) : ""}
 ${drill("connections", "Connections", "by state", sec(a.sql.connections, "sql:connections"))}
 ${show.longrunning ? drill("longrunning", "Long-running queries", "point-in-time snapshot: running > 5 min at collection", sqlTable(a.sql.longRunning, { mono: ["query"] })) : ""}
 ${show.locks ? drill("locks", "Exclusive locks", "point-in-time snapshot: relation-level strong locks at collection", sqlTable(a.sql.locks, { mono: ["query", "relation"] })) : ""}

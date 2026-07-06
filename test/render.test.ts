@@ -75,6 +75,7 @@ function fixture(overrides: Partial<Analysis> = {}): Analysis {
       storageUsage: [],
       extensions: [],
       unindexedVectors: [],
+      walArchiving: [],
     },
     metrics: {
       available: true,
@@ -176,6 +177,7 @@ describe("render", () => {
       'id="roles"',
       'id="txid"',
       'id="slots"',
+      'id="walarchiving"',
       'id="longrunning"',
       'id="locks"',
       'id="blocking"',
@@ -206,6 +208,9 @@ describe("render", () => {
     ];
     a.sql.longRunning = [{ pid: 3, age: "00:10", query: "SELECT pg_sleep(600)" }];
     a.sql.replicationSlots = [{ slot_name: "s1", active: false, retained_wal_bytes: 1073741824 }];
+    a.sql.walArchiving = [
+      { archive_mode: "on", archived_count: 42, last_archived_wal: "0001", failed_count: 0 },
+    ];
     a.sql.roleStats = [{ role: "authenticated", connections: 45, conn_limit: 60 }];
     a.sql.txidWraparound = [
       { schema: "public", table: "public.big", xid_age: 5e8, pct_wraparound: 25 },
@@ -457,6 +462,7 @@ describe("renderSummary", () => {
         storageUsage: [],
         extensions: [],
         unindexedVectors: [],
+        walArchiving: [],
       },
     });
     const html = renderSummary(clean);

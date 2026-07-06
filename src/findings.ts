@@ -926,6 +926,23 @@ export function derivePositives(a: Analysis): Positive[] {
   if (a.backups?.pitr_enabled) {
     out.push({ category: "Capacity", title: "Point-in-time recovery (PITR) is enabled" });
   }
+  // No-PAT proxy for PITR: the authoritative backups plane is absent, but a
+  // superuser --db-url can see whether continuous WAL archiving is actually
+  // running. archive_mode on/always + a non-zero archived_count = WAL is being
+  // shipped, the mechanism PITR relies on. This is an INFERENCE about the DB,
+  // not the platform add-on flag, so it is worded as "WAL archiving active" and
+  // only emitted when the Management API's backups plane wasn't collected (so it
+  // never contradicts the authoritative flag above).
+  if (!a.backups && a.sql.walArchiving.length > 0) {
+    const w = a.sql.walArchiving[0] as SqlRow;
+    const mode = String(w.archive_mode ?? "").toLowerCase();
+    if ((mode === "on" || mode === "always") && num(w.archived_count) > 0) {
+      out.push({
+        category: "Capacity",
+        title: "Continuous WAL archiving is active (archive_mode=on) - PITR-style recoverability",
+      });
+    }
+  }
   // Security config counterweights (only when the plane was collected - PAT).
   const scfg = a.security;
   if (scfg) {

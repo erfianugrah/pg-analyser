@@ -60,6 +60,7 @@ function makeAnalysis(opts: {
       storageUsage: [],
       extensions: [],
       unindexedVectors: [],
+      walArchiving: [],
     },
     metrics: { available: (opts.samples?.length ?? 0) > 0, samples: opts.samples ?? [] },
     trends: [],
