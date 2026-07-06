@@ -37,6 +37,7 @@ function makeAnalysis(opts: {
       dbSize: null,
       cacheHitPct: opts.cacheHit ?? null,
       indexHitPct: opts.indexHit ?? null,
+      cacheBlocksAccessed: null,
       statsResetAge: null,
       pgSettings: [],
       topStatements: [],

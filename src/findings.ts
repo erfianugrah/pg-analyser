@@ -245,8 +245,13 @@ export function deriveFindings(a: Analysis): Finding[] {
   out.push(...groupAdvisors(a.advisors.performance, "Performance", "#adv-perf", a.meta.ref));
   out.push(...groupAdvisors(a.advisors.security, "Security", "#adv-sec", a.meta.ref));
 
-  // Performance - SQL-derived
-  if (a.sql.cacheHitPct != null && a.sql.cacheHitPct < THRESHOLDS.cacheHitPct) {
+  // Performance - SQL-derived. The cache-hit ratio is only trustworthy once the
+  // DB has done enough block access since stats reset; on a tiny/idle DB (e.g. a
+  // 20MB project) cold-start reads dominate and a "59%" ratio is noise, so gate
+  // on the access-volume floor before flagging.
+  const cacheVolOk =
+    a.sql.cacheBlocksAccessed == null || a.sql.cacheBlocksAccessed >= THRESHOLDS.cacheHitMinBlocks;
+  if (cacheVolOk && a.sql.cacheHitPct != null && a.sql.cacheHitPct < THRESHOLDS.cacheHitPct) {
     out.push({
       severity: "med",
       category: "Performance",
@@ -447,6 +452,24 @@ export function deriveFindings(a: Analysis): Finding[] {
       title: `${a.sql.blocking.length} blocking lock ${a.sql.blocking.length === 1 ? "chain" : "chains"} at collection time`,
       anchor: "#blocking",
       ...meta("blocking_locks"),
+    });
+  }
+  // Point-in-time: a backend sitting idle-in-transaction. Distinct from the
+  // idle_in_txn_timeout_off config finding (which flags the missing guardrail) -
+  // this catches a transaction actually held open right now, which pins locks +
+  // the xmin horizon (blocks autovacuum) and drives bloat. The connections plane
+  // groups by state and carries the oldest state age.
+  const iit = a.sql.connections.find((r) =>
+    String(r.state ?? "").startsWith("idle in transaction"),
+  );
+  if (iit && num(iit.max_state_age_s) >= THRESHOLDS.idleInTxnAgeS) {
+    const mins = Math.round(num(iit.max_state_age_s) / 60);
+    out.push({
+      severity: "med",
+      category: "Performance",
+      title: `Idle-in-transaction backend open ${mins} min (pins locks + blocks autovacuum)`,
+      anchor: "#connections",
+      ...meta("idle_in_txn_open"),
     });
   }
   // Point-in-time: queries running > 5 minutes at collection time.
@@ -789,25 +812,32 @@ export function deriveFindings(a: Analysis): Finding[] {
     });
   }
 
-  // No-PAT SSL posture from pg_hba_file_rules (superuser SQL). The authoritative
-  // ssl-enforcement plane needs a PAT; without it a superuser can still read
-  // whether pg_hba admits non-SSL TCP connections. HEDGED: Supabase terminates
-  // TLS at the pooler/proxy, so DB-layer pg_hba is a PARTIAL signal, not the
-  // platform toggle - low severity, and only when the authoritative plane is
-  // absent (so it never duplicates the ssl_not_enforced finding).
-  if (!a.security?.sslEnforcement && a.sql.hbaRules.length > 0) {
-    const nonSsl = a.sql.hbaRules.some((r) => {
-      const t = String(r.type ?? "").toLowerCase();
+  // pg_hba weak-auth from a non-loopback source (pg_hba_file_rules, superuser).
+  // NOT an SSL check: Supabase's standard pg_hba is all `host ... scram-sha-256`
+  // and TLS terminates at the pooler/proxy, so host-vs-hostssl says nothing about
+  // the public posture and firing on it is pure noise (it matches every project).
+  // What IS actionable is a trust/password/ident rule for a non-loopback,
+  // non-replication address - it admits connections with no or downgradeable
+  // auth. hbaRules is only populated by a superuser --db-url (the read-only user
+  // is denied the view), so this is inherently a no-PAT signal.
+  if (a.sql.hbaRules.length > 0) {
+    const loopback = (addr: string) =>
+      addr === "" || addr === "localhost" || addr.startsWith("127.") || addr === "::1";
+    const weak = a.sql.hbaRules.filter((r) => {
       const m = String(r.auth_method ?? "").toLowerCase();
-      return (t === "host" || t === "hostnossl") && m !== "reject";
+      return (
+        (m === "trust" || m === "password" || m === "ident") &&
+        !loopback(String(r.address ?? "")) &&
+        String(r.database ?? "") !== "replication"
+      );
     });
-    if (nonSsl) {
+    if (weak.length > 0) {
       out.push({
-        severity: "low",
+        severity: "med",
         category: "Security",
-        title: "pg_hba admits non-SSL TCP connections (SSL not enforced at the DB layer)",
+        title: `pg_hba allows weak/no authentication from a non-loopback address (${weak.length} rule${weak.length === 1 ? "" : "s"})`,
         anchor: "#hba",
-        ...meta("ssl_hba_nonssl"),
+        ...meta("hba_weak_auth"),
       });
     }
   }
@@ -903,7 +933,11 @@ export function derivePositives(a: Analysis): Positive[] {
       });
   }
 
-  if (a.sql.cacheHitPct != null && a.sql.cacheHitPct >= THRESHOLDS.cacheHitPct) {
+  // Mirror the finding's volume gate: don't praise a tiny/idle DB's ratio. null
+  // (pre-field analysis.json) falls back to ratio-only for back-compat.
+  const cachePraiseOk =
+    a.sql.cacheBlocksAccessed == null || a.sql.cacheBlocksAccessed >= THRESHOLDS.cacheHitMinBlocks;
+  if (cachePraiseOk && a.sql.cacheHitPct != null && a.sql.cacheHitPct >= THRESHOLDS.cacheHitPct) {
     out.push({
       category: "Performance",
       title: `Cache hit ratio ${a.sql.cacheHitPct}% (>= ${THRESHOLDS.cacheHitPct}% target)`,

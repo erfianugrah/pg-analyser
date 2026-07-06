@@ -39,6 +39,7 @@ function base(): Analysis {
       dbSize: "1 GB",
       cacheHitPct: 92,
       indexHitPct: null,
+      cacheBlocksAccessed: null,
       statsResetAge: null,
       pgSettings: [],
       topStatements: Array.from({ length: 20 }, (_, i) => ({

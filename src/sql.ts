@@ -74,6 +74,10 @@ export const QUERIES = {
     select
       round(sum(heap_blks_hit) * 100.0
         / nullif(sum(heap_blks_hit + heap_blks_read), 0), 2) as cache_hit_pct,
+      -- total heap blocks touched since stats reset. The cache-hit RATIO is
+      -- meaningless on a tiny/idle DB (cold-start reads dominate), so findings
+      -- gate on this volume before flagging a low ratio.
+      sum(heap_blks_hit + heap_blks_read) as heap_blks_accessed,
       (select round(sum(idx_blks_hit) * 100.0
         / nullif(sum(idx_blks_hit + idx_blks_read), 0), 2)
        from pg_statio_user_indexes) as index_hit_pct

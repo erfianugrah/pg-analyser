@@ -17,6 +17,14 @@ export const HEURISTICS_REVIEWED = "2026-07";
 export const THRESHOLDS = {
   /** Cache hit ratio target (blks_hit / (blks_hit + blks_read)). */
   cacheHitPct: 99,
+  /** Minimum heap blocks accessed (since stats reset) before the cache-hit
+   * ratio is trustworthy. Below this the DB is too small/idle for the ratio to
+   * mean anything (cold-start reads dominate), so we neither warn nor praise.
+   * 12500 blocks x 8KB = ~100MB of block access. */
+  cacheHitMinBlocks: 12500,
+  /** Idle-in-transaction backend age (seconds) at/above which to flag it. A
+   * healthy transaction is sub-second; minutes means an abandoned/leaked one. */
+  idleInTxnAgeS: 300,
   /** Direct connections / max_connections warning fraction. */
   directConnFrac: 0.7,
   /** A role's connections / its conn_limit warning fraction (finding). */
@@ -523,6 +531,19 @@ export const HEURISTICS: Record<string, Heuristic> = {
     docUrl: "https://supabase.com/docs/guides/platform/performance",
     reviewed: R,
   },
+  idle_in_txn_open: {
+    id: "idle_in_txn_open",
+    plane: "Connections",
+    sql: "-- find the culprit, then close/cancel it if safe:\nSELECT pid, usename, state, now()-state_change AS idle_for, query\nFROM pg_stat_activity\nWHERE state = 'idle in transaction'\nORDER BY state_change;\n-- SELECT pg_terminate_backend(<pid>);",
+    howToVerify:
+      "Re-check pg_stat_activity - no backend should sit in 'idle in transaction' for more than a few seconds under normal operation.",
+    whyItMatters:
+      "A backend that has BEGUN a transaction and gone idle holds its locks and pins the xmin horizon for the WHOLE database - autovacuum can't reclaim dead tuples newer than that snapshot, so bloat and wraparound risk climb until the transaction ends. It's a common ORM/pool bug (a connection checked out mid-transaction and never committed).",
+    remediation:
+      "Find and fix the client holding the transaction open (missing commit/rollback in app or pool code). As a guardrail set idle_in_transaction_session_timeout so Postgres auto-aborts abandoned transactions.",
+    docUrl: "https://www.postgresql.org/docs/current/runtime-config-client.html",
+    reviewed: R,
+  },
   idle_in_txn_timeout_off: {
     id: "idle_in_txn_timeout_off",
     plane: "Config",
@@ -640,16 +661,16 @@ export const HEURISTICS: Record<string, Heuristic> = {
     docUrl: "https://supabase.com/docs/guides/platform/network-restrictions",
     reviewed: R,
   },
-  ssl_hba_nonssl: {
-    id: "ssl_hba_nonssl",
+  hba_weak_auth: {
+    id: "hba_weak_auth",
     plane: "Config",
     howToVerify:
-      "Inspect pg_hba_file_rules for host/hostnossl entries, then confirm against the platform SSL toggle (GET /ssl-enforcement in PAT mode). A psql connect with sslmode=disable should be refused when enforcement is on.",
+      "Inspect pg_hba_file_rules for trust/password/ident auth on a non-loopback address; those rows should not exist for a public database. Confirm the offending rule against the intended access model.",
     whyItMatters:
-      "A host-based auth rule that isn't hostssl lets the DB accept unencrypted TCP connections, so a misconfigured client can send credentials in plaintext. NOTE: Supabase terminates TLS at the pooler/proxy, so a pg_hba host rule may be an internal path rather than the public posture - treat this as a prompt to verify the platform SSL-enforcement toggle, not proof it is off.",
+      "A trust rule accepts connections with NO password; password/ident are weak or spoofable. From a non-loopback source that means anyone reaching the port can connect (or downgrade) - a direct authentication bypass, independent of RLS. (This is NOT the TLS posture: Supabase terminates SSL at the proxy, so a plain scram-sha-256 host rule is normal and not flagged.)",
     remediation:
-      "Verify SSL enforcement is on (Settings > Database > SSL Configuration, or PUT /ssl-enforcement {database:true}) so unencrypted client connections are refused, and confirm clients use sslmode=require.",
-    docUrl: "https://supabase.com/docs/guides/platform/ssl-enforcement",
+      "Remove or tighten the rule so non-loopback connections require scram-sha-256 (or cert). Loopback trust (127.0.0.1 / ::1) is normal; a non-loopback trust/password/ident rule almost always indicates a misconfiguration.",
+    docUrl: "https://www.postgresql.org/docs/current/auth-pg-hba-conf.html",
     reviewed: R,
   },
   pitr_absent: {

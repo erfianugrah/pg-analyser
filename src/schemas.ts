@@ -282,6 +282,9 @@ export const Analysis = z.object({
     dbSize: z.string().nullable(),
     cacheHitPct: z.number().nullable(),
     indexHitPct: z.number().nullable(),
+    // Total heap blocks accessed since stats reset - the activity floor that
+    // gates the cache-hit finding/positive. Defaulted for back-compat.
+    cacheBlocksAccessed: z.number().nullable().default(null),
     statsResetAge: z.string().nullable(),
     pgSettings: SqlRows,
     topStatements: SqlRows,
