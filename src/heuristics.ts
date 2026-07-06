@@ -25,6 +25,14 @@ export const THRESHOLDS = {
   /** Idle-in-transaction backend age (seconds) at/above which to flag it. A
    * healthy transaction is sub-second; minutes means an abandoned/leaked one. */
   idleInTxnAgeS: 300,
+  /** Temp blocks written by a single query (since stats reset) above which it is
+   * spilling sorts/hashes to disk. 12500 blocks x 8KB = ~100MB written. */
+  tempSpillBlocks: 12500,
+  /** Coefficient of variation (stddev/mean) at/above which a query's latency is
+   * unstable enough to flag - paired with a mean-ms floor so trivial fast
+   * queries don't trip it. */
+  queryCvWarn: 2,
+  queryCvMinMeanMs: 10,
   /** Direct connections / max_connections warning fraction. */
   directConnFrac: 0.7,
   /** A role's connections / its conn_limit warning fraction (finding). */
@@ -215,6 +223,31 @@ export const HEURISTICS: Record<string, Heuristic> = {
       "Sequential scans read the whole table per query; as it grows, latency and IOPS grow with it - raising p99 latency and the compute/IOPS you provision to keep up.",
     remediation:
       "Add a btree index on the filtered/joined columns. Confirm with EXPLAIN (ANALYZE, BUFFERS) that the seq scan becomes an index scan.",
+    docUrl: "https://supabase.com/docs/guides/database/query-optimization",
+    reviewed: R,
+  },
+  query_temp_spill: {
+    id: "query_temp_spill",
+    plane: "Query",
+    sql: "-- find where it spills (sort/hash), then raise work_mem for that path:\nEXPLAIN (ANALYZE, BUFFERS) <the query>;\n-- session/role scoped, so it doesn't inflate every backend's memory:\nSET work_mem = '64MB';  -- or: ALTER ROLE <role> SET work_mem = '64MB';",
+    howToVerify:
+      "EXPLAIN (ANALYZE, BUFFERS) the query - the 'Sort Method'/'Batches' should show it fitting in memory (no 'external merge' / Disk) after the change; temp_blks_written for its queryid stops growing.",
+    whyItMatters:
+      "A sort or hash that exceeds work_mem spills to temp files on disk - far slower than memory and burning IOPS on every run. Repeatedly-called spilling queries are a common hidden latency + IOPS drain that the total-time ranking alone doesn't explain.",
+    remediation:
+      "Raise work_mem for that query's path (per session/role, not globally - work_mem is per-operation per-connection so a global bump multiplies fast), or cut the working set the sort/hash touches (add an index so it sorts fewer rows, reduce the result set, or restructure the join). Start around 32-64MB and confirm the spill clears.",
+    docUrl: "https://supabase.com/docs/guides/database/query-optimization",
+    reviewed: R,
+  },
+  query_high_variance: {
+    id: "query_high_variance",
+    plane: "Query",
+    howToVerify:
+      "Track the query's stddev_exec_time vs mean_exec_time in pg_stat_statements over time, or EXPLAIN it under load - the spread should narrow once the cause (plan flip, lock wait, cold cache) is addressed.",
+    whyItMatters:
+      "A high spread between a query's slowest and average run means its p99 is much worse than the mean suggests - users hit the slow tail. Common causes are plan instability (parameter-sensitive plans), lock/contention waits, or a working set that only sometimes fits in cache.",
+    remediation:
+      "Look for the tail cause: a parameter-sensitive plan (consider a covering index so the fast plan is always chosen), lock contention (check blocking + idle-in-transaction), or cache misses (the query may be reading cold pages). Stabilising the plan usually collapses the variance.",
     docUrl: "https://supabase.com/docs/guides/database/query-optimization",
     reviewed: R,
   },

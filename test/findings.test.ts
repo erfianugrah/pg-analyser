@@ -36,6 +36,7 @@ function base(): Analysis {
       pgSettings: [],
       topStatements: [],
       topByCalls: [],
+      queryIoStats: [],
       biggestTables: [],
       indexStats: [],
       duplicateIndexes: [],
@@ -126,6 +127,40 @@ describe("deriveFindings", () => {
       { state: "idle", connections: 6, max_state_age_s: 63568 },
     ];
     expect(deriveFindings(a).some((x) => x.heuristicId === "idle_in_txn_open")).toBe(false);
+  });
+
+  test("per-query temp spill -> med Performance finding naming the query", () => {
+    const a = base();
+    a.sql.queryIoStats = [
+      {
+        queryid: "1",
+        calls: 500,
+        temp_blks_written: 50000,
+        temp_written: "390 MB",
+        query: "select * from big order by x",
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "query_temp_spill");
+    expect(f?.severity).toBe("med");
+    expect(f?.title).toContain("spilling to disk");
+    expect(f?.evidence).toContain("select * from big");
+  });
+
+  test("per-query temp spill NOT flagged below the block floor", () => {
+    const a = base();
+    a.sql.queryIoStats = [{ queryid: "1", calls: 500, temp_blks_written: 100, query: "q" }];
+    expect(deriveFindings(a).some((x) => x.heuristicId === "query_temp_spill")).toBe(false);
+  });
+
+  test("per-query latency variance -> low finding; trivial-fast query ignored", () => {
+    const a = base();
+    a.sql.queryIoStats = [{ queryid: "1", calls: 300, cv: 4, mean_ms: 40, query: "select slow()" }];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "query_high_variance");
+    expect(f?.severity).toBe("low");
+    expect(f?.title).toContain("unstable latency");
+    // high CV but sub-10ms mean -> not worth flagging
+    a.sql.queryIoStats = [{ queryid: "1", calls: 300, cv: 8, mean_ms: 0.4, query: "q" }];
+    expect(deriveFindings(a).some((x) => x.heuristicId === "query_high_variance")).toBe(false);
   });
 
   test("advisors grouped: plain-English title, scale in evidence, catalogued fix", () => {

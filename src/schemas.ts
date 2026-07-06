@@ -292,6 +292,8 @@ export const Analysis = z.object({
     pgSettings: SqlRows,
     topStatements: SqlRows,
     topByCalls: SqlRows,
+    // Per-query I/O + latency-stability depth. Defaulted for back-compat.
+    queryIoStats: SqlRows.default([]),
     biggestTables: SqlRows,
     indexStats: SqlRows,
     duplicateIndexes: SqlRows,

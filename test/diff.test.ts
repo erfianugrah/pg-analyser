@@ -36,6 +36,7 @@ function base(ref = "r", collectedAt = "2026-01-01T00:00:00Z"): Analysis {
       pgSettings: [],
       topStatements: [],
       topByCalls: [],
+      queryIoStats: [],
       biggestTables: [],
       indexStats: [],
       duplicateIndexes: [],

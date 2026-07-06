@@ -49,6 +49,7 @@ function base(): Analysis {
         mean_ms: 5,
       })),
       topByCalls: [],
+      queryIoStats: [],
       biggestTables: [{ schema: "public", table: "public.big", total_size: "500 MB" }],
       indexStats: [{ schema: "public", table: "public.x", index: "public.i", unused: true }],
       duplicateIndexes: [{ schema: "public", table: "public.x", indexes: "i1, i2", copies: 2 }],
