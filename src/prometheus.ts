@@ -22,10 +22,12 @@ function buildPanels(refMatcher: string): Array<{ title: string; unit: string; q
   };
   const rate5 = (metric: string, ...extra: string[]): string =>
     `rate(${sel(metric, ...extra)}[5m])`;
-  // Utilization %/rates - what Supabase's own supabase-grafana dashboard charts
-  // - not raw values: a 30-day view of "load 0.4" / "7.4GB free" reads far worse
-  // than "CPU 26%" / "disk 4% full". Titles + semantics match the store-backed
-  // computeTrends (trends.ts) so the report looks the same from either source.
+  // Utilization %/rates over raw values - a 30-day view of "load 0.4" / "7.4GB
+  // free" reads far worse than "CPU 26%" / "disk 4% full". These are the standard
+  // node_exporter + postgres_exporter panels a Grafana infra dashboard charts,
+  // plus optional cloudwatch_exporter EBS burst-balance (present only if the
+  // Prometheus also scrapes AWS CloudWatch). Titles + semantics match the store-
+  // backed computeTrends (trends.ts) so the report looks the same either way.
   return [
     {
       title: "CPU utilization (%)",
