@@ -628,3 +628,42 @@ describe("renderIndex", () => {
     expect(order).toEqual([...order].sort((x, y) => x - y));
   });
 });
+
+describe("trend source label + EBS caveat", () => {
+  function withTrends(source: Analysis["meta"]["trendSource"], titles: string[]): Analysis {
+    const a = fixture();
+    a.meta.trendSource = source;
+    a.trends = titles.map((title) => ({
+      title,
+      unit: "%",
+      points: [
+        { t: 1, v: 10 },
+        { t: 2, v: 20 },
+      ],
+    }));
+    return a;
+  }
+
+  test("labels a Prometheus/Grafana source and omits the EBS note when EBS panels exist", () => {
+    const html = render(withTrends("prometheus", ["CPU utilization (%)", "EBS IOPS balance (%)"]));
+    expect(html).toContain("Source: from Prometheus/Grafana.");
+    expect(html).not.toContain("CloudWatch-scraping Prometheus");
+  });
+
+  test("labels the history store and shows the EBS caveat when EBS panels are absent", () => {
+    const html = render(withTrends("store", ["CPU utilization (%)", "Memory used (%)"]));
+    expect(html).toContain("Source: from the metrics history store");
+    expect(html).toContain("CloudWatch-scraping Prometheus");
+  });
+
+  test("imported trends are labelled but do NOT get the CloudWatch/EBS caveat", () => {
+    const html = render(withTrends("import", ["Custom metric"]));
+    expect(html).toContain("Source: from imported series");
+    expect(html).not.toContain("CloudWatch-scraping Prometheus");
+  });
+
+  test("no trends -> no Resource snapshot section at all", () => {
+    const html = render(fixture({ trends: [] }));
+    expect(html).not.toContain("Resource snapshot");
+  });
+});

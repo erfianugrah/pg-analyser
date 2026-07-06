@@ -384,6 +384,15 @@ become CPU utilization %, disk IOPS, and throughput once two snapshots exist -
 exactly the panels a Grafana node_exporter dashboard shows. History is not
 retroactive; it accrues from your first `snapshot`.
 
+The metrics are a mix of **node_exporter** (host), **postgres_exporter** (DB),
+and - only from a Prometheus that also scrapes **AWS CloudWatch** - the EBS
+burst-balance panels. The Supabase metrics endpoint and the history store carry
+no CloudWatch, so the two `EBS ... balance (%)` panels appear only with a
+CloudWatch-scraping `--prometheus` source. The report labels which source fed
+the Resource snapshot (Prometheus/Grafana, the history store, or imported
+series) and, when EBS is absent from an infra source, says so - a missing panel
+isn't a health signal.
+
 Flags: `--store <db>` (default `~/.sbperf/history.db`, keyed by ref so one
 store holds every project), `--retention-days <n>`. The trend **query window**
 is `--trend-days <n>` (default 30; `SBPERF_TREND_DAYS`, or a profile's

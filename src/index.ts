@@ -856,7 +856,10 @@ function fillTrendsFromStore(
   const store = HistoryStore.open(storePath);
   try {
     const snaps = store.loadForTrends(analysis.meta.ref);
-    if (snaps.length >= 2) analysis.trends = computeTrends(snaps);
+    if (snaps.length >= 2) {
+      analysis.trends = computeTrends(snaps);
+      if (analysis.trends.length) analysis.meta.trendSource = "store";
+    }
   } finally {
     store.close();
   }
@@ -964,6 +967,7 @@ async function doImportTrends(dir: string, files: string[]): Promise<void> {
       continue;
     }
     analysis.trends = mergeTrends(analysis.trends, series);
+    analysis.meta.trendSource = "import";
     added += series.length;
     console.error(`> ${f}: ${series.length} series (${series.map((s) => s.title).join(", ")})`);
   }

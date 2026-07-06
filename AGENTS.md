@@ -247,6 +247,12 @@ src/
                  Findings as What's happening/Why it matters/What to do (+SQL)/
                  How to verify -> Evidence drill-down). fillTrendsFromStore joins
                  the history store on every render path (report/pdf/emitReport).
+                 The Resource snapshot labels its provenance via meta.trendSource
+                 (prometheus/store/import - set by collect for Grafana, by
+                 fillTrendsFromStore for the store, by import-trends) and, when
+                 an infra source yields no EBS burst-balance panels, notes those
+                 are CloudWatch-only (not on the metrics endpoint / store) so a
+                 missing panel isn't misread as healthy.
                  render(a,{narrative}) embeds the narrative; renderNarrativePage
                  is the standalone narrative.html.
   extensions/    sbperf.pi.ts - pi tool wrapper (analyze/full/report/pdf/summary
