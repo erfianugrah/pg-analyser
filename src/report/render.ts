@@ -813,11 +813,20 @@ export function render(
   // treat an unreachable DB as degraded there.
   const noPat = m.managementApi === false;
   const degraded = (!noPat && m.status !== "ACTIVE_HEALTHY") || dbUnreachable;
-  const banner = noPat
-    ? `<p class="banner ${dbUnreachable ? "bad" : "warn"}">No-PAT mode: diagnostics via superuser SQL (--db-url)${a.trends.length ? " + Grafana trends" : ""}; advisors via the self-hosted splinter lints. Management-API planes (compute/disk provisioning, backups, pooler config, metrics, edge/API analytics) were not collected - absent sections there mean "not available in this mode", not "clean".${dbUnreachable ? " The database was ALSO unreachable, so SQL diagnostics are missing too." : ""}</p>`
-    : degraded
-      ? `<p class="banner bad">Project status <b>${esc(m.status)}</b>${dbUnreachable ? " - database was unreachable" : ""}. Runtime diagnostics (queries, metrics, health) are unavailable; only static config was collected. Empty sections below mean "not collected", not "clean".</p>`
-      : "";
+  // The top banner is reserved for genuine ALERTS (unreachable DB, or a PAT
+  // project in a non-healthy state). The no-PAT "these planes weren't collected"
+  // caveat is informational methodology, not an alert - a report shouldn't open
+  // with a disclaimer - so it moves to a compact header chip + a footer note.
+  const banner = degraded
+    ? `<p class="banner bad">${
+        dbUnreachable
+          ? "The database was unreachable - SQL diagnostics are missing."
+          : `Project status <b>${esc(m.status)}</b>. Runtime diagnostics (queries, metrics, health) are unavailable; only static config was collected.`
+      } Empty sections below mean "not collected", not "clean".</p>`
+    : "";
+  const noPatFooter = noPat
+    ? `<p class=meta>No-PAT mode: diagnostics via superuser SQL (--db-url)${a.trends.length ? " + Grafana trends" : ""}; advisors via the self-hosted splinter lints. Management-API planes (compute/disk provisioning, backups, pooler config, point-in-time metrics, edge/API analytics) were not collected - absent sections mean "not available in this mode", not "clean".</p>`
+    : "";
 
   const diskLine = disk
     ? `${disk.sizeGb} GB ${esc(disk.type)} / ${disk.iops ?? "-"} IOPS / ${disk.throughputMibps ?? "-"} MiB/s`
@@ -1047,6 +1056,7 @@ ${brandHead(brand, "Supabase performance report")}
     metaIdent(m),
     known(m.region) ? esc(m.region) : null,
     known(m.status) ? `status <code>${esc(m.status)}</code>` : null,
+    noPat ? `mode <code>no-PAT</code>` : null,
     `collected <code>${esc(m.collectedAt)}</code>`,
     m.collectionMs != null ? `in <code>${(m.collectionMs / 1000).toFixed(1)}s</code>` : null,
     `sbperf <code>${esc(m.sbperfVersion)}</code>`,
@@ -1058,6 +1068,7 @@ ${sections}
       ? `superuser SQL (--db-url) and the self-hosted splinter advisors${a.trends.length ? " + Grafana trends" : ""} (no-PAT mode)`
       : `the Supabase Management API, ${m.sqlSource === "superuser" ? "superuser SQL (--db-url)" : "read-only SQL"}, and the project metrics endpoint`
   }. No values inferred.</p>
+${noPatFooter}
 ${syncFooter(a.sync)}
 </body></html>`;
 }

@@ -354,6 +354,29 @@ describe("render", () => {
     expect(html).toContain('not "clean"');
   });
 
+  test("no-PAT (healthy): no top alert banner; caveat is a header chip + footer note", () => {
+    const html = render(
+      fixture({ meta: { ...fixture().meta, status: "unknown", managementApi: false } }),
+    );
+    // methodology is NOT a top alert banner
+    expect(html).not.toContain("banner bad");
+    expect(html).not.toContain("banner warn");
+    // compact chip up top
+    const metaLine = html.match(/<div class=meta>[\s\S]*?<\/div>/)?.[0] ?? "";
+    expect(metaLine).toContain("<code>no-PAT</code>");
+    // detail lives in the footer
+    expect(html).toContain("Management-API planes");
+    expect(html).toContain('not "clean"');
+  });
+
+  test("no-PAT + unreachable DB: still a top alert banner", () => {
+    const a = fixture({ meta: { ...fixture().meta, status: "unknown", managementApi: false } });
+    a.errors = [{ source: "sql:dbSize", message: "connection refused" }];
+    const html = render(a);
+    expect(html).toContain("banner bad");
+    expect(html).toContain("database was unreachable");
+  });
+
   test("deduped collection notes collapse repeats", () => {
     const html = render(
       fixture({
