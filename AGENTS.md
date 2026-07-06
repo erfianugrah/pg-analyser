@@ -87,6 +87,18 @@ of planes, so a superuser `--db-url` reaches that data directly):
   GoTrue authConfig, network restrictions (cloud firewall), edge functions,
   api/function analytics (Logflare), node_exporter host + component metrics.
 
+**Two settled design questions** (don't re-litigate):
+- **Project display name in no-PAT**: NOT derivable via SQL - the friendly name
+  is platform metadata, not stored in the DB. We auto-derive `ref` + `region`
+  from the connstring (dbtargets.ts); `name` is optional in the profile and
+  falls back to `ref`. Put `name` in the profile JSON only if you want the label.
+- **changelogUrl is curated, NOT LLM-driven, on purpose**: the per-finding
+  changelog links (2 in lints.ts + the auto-derived PG-release URL) are
+  hardcoded because an LLM picking changelog URLs would fabricate them - exactly
+  what narrate's grounding forbids. Expand the curated catalog to add coverage;
+  never make it dynamic. The `diff` command (run-to-run changelog) is likewise
+  deterministic by design - a diff must be exact.
+
 The customer-audit path: a DB connstring + optional Grafana cookie, no PAT -
 equivalent to `supabase inspect db` plus ranked findings, splinter advisors, and
 trends. `--all` still needs a PAT (it enumerates projects via the Management
@@ -154,11 +166,16 @@ src/
                  targets -> per-DB reports + index; `snapshot` records each.
   sql.ts         the perf query set - superset of `supabase inspect db`:
                  pg_stat_statements (by time + calls, WITH queryid for cross-
-                 snapshot query identity that powers `diff`), index-stats, bloat,
-                 extension inventory (+ pgvector ANN-index health, pg_cron nudge),
-                 traffic-profile, threshold-aware vacuum, txid wraparound,
-                 replication slots, role-stats, point-in-time locks/blocking/
-                 long-running, cache-hit + stats-reset age, RLS audit
+                 snapshot query identity that powers `diff`; PLUS queryIoStats -
+                 per-query temp-file spill / disk-read miss / latency variance),
+                 index-stats, bloat, extension inventory (+ pgvector ANN-index
+                 health, pg_cron nudge), traffic-profile, threshold-aware vacuum,
+                 txid wraparound, replication slots, role-stats, point-in-time
+                 locks/blocking/long-running/idle-in-txn, cache-hit (volume-
+                 gated) + stats-reset age, RLS audit, auth adoption (authAudit +
+                 separate authMfa), pg_cron job-run health (cronJobs). The auth/
+                 cron/queryIoStats queries run in BOTH modes (pure SQL) - part of
+                 keeping no-PAT at feature parity with PAT.
   metrics.ts     Prometheus text parser + DISPLAY-only allowlist (collect
                  captures the FULL scrape; curate() only picks the HTML slice)
   collect.ts     orchestrate all planes -> validated Analysis (per-source errors
