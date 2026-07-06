@@ -259,7 +259,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "Nearing max_connections risks 'too many connections' errors that surface as user-facing failures. Each backend also costs 5-10MB RAM, so unpooled connections waste the memory that sets your compute tier.",
     remediation:
-      "Route app traffic through the connection pooler (Supavisor). For serverless/edge use transaction mode (port 6543) with a small per-client pool (e.g. connection_limit=1-3 per function instance); reserve direct/session connections (5432) for migrations and long transactions.",
+      "Route app traffic through the connection pooler (Supavisor). For serverless/edge use transaction mode (port 6543) with a small per-client pool (e.g. connection_limit=1-3 per function instance); reserve direct/session connections (5432) for migrations and long transactions. If the load is legitimate and already pooled, max_connections is bound to your compute tier - review the instance size (a larger tier raises both max_connections and the RAM those backends need) rather than only bumping the setting.",
     docUrl: "https://supabase.com/docs/guides/database/connecting-to-postgres",
     reviewed: R,
   },
@@ -468,7 +468,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "Peak connections approaching max_connections risks 'too many clients' errors that hard-fail new work, and each backend costs memory (work_mem x concurrency). Sustained near the ceiling means the app is one traffic spike from refusal.",
     remediation:
-      "Route clients through the pooler (Supavisor / PgBouncer) in transaction mode so many clients share few backends, cap application pool sizes, and only then consider raising max_connections (it trades RAM for headroom). Long-lived idle connections are the usual culprit.",
+      "Route clients through the pooler (Supavisor / PgBouncer) in transaction mode so many clients share few backends, cap application pool sizes, and only then consider raising max_connections (it trades RAM for headroom). On Supabase max_connections tracks the compute tier, so if pooled demand is genuinely high the durable fix is sizing up the instance (more connections AND more RAM), not just the setting. Long-lived idle connections are the usual culprit.",
     docUrl: "https://supabase.com/docs/guides/database/connecting-to-postgres",
     reviewed: R,
   },
@@ -638,6 +638,30 @@ export const HEURISTICS: Record<string, Heuristic> = {
     remediation:
       "Add your application/egress CIDR ranges under Settings > Database > Network Restrictions so only they can reach Postgres. Keep it tight - avoid 0.0.0.0/0.",
     docUrl: "https://supabase.com/docs/guides/platform/network-restrictions",
+    reviewed: R,
+  },
+  ssl_hba_nonssl: {
+    id: "ssl_hba_nonssl",
+    plane: "Config",
+    howToVerify:
+      "Inspect pg_hba_file_rules for host/hostnossl entries, then confirm against the platform SSL toggle (GET /ssl-enforcement in PAT mode). A psql connect with sslmode=disable should be refused when enforcement is on.",
+    whyItMatters:
+      "A host-based auth rule that isn't hostssl lets the DB accept unencrypted TCP connections, so a misconfigured client can send credentials in plaintext. NOTE: Supabase terminates TLS at the pooler/proxy, so a pg_hba host rule may be an internal path rather than the public posture - treat this as a prompt to verify the platform SSL-enforcement toggle, not proof it is off.",
+    remediation:
+      "Verify SSL enforcement is on (Settings > Database > SSL Configuration, or PUT /ssl-enforcement {database:true}) so unencrypted client connections are refused, and confirm clients use sslmode=require.",
+    docUrl: "https://supabase.com/docs/guides/platform/ssl-enforcement",
+    reviewed: R,
+  },
+  pitr_absent: {
+    id: "pitr_absent",
+    plane: "Backups",
+    howToVerify:
+      "Check the PITR add-on in the Dashboard (Database > Backups > Point in Time), or confirm archive_mode + a recent pg_stat_archiver.last_archived_time on an active project.",
+    whyItMatters:
+      "Without continuous WAL archiving, recovery is limited to the daily physical/logical backup - you could lose up to a day of writes. PITR archives WAL every ~2 minutes, cutting the worst-case data loss to minutes. NOTE: archive_mode is inferred from SQL and isn't a guaranteed 1:1 with the PITR add-on; on an idle project WAL backups are skipped even with PITR on, so verify before acting.",
+    remediation:
+      "If minute-level recovery matters, enable the PITR add-on (Pro+ plan, requires at least a Small compute add-on). For non-production projects daily backups are usually sufficient.",
+    docUrl: "https://supabase.com/docs/guides/platform/backups",
     reviewed: R,
   },
   ssl_not_enforced: {

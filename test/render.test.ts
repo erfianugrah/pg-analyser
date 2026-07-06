@@ -76,6 +76,7 @@ function fixture(overrides: Partial<Analysis> = {}): Analysis {
       extensions: [],
       unindexedVectors: [],
       walArchiving: [],
+      hbaRules: [],
     },
     metrics: {
       available: true,
@@ -178,6 +179,7 @@ describe("render", () => {
       'id="txid"',
       'id="slots"',
       'id="walarchiving"',
+      'id="hba"',
       'id="longrunning"',
       'id="locks"',
       'id="blocking"',
@@ -211,12 +213,31 @@ describe("render", () => {
     a.sql.walArchiving = [
       { archive_mode: "on", archived_count: 42, last_archived_wal: "0001", failed_count: 0 },
     ];
+    a.sql.hbaRules = [
+      { type: "host", database: "all", user_name: "all", address: "0.0.0.0/0", auth_method: "md5" },
+    ];
     a.sql.roleStats = [{ role: "authenticated", connections: 45, conn_limit: 60 }];
     a.sql.txidWraparound = [
       { schema: "public", table: "public.big", xid_age: 5e8, pct_wraparound: 25 },
     ];
     const full = render(a);
     for (const h of gated) expect(full).toContain(h);
+  });
+
+  test("pooler config renders a section when a pooler is configured", () => {
+    const a = fixture();
+    a.pooler = [
+      { database_type: "PRIMARY", db_port: 6543, pool_mode: "transaction", default_pool_size: 15 },
+    ];
+    const html = render(a);
+    expect(html).toContain('id="pooler"');
+    expect(html).toContain("transaction");
+  });
+
+  test("pooler section omitted when no pooler is configured", () => {
+    const a = fixture();
+    a.pooler = null;
+    expect(render(a)).not.toContain('id="pooler"');
   });
 
   test("query outliers render an inline-SVG bar chart", () => {
@@ -463,6 +484,7 @@ describe("renderSummary", () => {
         extensions: [],
         unindexedVectors: [],
         walArchiving: [],
+        hbaRules: [],
       },
     });
     const html = renderSummary(clean);

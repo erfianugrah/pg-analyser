@@ -457,6 +457,24 @@ export const QUERIES = {
       last_failed_time::text as last_failed_time
     from pg_stat_archiver`,
 
+  // Host-based auth rules (pg_hba_file_rules, superuser-only view). The no-PAT
+  // proxy for the ssl-enforcement plane: a `host`/`hostnossl` TCP rule with a
+  // non-reject auth method means the DB layer admits UNENCRYPTED connections.
+  // PARTIAL signal only - Supabase terminates TLS at the pooler/proxy, so this
+  // reflects DB-layer pg_hba, not the platform SSL toggle. Evidence + a hedged
+  // low finding, used only when the authoritative plane is absent. database and
+  // user_name are text[]; flatten for display.
+  hbaRules: /* sql */ `
+    select
+      type,
+      array_to_string(database, ',') as database,
+      array_to_string(user_name, ',') as user_name,
+      address,
+      auth_method
+    from pg_hba_file_rules
+    where type in ('host', 'hostssl', 'hostnossl')
+    order by line_number`,
+
   connections: /* sql */ `
     select
       coalesce(state, '(none)') as state,

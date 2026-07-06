@@ -55,6 +55,7 @@ function base(ref = "r", collectedAt = "2026-01-01T00:00:00Z"): Analysis {
       extensions: [],
       unindexedVectors: [],
       walArchiving: [],
+      hbaRules: [],
     },
     metrics: { available: false, samples: [] },
     trends: [],

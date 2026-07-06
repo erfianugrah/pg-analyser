@@ -789,6 +789,50 @@ export function deriveFindings(a: Analysis): Finding[] {
     });
   }
 
+  // No-PAT SSL posture from pg_hba_file_rules (superuser SQL). The authoritative
+  // ssl-enforcement plane needs a PAT; without it a superuser can still read
+  // whether pg_hba admits non-SSL TCP connections. HEDGED: Supabase terminates
+  // TLS at the pooler/proxy, so DB-layer pg_hba is a PARTIAL signal, not the
+  // platform toggle - low severity, and only when the authoritative plane is
+  // absent (so it never duplicates the ssl_not_enforced finding).
+  if (!a.security?.sslEnforcement && a.sql.hbaRules.length > 0) {
+    const nonSsl = a.sql.hbaRules.some((r) => {
+      const t = String(r.type ?? "").toLowerCase();
+      const m = String(r.auth_method ?? "").toLowerCase();
+      return (t === "host" || t === "hostnossl") && m !== "reject";
+    });
+    if (nonSsl) {
+      out.push({
+        severity: "low",
+        category: "Security",
+        title: "pg_hba admits non-SSL TCP connections (SSL not enforced at the DB layer)",
+        anchor: "#hba",
+        ...meta("ssl_hba_nonssl"),
+      });
+    }
+  }
+
+  // No-PAT PITR negative: the authoritative backups plane is absent, and a
+  // superuser sees WAL archiving is NOT running (archive_mode off, or on with
+  // nothing archived). HEDGED: archive_mode semantics on Supabase aren't a
+  // guaranteed 1:1 with the PITR add-on, so this is low severity and worded as
+  // "no continuous WAL archiving detected", not "PITR is off". Gated to no-PAT
+  // (backups absent) so it never contradicts the authoritative pitr_enabled.
+  if (!a.backups && a.sql.walArchiving.length > 0) {
+    const w = a.sql.walArchiving[0] as SqlRow;
+    const mode = String(w.archive_mode ?? "").toLowerCase();
+    const archivingLive = (mode === "on" || mode === "always") && num(w.archived_count) > 0;
+    if (!archivingLive) {
+      out.push({
+        severity: "low",
+        category: "Capacity",
+        title: "No continuous WAL archiving detected (point-in-time recovery may be off)",
+        anchor: "#walarchiving",
+        ...meta("pitr_absent"),
+      });
+    }
+  }
+
   // Security config (auth / network / SSL) - sbperf-original Security findings.
   out.push(...securityConfigFindings(a));
 
