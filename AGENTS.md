@@ -93,11 +93,18 @@ of planes, so a superuser `--db-url` reaches that data directly):
   from the connstring (dbtargets.ts); `name` is optional in the profile and
   falls back to `ref`. Put `name` in the profile JSON only if you want the label.
 - **changelogUrl is curated, NOT LLM-driven, on purpose**: the per-finding
-  changelog links (2 in lints.ts + the auto-derived PG-release URL) are
-  hardcoded because an LLM picking changelog URLs would fabricate them - exactly
-  what narrate's grounding forbids. Expand the curated catalog to add coverage;
-  never make it dynamic. The `diff` command (run-to-run changelog) is likewise
-  deterministic by design - a diff must be exact.
+  changelog links are hardcoded because an LLM picking changelog URLs would
+  fabricate them - exactly what narrate's grounding forbids. Current curated set
+  (all verified 200 against supabase.com/changelog): pg_graphql exposure lints
+  (45329, lints.ts); connection findings direct_conn_high/connections_ceiling
+  (32755, session-mode-6543 deprecation); network_restrictions_open (20522,
+  Supavisor network restrictions); pg_cron cron_job_failing/pg_cron_review
+  (19298, cron.job direct-update restriction); plus the auto-derived PG-release
+  URL on pg_update_available. `test/heuristics.test.ts` asserts every
+  changelogUrl matches the changelog/release URL shape. Expand the catalog to
+  add coverage (find the entry at supabase.com/changelog, verify it 200s, wire
+  it to the finding's heuristic); never make it dynamic. The `diff` command
+  (run-to-run changelog) is likewise deterministic by design - a diff must be exact.
 
 The customer-audit path: a DB connstring + optional Grafana cookie, no PAT -
 equivalent to `supabase inspect db` plus ranked findings, splinter advisors, and

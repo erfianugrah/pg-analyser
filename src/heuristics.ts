@@ -302,6 +302,8 @@ export const HEURISTICS: Record<string, Heuristic> = {
     remediation:
       "Route app traffic through the connection pooler (Supavisor). For serverless/edge use transaction mode (port 6543) with a small per-client pool (e.g. connection_limit=1-3 per function instance); reserve direct/session connections (5432) for migrations and long transactions. If the load is legitimate and already pooled, max_connections is bound to your compute tier - review the instance size (a larger tier raises both max_connections and the RAM those backends need) rather than only bumping the setting.",
     docUrl: "https://supabase.com/docs/guides/database/connecting-to-postgres",
+    changelogUrl:
+      "https://supabase.com/changelog/32755-supabase-connection-pooler-deprecating-session-mode-on-port-6543-on-february-28",
     reviewed: R,
   },
   role_conn_high: {
@@ -511,6 +513,8 @@ export const HEURISTICS: Record<string, Heuristic> = {
     remediation:
       "Route clients through the pooler (Supavisor / PgBouncer) in transaction mode so many clients share few backends, cap application pool sizes, and only then consider raising max_connections (it trades RAM for headroom). On Supabase max_connections tracks the compute tier, so if pooled demand is genuinely high the durable fix is sizing up the instance (more connections AND more RAM), not just the setting. Long-lived idle connections are the usual culprit.",
     docUrl: "https://supabase.com/docs/guides/database/connecting-to-postgres",
+    changelogUrl:
+      "https://supabase.com/changelog/32755-supabase-connection-pooler-deprecating-session-mode-on-port-6543-on-february-28",
     reviewed: R,
   },
   disk_iops_high: {
@@ -692,6 +696,8 @@ export const HEURISTICS: Record<string, Heuristic> = {
     remediation:
       "Add your application/egress CIDR ranges under Settings > Database > Network Restrictions so only they can reach Postgres. Keep it tight - avoid 0.0.0.0/0.",
     docUrl: "https://supabase.com/docs/guides/platform/network-restrictions",
+    changelogUrl:
+      "https://supabase.com/changelog/20522-supavisor-starts-enforcing-network-restrictions",
     reviewed: R,
   },
   hba_weak_auth: {
@@ -829,6 +835,8 @@ export const HEURISTICS: Record<string, Heuristic> = {
     remediation:
       "Read the failing job's return_message in cron.job_run_details, fix the underlying command (permissions, missing object, timeout), and re-run it. If the job is obsolete, unschedule it with cron.unschedule().",
     docUrl: "https://supabase.com/docs/guides/database/extensions/pg_cron",
+    changelogUrl:
+      "https://supabase.com/changelog/19298-directly-updating-rows-in-the-cron-job-table-is-no-longer-allowed",
     reviewed: R,
   },
   pg_cron_review: {
@@ -841,6 +849,8 @@ export const HEURISTICS: Record<string, Heuristic> = {
     remediation:
       "Review cron.job_run_details for failed or overrunning jobs (SELECT jobid, status, start_time, end_time FROM cron.job_run_details ORDER BY start_time DESC).",
     docUrl: "https://supabase.com/docs/guides/database/extensions/pg_cron",
+    changelogUrl:
+      "https://supabase.com/changelog/19298-directly-updating-rows-in-the-cron-job-table-is-no-longer-allowed",
     reviewed: R,
   },
 
