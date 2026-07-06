@@ -394,6 +394,15 @@ export const QUERIES = {
     group by bucket_id
     order by coalesce(sum((metadata->>'size')::bigint), 0) desc`,
 
+  // Storage bucket inventory. The Supabase Storage API reads this same table;
+  // over a superuser --db-url it is the no-PAT source for the bucket list that
+  // PAT mode gets from /storage/buckets. Errors harmlessly (safe() -> []) on a
+  // non-Supabase Postgres with no storage schema.
+  bucketList: /* sql */ `
+    select id, name, public
+    from storage.buckets
+    order by name`,
+
   // Transaction-ID wraparound headroom. age(relfrozenxid) climbing toward 2.1B
   // means autovacuum is falling behind on freezing; at the ceiling the DB force-
   // stops writes. Scoped to non-system schemas (user-actionable); pct is against
