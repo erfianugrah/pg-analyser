@@ -29,6 +29,11 @@ function fullRoutes(overrides: Record<string, () => Response> = {}) {
     if (clean.endsWith("/database/backups"))
       return jsonResponse({ pitr_enabled: false, walg_enabled: true, backups: [] });
     if (clean.endsWith("/upgrade/eligibility")) return jsonResponse(upgrade);
+    if (clean.endsWith("/config/auth")) return jsonResponse({ jwt_exp: 3600 });
+    if (clean.endsWith("/network-restrictions"))
+      return jsonResponse({ config: { dbAllowedCidrs: ["10.0.0.0/8"] } });
+    if (clean.endsWith("/ssl-enforcement"))
+      return jsonResponse({ currentConfig: { database: true }, appliedSuccessfully: true });
     if (clean.endsWith("/functions")) return jsonResponse([]);
     if (clean.endsWith("/storage/buckets")) return jsonResponse([]);
     if (clean.endsWith("/advisors/performance")) return jsonResponse(advisorsPerf);

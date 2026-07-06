@@ -45,6 +45,45 @@ describe("Management", () => {
     await expect(m.project("ref")).rejects.toThrow(/500/);
   });
 
+  test("authConfig() parses the GoTrue auth config", async () => {
+    const t = fakeTransport({
+      onMgmt: (p) =>
+        p.endsWith("/config/auth")
+          ? jsonResponse({ mailer_autoconfirm: true, jwt_exp: 3600, extra_unknown: 1 })
+          : textResponse("nope", 404),
+    });
+    const c = await new Management(t).authConfig("ref");
+    expect(c.mailer_autoconfirm).toBe(true);
+    expect(c.jwt_exp).toBe(3600);
+    expect(t.calls.mgmt).toContain("/v1/projects/ref/config/auth");
+  });
+
+  test("networkRestrictions() parses the CIDR allowlist", async () => {
+    const t = fakeTransport({
+      onMgmt: (p) =>
+        p.endsWith("/network-restrictions")
+          ? jsonResponse({
+              entitlement: "allowed",
+              config: { dbAllowedCidrs: ["10.0.0.0/8"] },
+              status: "applied",
+            })
+          : textResponse("nope", 404),
+    });
+    const nr = await new Management(t).networkRestrictions("ref");
+    expect(nr.config?.dbAllowedCidrs).toEqual(["10.0.0.0/8"]);
+  });
+
+  test("sslEnforcement() parses the enforcement flag", async () => {
+    const t = fakeTransport({
+      onMgmt: (p) =>
+        p.endsWith("/ssl-enforcement")
+          ? jsonResponse({ currentConfig: { database: true }, appliedSuccessfully: true })
+          : textResponse("nope", 404),
+    });
+    const ssl = await new Management(t).sslEnforcement("ref");
+    expect(ssl.currentConfig.database).toBe(true);
+  });
+
   test("readOnlySql posts the query body and parses rows", async () => {
     let seenBody: string | undefined;
     const t = fakeTransport({

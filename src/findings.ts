@@ -112,6 +112,129 @@ function groupAdvisors(
   });
 }
 
+/**
+ * Security-config findings from the auth / network / SSL Management planes.
+ * Unlike the advisor passthrough, these are sbperf-ORIGINAL Security checks.
+ * a.security is null in no-PAT mode (no Management API) - nothing is asserted
+ * then. Each sub-plane is independently nullable, so a single 403 (e.g. a
+ * beta-gated endpoint) skips just its checks. Fields are optional at the schema
+ * boundary, so a check only fires when the value was actually present.
+ */
+export function securityConfigFindings(a: Analysis): Finding[] {
+  const s = a.security;
+  if (!s) return [];
+  const out: Finding[] = [];
+  const anchor = "#seccfg";
+  const ref = a.meta.ref ?? "_";
+  const authUrl = `https://supabase.com/dashboard/project/${ref}/auth/providers`;
+  const dbUrl = `https://supabase.com/dashboard/project/${ref}/settings/database`;
+
+  // Network restrictions: no allowlist (or a wide-open 0.0.0.0/0 // ::/0) means
+  // the Postgres port is reachable from any IP.
+  const nr = s.networkRestrictions;
+  if (nr) {
+    const v4 = nr.config?.dbAllowedCidrs ?? [];
+    const v6 = nr.config?.dbAllowedCidrsV6 ?? [];
+    const all = [...v4, ...v6];
+    const open = (c: string) => c === "0.0.0.0/0" || c === "::/0";
+    if (all.length === 0 || all.some(open)) {
+      out.push({
+        severity: "med",
+        category: "Security",
+        title:
+          all.length === 0
+            ? "Database has no network restrictions (reachable from any IP)"
+            : "Database network restriction allows all IPs (0.0.0.0/0)",
+        anchor,
+        dashUrl: dbUrl,
+        evidence: `dbAllowedCidrs: ${all.join(", ") || "(none)"}`,
+        ...meta("network_restrictions_open"),
+      });
+    }
+  }
+
+  // SSL enforcement off -> the server still accepts unencrypted connections.
+  if (s.sslEnforcement && s.sslEnforcement.currentConfig.database === false) {
+    out.push({
+      severity: "med",
+      category: "Security",
+      title: "SSL enforcement is off (unencrypted DB connections accepted)",
+      anchor,
+      dashUrl: dbUrl,
+      ...meta("ssl_not_enforced"),
+    });
+  }
+
+  const auth = s.auth;
+  if (auth) {
+    if (auth.mailer_autoconfirm === true) {
+      out.push({
+        severity: "med",
+        category: "Security",
+        title: "Email confirmation is off (signups auto-confirmed without verifying the address)",
+        anchor,
+        dashUrl: authUrl,
+        ...meta("auth_email_autoconfirm"),
+      });
+    }
+    // Only assert on MFA when the fields were actually present in the response.
+    const mfaFields = [
+      auth.mfa_totp_verify_enabled,
+      auth.mfa_phone_verify_enabled,
+      auth.mfa_web_authn_verify_enabled,
+    ];
+    if (mfaFields.some((v) => v !== undefined) && !mfaFields.some((v) => v === true)) {
+      out.push({
+        severity: "low",
+        category: "Security",
+        title: "No MFA factor is enabled project-wide (users cannot enrol a second factor)",
+        anchor,
+        dashUrl: `https://supabase.com/dashboard/project/${ref}/auth/mfa`,
+        ...meta("auth_mfa_disabled"),
+      });
+    }
+    const weakLen =
+      auth.password_min_length != null && auth.password_min_length < THRESHOLDS.passwordMinLength;
+    const noHibp = auth.password_hibp_enabled === false;
+    if (weakLen || noHibp) {
+      const bits: string[] = [];
+      if (weakLen)
+        bits.push(`min length ${auth.password_min_length} (< ${THRESHOLDS.passwordMinLength})`);
+      if (noHibp) bits.push("leaked-password (HIBP) check off");
+      out.push({
+        severity: weakLen ? "med" : "low",
+        category: "Security",
+        title: "Weak password policy",
+        anchor,
+        dashUrl: authUrl,
+        evidence: bits.join("; "),
+        ...meta("auth_weak_password_policy"),
+      });
+    }
+    if (auth.external_anonymous_users_enabled === true) {
+      out.push({
+        severity: "low",
+        category: "Security",
+        title: "Anonymous sign-ins are enabled (confirm RLS + rate limits account for anon users)",
+        anchor,
+        dashUrl: authUrl,
+        ...meta("auth_anonymous_users"),
+      });
+    }
+    if (auth.jwt_exp != null && auth.jwt_exp > THRESHOLDS.jwtExpMaxSec) {
+      out.push({
+        severity: "low",
+        category: "Security",
+        title: `Access-token TTL is ${Math.round(auth.jwt_exp / 60)} min (> ${Math.round(THRESHOLDS.jwtExpMaxSec / 60)} min default)`,
+        anchor,
+        dashUrl: `https://supabase.com/dashboard/project/${ref}/auth/sessions`,
+        ...meta("auth_long_jwt"),
+      });
+    }
+  }
+  return out;
+}
+
 /** Derive a ranked, deduped findings list - the pyramid apex of the report. */
 export function deriveFindings(a: Analysis): Finding[] {
   const out: Finding[] = [];
@@ -629,6 +752,46 @@ export function deriveFindings(a: Analysis): Finding[] {
     }
   }
 
+  // Extension health (SQL-derived; works in both the PAT read-only and
+  // superuser tiers, so it complements the splinter/advisor extension lints).
+  const outdatedExts = a.sql.extensions.filter((r) => r.outdated === true);
+  if (outdatedExts.length) {
+    out.push({
+      severity: "low",
+      category: "Performance",
+      title: `${outdatedExts.length} extension${outdatedExts.length === 1 ? "" : "s"} behind the latest available version`,
+      anchor: "#extensions",
+      evidence: outdatedExts.map((r) => `${r.name} ${r.installed}->${r.latest}`).join(", "),
+      ...meta("extensions_outdated"),
+    });
+  }
+  if (a.sql.unindexedVectors.length) {
+    const v = a.sql.unindexedVectors;
+    out.push({
+      severity: "med",
+      category: "Performance",
+      title: `${v.length} pgvector column${v.length === 1 ? "" : "s"} without an ANN index (ivfflat/hnsw)`,
+      anchor: "#extensions",
+      evidence: v
+        .slice(0, 5)
+        .map((r) => `${r.schema}.${r.table}.${r.column}`)
+        .join(", "),
+      ...meta("pgvector_unindexed"),
+    });
+  }
+  if (a.sql.extensions.some((r) => String(r.name) === "pg_cron")) {
+    out.push({
+      severity: "low",
+      category: "Performance",
+      title: "pg_cron is installed - review scheduled-job run history for failures/overruns",
+      anchor: "#extensions",
+      ...meta("pg_cron_review"),
+    });
+  }
+
+  // Security config (auth / network / SSL) - sbperf-original Security findings.
+  out.push(...securityConfigFindings(a));
+
   out.sort(
     (x, y) =>
       SEV_RANK[x.severity] - SEV_RANK[y.severity] || CAT_RANK[x.category] - CAT_RANK[y.category],
@@ -762,6 +925,30 @@ export function derivePositives(a: Analysis): Positive[] {
   }
   if (a.backups?.pitr_enabled) {
     out.push({ category: "Capacity", title: "Point-in-time recovery (PITR) is enabled" });
+  }
+  // Security config counterweights (only when the plane was collected - PAT).
+  const scfg = a.security;
+  if (scfg) {
+    const nr = scfg.networkRestrictions;
+    if (nr) {
+      const cidrs = [...(nr.config?.dbAllowedCidrs ?? []), ...(nr.config?.dbAllowedCidrsV6 ?? [])];
+      const openCidr = (c: string) => c === "0.0.0.0/0" || c === "::/0";
+      if (cidrs.length > 0 && !cidrs.some(openCidr))
+        out.push({ category: "Security", title: "Database network restrictions are configured" });
+    }
+    if (scfg.sslEnforcement?.currentConfig.database === true)
+      out.push({ category: "Security", title: "SSL enforcement is on" });
+    const auth = scfg.auth;
+    if (auth) {
+      if (auth.mailer_autoconfirm === false)
+        out.push({ category: "Security", title: "Email confirmation is required for signups" });
+      if (
+        auth.mfa_totp_verify_enabled === true ||
+        auth.mfa_phone_verify_enabled === true ||
+        auth.mfa_web_authn_verify_enabled === true
+      )
+        out.push({ category: "Security", title: "At least one MFA factor is enabled" });
+    }
   }
   // Edge functions all healthy (only when there are functions with real traffic).
   const fnsWithTraffic = a.functionStats.filter((f) => f.requests >= THRESHOLDS.fnMinRequests);

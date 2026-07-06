@@ -32,6 +32,7 @@ function base(): Analysis {
     functions: [],
     functionStats: [],
     buckets: [],
+    security: null,
     advisors: { performance: [], security: [] },
     apiCounts: [],
     sql: {
@@ -64,6 +65,8 @@ function base(): Analysis {
       locks: [],
       blocking: [],
       storageUsage: [],
+      extensions: [],
+      unindexedVectors: [],
     },
     metrics: { available: false, samples: [] },
     trends: [{ title: "CPU utilization (%)", unit: "%", points: [{ t: 1, v: 42 }] }],

@@ -99,6 +99,10 @@ export const THRESHOLDS = {
   topQueryDbTimePct: 10,
   /** Dead tuples >= this multiple of live tuples => autovacuum not keeping up. */
   deadTupleLiveMultiple: 2,
+  /** Auth password min length below which the policy is called out as weak. */
+  passwordMinLength: 8,
+  /** Access-token (jwt_exp) TTL above which a long-lived token is flagged (sec). */
+  jwtExpMaxSec: 3600,
 } as const;
 
 export type Plane =
@@ -620,6 +624,132 @@ export const HEURISTICS: Record<string, Heuristic> = {
     remediation:
       "postgres_changes has active subscriptions. It acquires a logical replication slot and polls it (appending subscription IDs per WAL record) and does not scale as well as Broadcast. For scale/security, migrate to realtime.broadcast_changes() triggers.",
     docUrl: "https://supabase.com/docs/guides/realtime/subscribing-to-database-changes",
+    reviewed: R,
+  },
+
+  // --- Security config (Management API: auth / network / SSL) ---
+  network_restrictions_open: {
+    id: "network_restrictions_open",
+    plane: "Config",
+    howToVerify:
+      "Re-check Settings > Database > Network Restrictions (or GET /network-restrictions) - dbAllowedCidrs should list only your egress ranges, not 0.0.0.0/0.",
+    whyItMatters:
+      "With no CIDR allowlist the Postgres port is reachable from any IP on the internet, so the database's exposure rests entirely on credentials + RLS. Restricting to known egress ranges removes the whole class of drive-by connection + brute-force attempts.",
+    remediation:
+      "Add your application/egress CIDR ranges under Settings > Database > Network Restrictions so only they can reach Postgres. Keep it tight - avoid 0.0.0.0/0.",
+    docUrl: "https://supabase.com/docs/guides/platform/network-restrictions",
+    reviewed: R,
+  },
+  ssl_not_enforced: {
+    id: "ssl_not_enforced",
+    plane: "Config",
+    howToVerify:
+      "Re-check GET /ssl-enforcement - currentConfig.database should be true; a psql connect with sslmode=disable should then be refused.",
+    whyItMatters:
+      "Without SSL enforcement the server still accepts unencrypted connections, so a misconfigured client can send credentials and data in plaintext - interceptable on the network path. Enforcing TLS closes that downgrade.",
+    remediation:
+      "Enable SSL enforcement (Settings > Database > SSL Configuration, or PUT /ssl-enforcement {database:true}) so unencrypted connections are refused. Confirm clients use sslmode=require first.",
+    docUrl: "https://supabase.com/docs/guides/platform/ssl-enforcement",
+    reviewed: R,
+  },
+  auth_email_autoconfirm: {
+    id: "auth_email_autoconfirm",
+    plane: "Auth",
+    howToVerify:
+      "Re-check GET /config/auth - mailer_autoconfirm should be false; a new signup should require clicking the confirmation link before the session is issued.",
+    whyItMatters:
+      "With email auto-confirm on, GoTrue issues a session without verifying the address, so anyone can sign up under an address they don't control - an account-farming and phishing-pretext surface, and it lets bogus emails accumulate.",
+    remediation:
+      "Turn OFF 'Confirm email' auto-confirm (Authentication > Providers > Email) unless you intentionally verify ownership another way, so new signups must confirm their address.",
+    docUrl: "https://supabase.com/docs/guides/auth/auth-email",
+    reviewed: R,
+  },
+  auth_mfa_disabled: {
+    id: "auth_mfa_disabled",
+    plane: "Auth",
+    howToVerify:
+      "Re-check GET /config/auth - at least one mfa_*_verify_enabled should be true, and users can then enrol a second factor.",
+    whyItMatters:
+      "With no MFA factor enabled project-wide, users cannot add a second factor, so any credential leak is a full account takeover. Enabling TOTP (a project setting, then opt-in per user) adds the standard phishing-resistant second step.",
+    remediation:
+      "Enable at least one MFA factor (Authentication > Multi-Factor - TOTP is the low-friction default) so users can enrol a second factor.",
+    docUrl: "https://supabase.com/docs/guides/auth/auth-mfa",
+    reviewed: R,
+  },
+  auth_weak_password_policy: {
+    id: "auth_weak_password_policy",
+    plane: "Auth",
+    howToVerify:
+      "Re-check GET /config/auth - password_min_length should be >= 8 and password_hibp_enabled true; a weak/known-breached password should be rejected at signup.",
+    whyItMatters:
+      "A short minimum length and no breached-password check let users pick guessable or already-leaked passwords, which is the entry point for credential-stuffing takeovers. Raising the floor + enabling HIBP blocks the weakest credentials up front.",
+    remediation:
+      "Set password min length to >= 8 (ideally with required character classes) and enable leaked-password protection (HIBP) under Authentication > Providers > Email.",
+    docUrl: "https://supabase.com/docs/guides/auth/password-security",
+    reviewed: R,
+  },
+  auth_anonymous_users: {
+    id: "auth_anonymous_users",
+    plane: "Auth",
+    howToVerify:
+      "Re-check GET /config/auth - external_anonymous_users_enabled reflects the setting; confirm RLS on user-facing tables distinguishes anon from authenticated.",
+    whyItMatters:
+      "Anonymous sign-ins are a legitimate feature but let anyone mint a real user row without any identity, so unbounded they enable row-spam and abuse. It only matters that RLS + rate limits are written with that in mind - flagged as awareness, not a defect.",
+    remediation:
+      "Anonymous sign-ins are enabled. Confirm RLS policies and rate limits account for un-verified anon users, and disable it if the app doesn't use anonymous auth.",
+    docUrl: "https://supabase.com/docs/guides/auth/auth-anonymous",
+    reviewed: R,
+  },
+  auth_long_jwt: {
+    id: "auth_long_jwt",
+    plane: "Auth",
+    howToVerify:
+      "Re-check GET /config/auth - jwt_exp should be <= 3600 (1h); a leaked access token then stops working within that window.",
+    whyItMatters:
+      "The access token can't be revoked before it expires, so a long jwt_exp widens the window a stolen token stays valid. The default 3600s (1h) balances that against refresh churn; much larger values extend the blast radius of a leak.",
+    remediation:
+      "Lower the access-token expiry (jwt_exp) toward the 3600s (1h) default unless a longer session is a deliberate tradeoff; refresh tokens keep sessions alive without a long-lived access token.",
+    docUrl: "https://supabase.com/docs/guides/auth/sessions",
+    reviewed: R,
+  },
+
+  // --- Extensions (SQL-derived; both PAT read-only + superuser tiers) ---
+  pgvector_unindexed: {
+    id: "pgvector_unindexed",
+    plane: "Query",
+    sql: "-- HNSW (fast, higher build cost) - tune m / ef_construction to recall:\nCREATE INDEX ON <schema>.<table> USING hnsw (<column> vector_cosine_ops);\n-- or IVFFlat (cheaper build; set lists ~ rows/1000):\n-- CREATE INDEX ON <schema>.<table> USING ivfflat (<column> vector_l2_ops) WITH (lists = 100);",
+    howToVerify:
+      "EXPLAIN a distance-ordered query (ORDER BY <col> <-> $1 LIMIT k) - it should use the ivfflat/hnsw index, not a full scan. Match the opclass (cosine/l2/ip) to your query operator.",
+    whyItMatters:
+      "A vector column queried by distance without an ANN index does an exact scan of every row per query, so similarity-search latency scales with table size and burns CPU - the classic pgvector slow path. An HNSW/IVFFlat index turns it into an approximate index lookup.",
+    remediation:
+      "Add an ANN index (HNSW or IVFFlat) on the vector column, with the opclass matching your distance operator (vector_cosine_ops / vector_l2_ops / vector_ip_ops).",
+    docUrl: "https://supabase.com/docs/guides/ai/vector-indexes",
+    reviewed: R,
+  },
+  extensions_outdated: {
+    id: "extensions_outdated",
+    plane: "Config",
+    sql: "ALTER EXTENSION <extension> UPDATE;",
+    howToVerify:
+      "Re-check extversion in pg_extension against pg_available_extensions.default_version - they should match after the update.",
+    whyItMatters:
+      "An installed extension behind the platform's available version misses bug/perf/security fixes shipped upstream. Updating is a cheap ALTER EXTENSION vs carrying known issues.",
+    remediation:
+      "Update lagging extensions to the platform's available version (ALTER EXTENSION <name> UPDATE), or via the Database > Extensions page.",
+    docUrl: "https://supabase.com/docs/guides/database/extensions",
+    reviewed: R,
+  },
+  pg_cron_review: {
+    id: "pg_cron_review",
+    plane: "Config",
+    howToVerify:
+      "Query cron.job_run_details for recent status='failed' rows or runs whose duration approaches the schedule interval; a healthy job shows status='succeeded' and finishes well inside its window.",
+    whyItMatters:
+      "Scheduled jobs fail or overrun silently - a failing nightly job or one that runs longer than its interval (piling up overlapping runs) is invisible until data is stale or the DB is under load. sbperf can't read run history over the read-only endpoint, so this is a prompt to check it.",
+    remediation:
+      "Review cron.job_run_details for failed or overrunning jobs (SELECT jobid, status, start_time, end_time FROM cron.job_run_details ORDER BY start_time DESC).",
+    docUrl: "https://supabase.com/docs/guides/database/extensions/pg_cron",
     reviewed: R,
   },
 

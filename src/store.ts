@@ -142,6 +142,15 @@ export class HistoryStore {
     return row ? (JSON.parse(row.analysis_json) as Analysis) : null;
   }
 
+  /** The `n` most recent stored Analyses for a ref, newest first. Powers the
+   *  store-based `sbperf diff --ref <ref>` (defaults to comparing the last two). */
+  recentAnalyses(ref: string, n = 2): Analysis[] {
+    const rows = this.db
+      .query("SELECT analysis_json FROM snapshots WHERE ref = ? ORDER BY collected_ts DESC LIMIT ?")
+      .all(ref, n) as Array<{ analysis_json: string }>;
+    return rows.map((r) => JSON.parse(r.analysis_json) as Analysis);
+  }
+
   /** Delete snapshots older than `retentionDays`; 0 = keep forever. Returns deleted count. */
   prune(ref: string, retentionDays: number): number {
     if (retentionDays <= 0) return 0;
