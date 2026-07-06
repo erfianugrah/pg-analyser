@@ -1,7 +1,30 @@
 import { describe, expect, test } from "bun:test";
 import { deriveFindings } from "../src/findings.ts";
 import { HEURISTICS, HEURISTICS_REVIEWED, meta, THRESHOLDS } from "../src/heuristics.ts";
+import { LINT_FIXES } from "../src/lints.ts";
 import type { Analysis } from "../src/schemas.ts";
+
+describe("changelog URLs are curated + well-formed", () => {
+  // changelogUrl is deliberately hardcoded (not LLM-picked) so it must never be
+  // a fabricated/malformed link. Every one must be a real Supabase changelog
+  // entry (numeric-id slug) or a GitHub release tag (the auto-derived PG one).
+  const CHANGELOG = /^https:\/\/supabase\.com\/changelog\/\d+-[a-z0-9-]+$/;
+  const GH_RELEASE = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/releases\/tag\/.+$/;
+  const urls = [
+    ...Object.values(HEURISTICS).map((h) => h.changelogUrl),
+    ...Object.values(LINT_FIXES).map((l) => l.changelogUrl),
+  ].filter((u): u is string => typeof u === "string");
+
+  test("at least the known curated set is present", () => {
+    expect(urls.length).toBeGreaterThanOrEqual(5);
+  });
+
+  test("every changelogUrl matches the changelog or release shape", () => {
+    for (const u of urls) {
+      expect(CHANGELOG.test(u) || GH_RELEASE.test(u), `bad changelog URL: ${u}`).toBe(true);
+    }
+  });
+});
 
 function base(): Analysis {
   return {
