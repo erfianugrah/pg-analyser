@@ -324,6 +324,11 @@ export const Analysis = z.object({
     // Host-based auth rules (pg_hba_file_rules) - the SQL proxy for SSL
     // enforcement when the Management API ssl-enforcement plane is absent.
     hbaRules: SqlRows.default([]),
+    // Auth adoption (auth schema) + scheduled-job health (pg_cron). SQL-derived
+    // so both modes get them; defaulted for back-compat.
+    authAudit: SqlRows.default([]),
+    authMfa: SqlRows.default([]),
+    cronJobs: SqlRows.default([]),
   }),
   metrics: z.object({
     available: z.boolean(),

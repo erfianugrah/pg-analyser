@@ -423,6 +423,46 @@ export const QUERIES = {
     group by bucket_id
     order by coalesce(sum((metadata->>'size')::bigint), 0) desc`,
 
+  // Auth footprint from the auth schema (GoTrue's tables). PAT mode gets auth
+  // POLICY from /config/auth; this gives auth ADOPTION - readable via SQL in
+  // both modes, so no-PAT gets an auth picture too. Counts only, no PII. Errors
+  // harmlessly to [] on a non-Supabase Postgres (no auth schema).
+  authAudit: /* sql */ `
+    select
+      count(*) as total_users,
+      count(*) filter (where confirmed_at is not null) as confirmed_users,
+      count(*) filter (where last_sign_in_at > now() - interval '30 days') as active_30d
+    from auth.users`,
+
+  // MFA enrolment is a SEPARATE query on purpose: auth.mfa_factors is created by
+  // a GoTrue migration and can be absent (verified against the supabase/postgres
+  // image, which ships auth.users but not mfa_factors). Postgres resolves every
+  // referenced relation at parse time - even inside a CASE guarded by
+  // to_regclass - so folding it into authAudit would let one missing table nuke
+  // the whole auth summary. Split -> a missing mfa_factors only loses this count.
+  authMfa: /* sql */ `
+    select count(distinct user_id) as mfa_users
+    from auth.mfa_factors
+    where status = 'verified'`,
+
+  // Scheduled-job (pg_cron) health - the ETL/automation plane. cron.job is the
+  // schedule; cron.job_run_details is the run log. Surfaces jobs whose recent
+  // runs FAILED (a real automation outage the pg_cron nudge can't see). Guarded
+  // by the cron schema existing (safe() -> [] when pg_cron isn't installed).
+  cronJobs: /* sql */ `
+    select
+      j.jobname,
+      j.schedule,
+      j.active,
+      count(r.*) filter (where r.status = 'failed') as failed_runs,
+      count(r.*) as runs_7d,
+      max(r.end_time)::text as last_run
+    from cron.job j
+    left join cron.job_run_details r
+      on r.jobid = j.jobid and r.start_time > now() - interval '7 days'
+    group by j.jobid, j.jobname, j.schedule, j.active
+    order by failed_runs desc, j.jobname`,
+
   // Storage bucket inventory. The Supabase Storage API reads this same table;
   // over a superuser --db-url it is the no-PAT source for the bucket list that
   // PAT mode gets from /storage/buckets. Errors harmlessly (safe() -> []) on a

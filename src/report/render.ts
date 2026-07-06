@@ -915,6 +915,8 @@ ${show.locks ? drill("locks", "Exclusive locks", "point-in-time snapshot: relati
 ${show.blocking ? drill("blocking", "Blocking chains", "point-in-time snapshot at collection", sqlTable(a.sql.blocking, { mono: ["blocked_query", "blocking_query"] })) : ""}
 ${drill("functions", "Edge functions", "invocation stats over the last day", functionsSection(a))}
 ${drill("storage", "Storage", "buckets + object usage", storageSection(a))}
+${a.sql.authAudit.length ? drill("auth", "Auth adoption", "users, confirmed, 30-day active, MFA-enrolled (from the auth schema; complements the auth policy config)", authSection(a)) : ""}
+${a.sql.cronJobs.length ? drill("cron", "Scheduled jobs (pg_cron)", "schedule + 7-day run health per job (failed runs surfaced as a finding)", sqlTable(a.sql.cronJobs, { mono: ["jobname", "schedule"] })) : ""}
 ${show.apivol ? drill("apivol", "API request volume", "rolled up over the collected window; peak bucket noted", errored.has("apiCounts") ? '<p class="empty warn-text">not collected</p>' : apiVolumeSummary(a)) : ""}
 ${drill("metrics", "Infra metrics", "scrape status + how to build history", metricsStatus(a))}
 ${a.errors.length ? `<h2>Collection notes <span class=count>${a.errors.length}</span></h2>${collectionNotes(a)}` : ""}
@@ -1199,6 +1201,28 @@ function poolerSection(a: Analysis): string {
     )
     .join("");
   return `<table><thead><tr><th>database</th><th>port</th><th>pool mode</th><th>default pool size</th><th>max client conn</th></tr></thead><tbody>${body}</tbody></table>`;
+}
+
+function authSection(a: Analysis): string {
+  const r = a.sql.authAudit[0];
+  if (!r) return `<p class=empty>no auth data</p>`;
+  const n = (v: unknown) => Number(v) || 0;
+  const total = n(r.total_users);
+  const pct = (x: number) => (total > 0 ? `${Math.round((x / total) * 100)}%` : "-");
+  const row = (label: string, val: string, extra = "") =>
+    `<tr><td>${label}</td><td>${val}</td><td>${extra}</td></tr>`;
+  // MFA enrolment comes from the separate authMfa query (auth.mfa_factors may be
+  // absent); show "-" rather than a misleading 0 when it wasn't collected.
+  const mfaRow = a.sql.authMfa[0];
+  const mfa = mfaRow ? n(mfaRow.mfa_users) : null;
+  return `<table><thead><tr><th>metric</th><th>count</th><th>of total</th></tr></thead><tbody>${row(
+    "Users",
+    esc(total),
+  )}${row("Confirmed", esc(n(r.confirmed_users)), pct(n(r.confirmed_users)))}${row(
+    "Active (30d)",
+    esc(n(r.active_30d)),
+    pct(n(r.active_30d)),
+  )}${row("MFA-enrolled", mfa == null ? "-" : esc(mfa), mfa == null ? "" : pct(mfa))}</tbody></table>`;
 }
 
 function storageSection(a: Analysis): string {

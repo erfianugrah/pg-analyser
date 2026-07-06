@@ -146,6 +146,9 @@ export async function collect(
     bucketList,
     walArchiving,
     hbaRules,
+    authAudit,
+    authMfa,
+    cronJobs,
     metricsText,
   ] = await Promise.all([
     mgmt("health", (mm) => mm.health(ref), []),
@@ -192,6 +195,9 @@ export async function collect(
     sql("bucketList"),
     sql("walArchiving"),
     sql("hbaRules"),
+    sql("authAudit"),
+    sql("authMfa"),
+    sql("cronJobs"),
     transport
       ? safe(
           "metrics",
@@ -409,6 +415,9 @@ export async function collect(
       unindexedVectors,
       walArchiving,
       hbaRules,
+      authAudit,
+      authMfa,
+      cronJobs,
     },
     metrics: { available: metricsText != null, samples },
     trends,

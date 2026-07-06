@@ -834,7 +834,27 @@ export function deriveFindings(a: Analysis): Finding[] {
       ...meta("pgvector_unindexed"),
     });
   }
-  if (a.sql.extensions.some((r) => String(r.name) === "pg_cron")) {
+  // Scheduled-job failures (pg_cron): a concrete automation outage, upgraded
+  // from the generic pg_cron nudge when we can actually see the run log. The
+  // nudge only fires as a fallback when there's no run-detail visibility.
+  const failingJobs = a.sql.cronJobs.filter((r) => num(r.failed_runs) > 0);
+  if (failingJobs.length > 0) {
+    const names = failingJobs
+      .slice(0, 3)
+      .map((r) => String(r.jobname))
+      .join(", ");
+    out.push({
+      severity: "med",
+      category: "Performance",
+      title: `${failingJobs.length} scheduled job${failingJobs.length === 1 ? "" : "s"} failed in the last 7 days`,
+      anchor: "#cron",
+      evidence: `Failing: ${names}${failingJobs.length > 3 ? ", ..." : ""}`,
+      ...meta("cron_job_failing"),
+    });
+  } else if (
+    a.sql.extensions.some((r) => String(r.name) === "pg_cron") &&
+    a.sql.cronJobs.length === 0
+  ) {
     out.push({
       severity: "low",
       category: "Performance",

@@ -149,6 +149,14 @@ export function buildNarrativeInput(a: Analysis) {
       connections: a.sql.connections,
       roleStats: a.sql.roleStats.slice(0, 6),
       functionStats: a.functionStats.slice(0, 8),
+      // Auth adoption (single-row summary) + scheduled-job health, SQL-derived
+      // so present in both modes. Only pass cron jobs that carry a signal.
+      authAdoption: a.sql.authAudit[0]
+        ? { ...a.sql.authAudit[0], mfa_users: a.sql.authMfa[0]?.mfa_users ?? null }
+        : null,
+      scheduledJobs: a.sql.cronJobs
+        .filter((r) => Number(r.failed_runs) > 0 || Number(r.runs_7d) > 0)
+        .slice(0, 8),
       advisors: {
         performance: a.advisors.performance.length,
         security: a.advisors.security.length,
