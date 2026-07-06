@@ -370,6 +370,9 @@ export async function collect(
       sbperfVersion: version,
       sqlSource: runner.source,
       managementApi: !noPat,
+      // Trends here can only have come from Prometheus/Grafana (the store/import
+      // fill happens later, at report time). Only claim a source if it yielded data.
+      trendSource: promUrl && trends.length ? "prometheus" : undefined,
     },
     health,
     disk: disk

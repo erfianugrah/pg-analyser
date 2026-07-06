@@ -395,10 +395,35 @@ function fmtSpan(sec: number): string {
   return `${Math.max(1, Math.round(sec / 60))}m`;
 }
 
+/** Human label for where the trend series came from (report provenance). */
+function trendSourceLabel(a: Analysis): string {
+  switch (a.meta.trendSource) {
+    case "prometheus":
+      return "from Prometheus/Grafana";
+    case "store":
+      return "from the metrics history store (sbperf snapshot)";
+    case "import":
+      return "from imported series";
+    default:
+      return "";
+  }
+}
+
 function trendsSection(a: Analysis): string {
   if (!a.trends.length) return "";
-  return `<h2 id="trends">Resource snapshot <span class=note>infra over time - read for headroom vs cost (over-provisioned = downsize, near-ceiling = upsize). Single-point series show a marker until more snapshots accrue</span></h2>
-<div class=sparks>${a.trends.map(sparkline).join("")}</div>`;
+  const src = trendSourceLabel(a);
+  const srcNote = src ? ` <span class=note>Source: ${src}.</span>` : "";
+  // EBS burst-balance is a CloudWatch-only metric (not on the Supabase metrics
+  // endpoint or the history store), so those panels are absent unless a
+  // CloudWatch-scraping Prometheus fed the trends. Say so when they're missing
+  // from an infra source, else a missing panel reads the same as "healthy".
+  const hasEbs = a.trends.some((t) => t.title.startsWith("EBS "));
+  const ebsNote =
+    !hasEbs && (a.meta.trendSource === "store" || a.meta.trendSource === "prometheus")
+      ? `<p class=note>EBS burst-balance (IOPS / throughput) panels are shown only when a CloudWatch-scraping Prometheus feeds the trends - they are not exposed by the Supabase metrics endpoint or the history store, so their absence here is not a health signal.</p>`
+      : "";
+  return `<h2 id="trends">Resource snapshot <span class=note>infra over time - read for headroom vs cost (over-provisioned = downsize, near-ceiling = upsize). Single-point series show a marker until more snapshots accrue</span>${srcNote}</h2>
+<div class=sparks>${a.trends.map(sparkline).join("")}</div>${ebsNote}`;
 }
 
 function healthBadges(a: Analysis): string {

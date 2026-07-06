@@ -245,6 +245,12 @@ export const Analysis = z.object({
     // Wall-clock collection time (ms). Optional metadata for the report footer +
     // operational logging; absent in analysis.json written before it existed.
     collectionMs: z.number().optional(),
+    // Where the trend series came from, so the report can label the Resource
+    // snapshot (and note that CloudWatch-only panels like EBS burst-balance are
+    // absent from the non-CloudWatch sources). "prometheus" = a Prometheus/
+    // Grafana TSDB, "store" = the sbperf SQLite history store, "import" = an
+    // imported CSV/JSON series. Absent = no trends (single run).
+    trendSource: z.enum(["prometheus", "store", "import"]).optional(),
   }),
   health: HealthList,
   disk: z
