@@ -242,6 +242,9 @@ export const Analysis = z.object({
     // trends from Grafana; provisioning/backups/metrics/analytics were skipped.
     // Optional/absent == PAT mode (back-compat + consumers test `=== false`).
     managementApi: z.boolean().optional(),
+    // Wall-clock collection time (ms). Optional metadata for the report footer +
+    // operational logging; absent in analysis.json written before it existed.
+    collectionMs: z.number().optional(),
   }),
   health: HealthList,
   disk: z

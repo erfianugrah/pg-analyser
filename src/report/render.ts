@@ -1045,6 +1045,7 @@ ${brandHead(brand, "Supabase performance report")}
     known(m.region) ? esc(m.region) : null,
     known(m.status) ? `status <code>${esc(m.status)}</code>` : null,
     `collected <code>${esc(m.collectedAt)}</code>`,
+    m.collectionMs != null ? `in <code>${(m.collectionMs / 1000).toFixed(1)}s</code>` : null,
     `sbperf <code>${esc(m.sbperfVersion)}</code>`,
   ])}</div>
 ${banner}
