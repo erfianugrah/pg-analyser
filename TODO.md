@@ -53,8 +53,11 @@ Report + workflow:
       panels - vendor-neutral, no dashboard coupling (you export, sbperf ingests).
 
 ## Remaining / ideas
-Nothing outstanding from the planned backlog. Candidate next steps (unprioritised):
-- sqlrunner.ts has no unit test (network-bound); consider a fake-connection test.
+Nothing outstanding from the planned backlog.
+
+(Shipped 2026-07-07: DirectSqlRunner now takes an optional injectable SqlLike
+backend so run/runMulti/close are unit-tested with a fake connection - the last
+network-bound coverage gap is closed.)
 
 (Shipped since last edit: narrate now writes narrative.html + `--narrative`
 embeds it in report/pdf; import-trends parses long-format CSV as well as wide.)
