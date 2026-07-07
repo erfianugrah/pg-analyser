@@ -28,6 +28,16 @@ export interface SqlRunner {
 }
 
 /**
+ * The slice of Bun.SQL that DirectSqlRunner actually uses. Declaring it lets a
+ * test inject a fake backend (the real one opens a network connection in its
+ * constructor). `unsafe` runs a raw query string; `end` closes the pool.
+ */
+export interface SqlLike {
+  unsafe(query: string): Promise<unknown>;
+  end(): Promise<void>;
+}
+
+/**
  * Normalize a Bun.SQL simple-query result to SqlRow[][]: a multi-statement
  * command returns an array of result sets (each an array), while a single
  * statement returns a flat row array - wrap the latter as one result set.
@@ -56,9 +66,13 @@ export class ManagementSqlRunner implements SqlRunner {
  */
 export class DirectSqlRunner implements SqlRunner {
   readonly source = "superuser" as const;
-  #sql: SQL;
-  constructor(dbUrl: string) {
-    this.#sql = new SQL(dbUrl, { prepare: false, max: 2 });
+  #sql: SqlLike;
+  /**
+   * `dbUrl` opens a pooler-safe connection (prepare:false + max:2). Tests may
+   * pass a fake `sql` backend to exercise run/runMulti/close without a network.
+   */
+  constructor(dbUrl: string, sql?: SqlLike) {
+    this.#sql = sql ?? new SQL(dbUrl, { prepare: false, max: 2 });
   }
   async run(query: string): Promise<SqlRow[]> {
     const rows = await this.#sql.unsafe(query);
