@@ -207,7 +207,10 @@ export async function collect(
     sql("unindexedVectors"),
     sql("bucketList"),
     sql("walArchiving"),
-    sql("hbaRules"),
+    // pg_hba_file_rules requires a true superuser (supabase_admin); the PAT
+    // read-only user is denied it (42501). Only attempt it on the superuser
+    // SQL tier - otherwise it warns + records a note on every PAT run.
+    runner.source === "superuser" ? sql("hbaRules") : Promise.resolve([]),
     sql("authAudit"),
     sql("authMfa"),
     transport
