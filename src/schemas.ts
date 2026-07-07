@@ -126,7 +126,10 @@ export const AuthConfig = z.object({
   mfa_web_authn_verify_enabled: z.boolean().optional(),
   password_hibp_enabled: z.boolean().optional(),
   password_min_length: z.number().optional(),
-  password_required_characters: z.string().optional(),
+  // The API returns explicit null (not absent) when no character-class
+  // requirement is set, so this must be nullable, not merely optional -
+  // otherwise the whole authConfig plane is dropped on such a project.
+  password_required_characters: z.string().nullable().optional(),
   security_captcha_enabled: z.boolean().optional(),
   refresh_token_rotation_enabled: z.boolean().optional(),
   security_update_password_require_reauthentication: z.boolean().optional(),
