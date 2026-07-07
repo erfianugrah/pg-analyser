@@ -83,16 +83,19 @@ export async function collect(
       return r;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      errors.push({ source, message });
       done({ ok: false });
-      // A missing OPTIONAL relation/schema (pg_cron, storage, auth on a non-
-      // Supabase or extension-less DB) is an expected absence, not a fault:
-      // record the collection note but log it at debug so a sweep isn't peppered
-      // with scary WARNs for planes the DB simply doesn't have. Genuine plane
-      // errors (timeouts, permission denied, unexpected SQL) stay at warn.
       const expectedAbsence = /(relation|schema) "[^"]+" does not exist/i.test(message);
-      if (expectedAbsence) clog.debug("plane absent", { source, error: message });
-      else clog.warn("plane failed", { source, error: message });
+      if (expectedAbsence) {
+        // Optional feature simply not present on this DB (pg_cron, storage, the
+        // vector type, ... on a non-Supabase / extension-less database). The
+        // finding + positive derivation already handle empty data, so this is a
+        // debug log and NOT a collection note - surfacing "relation X does not
+        // exist" in the report reads like a failure when nothing went wrong.
+        clog.debug("plane absent", { source, error: message });
+      } else {
+        errors.push({ source, message });
+        clog.warn("plane failed", { source, error: message });
+      }
       return fallback;
     }
   };
@@ -159,7 +162,6 @@ export async function collect(
     hbaRules,
     authAudit,
     authMfa,
-    cronJobs,
     metricsText,
   ] = await Promise.all([
     mgmt("health", (mm) => mm.health(ref), []),
@@ -208,7 +210,6 @@ export async function collect(
     sql("hbaRules"),
     sql("authAudit"),
     sql("authMfa"),
-    sql("cronJobs"),
     transport
       ? safe(
           "metrics",
@@ -329,6 +330,16 @@ export async function collect(
     hasPgstattuple && runner.source === "superuser"
       ? await safe("sql:bloatExact", () => runner.run(QUERIES.bloatExact), [])
       : [];
+
+  // Scheduled-job health reads cron.job / cron.job_run_details directly, which
+  // ERROR if pg_cron isn't installed. Rather than fire-and-catch (a spurious
+  // "relation cron.job does not exist" note on every DB without pg_cron), gate
+  // on the extension inventory we already collected - the proper way to detect
+  // an optional feature. Most DBs don't run pg_cron; absence is normal.
+  const hasPgCron = extensions.some((r) => String(r.name) === "pg_cron");
+  const cronJobs = hasPgCron
+    ? await safe("sql:cronJobs", () => runner.run(QUERIES.cronJobs), [])
+    : [];
   const rawCacheHit = cacheHitRows[0]?.cache_hit_pct;
   const cacheHitPct = rawCacheHit == null ? null : Number(rawCacheHit);
   const rawBlksAccessed = cacheHitRows[0]?.heap_blks_accessed;
