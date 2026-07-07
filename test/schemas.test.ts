@@ -54,3 +54,22 @@ describe("AdvisorResponse accepts both shapes, fails loud otherwise", () => {
     expect(() => S.AdvisorResponse.parse({ foo: [] })).toThrow();
   });
 });
+
+describe("AuthConfig tolerates the API's nullable fields", () => {
+  test("password_required_characters: null (no char-class requirement) parses", () => {
+    const parsed = S.AuthConfig.parse({
+      disable_signup: false,
+      password_min_length: 8,
+      password_required_characters: null,
+    });
+    expect(parsed.password_required_characters).toBeNull();
+    expect(parsed.password_min_length).toBe(8);
+  });
+
+  test("password_required_characters: a real char-class string parses", () => {
+    const parsed = S.AuthConfig.parse({
+      password_required_characters: "abcdefghijklmnopqrstuvwxyz:ABC",
+    });
+    expect(parsed.password_required_characters).toContain("abc");
+  });
+});
