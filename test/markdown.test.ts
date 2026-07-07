@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mdToHtml } from "../src/report/markdown.ts";
+import { mdInline, mdToHtml } from "../src/report/markdown.ts";
 
 describe("mdToHtml", () => {
   test("headings map to h2/h3", () => {
@@ -51,5 +51,18 @@ describe("mdToHtml", () => {
     expect(html).toContain('<a href="https://x.io" rel="noreferrer">d</a>');
     expect(html).toContain("<ol><li>Do a</li><li>Do b</li></ol>");
     expect(html).toContain("<h3>med - Cache</h3>");
+  });
+});
+
+describe("mdInline", () => {
+  test("code spans and http links render without block wrapping", () => {
+    expect(mdInline("Table `public.foo` has a policy. See [docs](https://example.com/x).")).toBe(
+      "Table <code>public.foo</code> has a policy. See " +
+        '<a href="https://example.com/x" rel="noreferrer">docs</a>.',
+    );
+  });
+
+  test("HTML is escaped before inline conversion (injection-safe)", () => {
+    expect(mdInline("a <b>x</b> `y`")).toBe("a &lt;b&gt;x&lt;/b&gt; <code>y</code>");
   });
 });

@@ -347,6 +347,32 @@ describe("render", () => {
     expect(html).toContain('class="lvl WARN"');
   });
 
+  test("advisor detail renders inline markdown: code spans + docs link, not raw", () => {
+    const html = render(
+      fixture({
+        advisors: {
+          performance: [
+            {
+              name: "x",
+              title: "Auth RLS Initialization Plan",
+              level: "WARN",
+              detail:
+                "Table \\`public.foo\\` has a policy that re-evaluates auth. See [docs](https://supabase.com/docs/guides/database/postgres/row-level-security).",
+            },
+          ],
+          security: [],
+        },
+      }),
+    );
+    expect(html).toContain("<code>public.foo</code>");
+    expect(html).toContain(
+      '<a href="https://supabase.com/docs/guides/database/postgres/row-level-security" rel="noreferrer">docs</a>',
+    );
+    // no raw backticks or literal markdown link syntax leaked into the cell
+    expect(html).not.toContain("`public.foo`");
+    expect(html).not.toContain("[docs](https://");
+  });
+
   test("empty SQL sections show 'none found' not a broken table", () => {
     const html = render(fixture());
     expect(html).toContain("none found");
