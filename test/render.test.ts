@@ -82,6 +82,8 @@ function fixture(overrides: Partial<Analysis> = {}): Analysis {
       authAudit: [],
       authMfa: [],
       cronJobs: [],
+      dbSizeBytes: null,
+      bloatExact: [],
     },
     metrics: {
       available: true,
@@ -518,6 +520,8 @@ describe("renderSummary", () => {
         authAudit: [],
         authMfa: [],
         cronJobs: [],
+        dbSizeBytes: null,
+        bloatExact: [],
       },
     });
     const html = renderSummary(clean);

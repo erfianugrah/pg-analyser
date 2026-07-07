@@ -291,7 +291,14 @@ async function doAllDbs(
     // rather than a silently trend-less report.
     const grafanaGap =
       activeProfile?.grafana && !graf
-        ? `no Grafana config for region "${t.region ?? "(underivable from connstring)"}" - trends skipped`
+        ? (() => {
+            const region = t.region ?? "(underivable from connstring)";
+            const have = Object.keys(activeProfile.grafana?.regions ?? {});
+            // List the region keys the profile DOES have, so a one-digit typo
+            // (ap-northeast-1 vs -2) is obvious instead of a silent skip.
+            const hint = have.length ? ` (profile maps: ${have.join(", ")})` : "";
+            return `no Grafana config for region "${region}"${hint} - trends skipped`;
+          })()
         : null;
     progress.step(`${label} (${t.ref})`);
     try {

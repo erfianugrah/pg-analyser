@@ -193,7 +193,14 @@ src/
                  gated) + stats-reset age, RLS audit, auth adoption (authAudit +
                  separate authMfa), pg_cron job-run health (cronJobs). The auth/
                  cron/queryIoStats queries run in BOTH modes (pure SQL) - part of
-                 keeping no-PAT at feature parity with PAT.
+                 keeping no-PAT at feature parity with PAT. bloat carries a 10MB
+                 table-size floor (the pg_stats estimator throws absurd bloat_x
+                 on tiny tables - pure noise). biggestTables also returns
+                 total_bytes/index_bytes (for storage attribution). bloatExact
+                 (pgstattuple_approx) is EXACT reclaimable space, run only when
+                 the extension is already installed + superuser SQL (collect.ts
+                 gates it; sbperf never CREATEs an extension - that's a write);
+                 findings prefer it over the estimate, else label the estimate.
   metrics.ts     Prometheus text parser + DISPLAY-only allowlist (collect
                  captures the FULL scrape; curate() only picks the HTML slice)
   collect.ts     orchestrate all planes -> validated Analysis (per-source errors
@@ -233,7 +240,13 @@ src/
                  from heuristics.ts. Includes the phase-2 tuning findings and the
                  TREND-DRIVEN capacity suggestions (disk/CPU/memory projections),
                  all data-aware via trendstats.sufficient() so a 2-point store
-                 series never claims "sustained over 30d".
+                 series never claims "sustained over 30d". Also: storage
+                 attribution (largest table as a share of DB size, index-heavy
+                 tables capped worst-first) so the disk story names its dominant
+                 consumer; and a churn link - writeTargets() matches high-
+                 frequency UPDATE/DELETE statements to a bloated/dead-tuple table
+                 and annotates the bloat finding with the likely cause (e.g. a
+                 hot counter update), the cross-cutting read the cards lack.
   trendstats.ts  trend-analysis primitives (slope/growth, sustained-fraction,
                  peak, linear projection) behind sufficient() gating; the shapes
                  the capacity findings + trend-health positives reason over.

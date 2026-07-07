@@ -61,6 +61,8 @@ function base(): Analysis {
       authAudit: [],
       authMfa: [],
       cronJobs: [],
+      dbSizeBytes: null,
+      bloatExact: [],
     },
     metrics: { available: false, samples: [] },
     trends: [],
@@ -433,6 +435,100 @@ describe("deriveFindings", () => {
     expect(deriveFindings(a).find((x) => x.anchor === "#bloat")?.severity).toBe("med");
     a.sql.bloat = [{ name: "public.tiny", bloat_x: 2, waste: "1 MB", waste_bytes: 1048576 }];
     expect(deriveFindings(a).some((x) => x.anchor === "#bloat")).toBe(false);
+  });
+
+  test("estimate is labelled as an estimate; churn note names the hot-write source", () => {
+    const a = base();
+    a.sql.bloat = [
+      { name: "public.churned", bloat_x: 4.1, waste: "7 GB", waste_bytes: 7_600_000_000 },
+    ];
+    a.sql.topByCalls = [
+      {
+        queryid: "1",
+        calls: 3_000_000,
+        query: 'UPDATE "public"."churned" SET "n" = "n" + $1 WHERE "id" = $2',
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.anchor === "#bloat");
+    expect(f?.title).toContain("estimated reclaimable");
+    expect(f?.title).toContain("pg_stats estimate");
+    expect(f?.evidence).toContain("3,000,000 UPDATE calls");
+  });
+
+  test("exact pgstattuple bloat is preferred over the estimate, labelled measured", () => {
+    const a = base();
+    // Estimate says one thing; the measured pgstattuple row should win.
+    a.sql.bloat = [{ name: "public.est", bloat_x: 2, waste: "120 MB", waste_bytes: 125_829_120 }];
+    a.sql.bloatExact = [
+      { name: "public.churned", reclaimable_bytes: 900_000_000, reclaimable: "858 MB" },
+    ];
+    const f = deriveFindings(a).find((x) => x.anchor === "#bloat");
+    expect(f?.title).toContain("public.churned");
+    expect(f?.title).toContain("measured via pgstattuple");
+    expect(f?.severity).toBe("med"); // 858MB > 500MB med threshold
+    expect(deriveFindings(a).filter((x) => x.anchor === "#bloat")).toHaveLength(1);
+  });
+
+  test("storage concentration: largest table flagged as a share of the DB", () => {
+    const a = base();
+    a.sql.dbSizeBytes = 60_000_000_000;
+    a.sql.biggestTables = [
+      {
+        schema: "public",
+        table: "public.dominant",
+        total_size: "33 GB",
+        index_size: "15 GB",
+        total_bytes: 33_000_000_000,
+        index_bytes: 15_000_000_000,
+        live_rows: 60_000_000,
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.title.includes("of the database"));
+    expect(f?.category).toBe("Capacity");
+    expect(f?.title).toContain("public.dominant is 55% of the database");
+    expect(f?.evidence).toContain("indexes");
+  });
+
+  test("storage concentration does NOT fire below the 25% threshold", () => {
+    const a = base();
+    a.sql.dbSizeBytes = 100_000_000_000;
+    a.sql.biggestTables = [
+      {
+        table: "public.small",
+        total_size: "10 GB",
+        index_size: "1 GB",
+        total_bytes: 10_000_000_000,
+        index_bytes: 1_000_000_000,
+        live_rows: 1,
+      },
+    ];
+    expect(deriveFindings(a).some((x) => x.title.includes("of the database"))).toBe(false);
+  });
+
+  test("index-heavy tables flagged (>=40% indexes, >=1GB), capped at 3, worst-first", () => {
+    const a = base();
+    a.sql.dbSizeBytes = 500_000_000_000; // avoid tripping storage_concentration
+    const mk = (name: string, totalGb: number, idxFrac: number) => ({
+      table: name,
+      total_size: `${totalGb} GB`,
+      index_size: `${Math.round(totalGb * idxFrac)} GB`,
+      total_bytes: totalGb * 1_000_000_000,
+      index_bytes: Math.round(totalGb * idxFrac) * 1_000_000_000,
+      live_rows: 1,
+    });
+    a.sql.biggestTables = [
+      mk("public.a", 10, 0.5), // 5GB idx
+      mk("public.b", 8, 0.6), // 4.8GB idx
+      mk("public.c", 6, 0.45), // 2.7GB idx
+      mk("public.d", 4, 0.45), // 1.8GB idx - should be capped out
+      mk("public.small", 0.5, 0.9), // under 1GB floor -> ignored
+    ];
+    const heavy = deriveFindings(a).filter((x) => x.title.includes("index-heavy"));
+    expect(heavy).toHaveLength(3);
+    // Worst-first by absolute index size: a (5GB) before b (4.8GB) before c (2.7GB).
+    expect(heavy[0]?.title).toContain("public.a");
+    expect(heavy.some((x) => x.title.includes("public.d"))).toBe(false);
+    expect(heavy.some((x) => x.title.includes("public.small"))).toBe(false);
   });
 
   test("point-in-time blocking + long-running fire when non-empty", () => {

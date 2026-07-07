@@ -85,6 +85,8 @@ function base(): Analysis {
       authAudit: [],
       authMfa: [],
       cronJobs: [],
+      dbSizeBytes: null,
+      bloatExact: [],
     },
     metrics: { available: false, samples: [] },
     trends: [],

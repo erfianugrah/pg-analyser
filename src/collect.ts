@@ -315,6 +315,20 @@ export async function collect(
       }));
 
   const dbSize = (dbSizeRows[0]?.db_size as string | undefined) ?? null;
+  const rawDbBytes = dbSizeRows[0]?.db_size_bytes;
+  const dbSizeBytes =
+    rawDbBytes == null || !Number.isFinite(Number(rawDbBytes)) ? null : Number(rawDbBytes);
+
+  // Exact reclaimable space via pgstattuple_approx - run ONLY when the extension
+  // is already installed AND we have superuser SQL. sbperf never CREATEs it (a
+  // write); the read-only PAT user can't exec it either. Cheap on well-vacuumed
+  // tables (approx skips all-visible pages); safe() records a note and findings
+  // fall back to the pg_stats estimate on any error/absence.
+  const hasPgstattuple = extensions.some((r) => String(r.name) === "pgstattuple");
+  const bloatExact =
+    hasPgstattuple && runner.source === "superuser"
+      ? await safe("sql:bloatExact", () => runner.run(QUERIES.bloatExact), [])
+      : [];
   const rawCacheHit = cacheHitRows[0]?.cache_hit_pct;
   const cacheHitPct = rawCacheHit == null ? null : Number(rawCacheHit);
   const rawBlksAccessed = cacheHitRows[0]?.heap_blks_accessed;
@@ -400,6 +414,7 @@ export async function collect(
     apiCounts,
     sql: {
       dbSize,
+      dbSizeBytes,
       cacheHitPct: Number.isFinite(cacheHitPct) ? cacheHitPct : null,
       indexHitPct: indexHitPct != null && Number.isFinite(indexHitPct) ? indexHitPct : null,
       cacheBlocksAccessed,
@@ -409,6 +424,7 @@ export async function collect(
       topByCalls,
       queryIoStats,
       biggestTables,
+      bloatExact,
       indexStats,
       duplicateIndexes,
       rlsUnindexed,

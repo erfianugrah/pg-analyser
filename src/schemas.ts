@@ -289,6 +289,9 @@ export const Analysis = z.object({
   apiCounts: ApiCounts.shape.result,
   sql: z.object({
     dbSize: z.string().nullable(),
+    // Database size in bytes - lets findings attribute disk usage to the
+    // largest tables as a fraction of the whole. Defaulted for back-compat.
+    dbSizeBytes: z.number().nullable().default(null),
     cacheHitPct: z.number().nullable(),
     indexHitPct: z.number().nullable(),
     // Total heap blocks accessed since stats reset - the activity floor that
@@ -301,6 +304,10 @@ export const Analysis = z.object({
     // Per-query I/O + latency-stability depth. Defaulted for back-compat.
     queryIoStats: SqlRows.default([]),
     biggestTables: SqlRows,
+    // Measured (pgstattuple_approx) reclaimable space on the biggest tables -
+    // populated ONLY when the extension is installed + superuser SQL. Empty
+    // otherwise (findings fall back to the pg_stats estimate). Back-compat default.
+    bloatExact: SqlRows.default([]),
     indexStats: SqlRows,
     duplicateIndexes: SqlRows,
     rlsUnindexed: SqlRows,
