@@ -74,6 +74,8 @@ function base(): Analysis {
       authAudit: [],
       authMfa: [],
       cronJobs: [],
+      dbSizeBytes: null,
+      bloatExact: [],
     },
     metrics: { available: false, samples: [] },
     trends: [{ title: "CPU utilization (%)", unit: "%", points: [{ t: 1, v: 42 }] }],

@@ -52,10 +52,51 @@ const num = (v: unknown): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
+/**
+ * Present a count derived from a LIMIT-capped SQL result. When the source array
+ * hit its cap the count is a FLOOR, not a total, so append "+" - "20" tables
+ * reads as "20+" instead of implying there are exactly 20. `rawLen` is the
+ * pre-filter array length (truncation happens at the SQL LIMIT, before any
+ * schema filter), `shown` is the number actually being reported.
+ */
+const countCapped = (rawLen: number, shown: number, limit = 20): string =>
+  `${shown}${rawLen >= limit ? "+" : ""}`;
+
 function settingsMap(rows: SqlRow[]): Map<string, string> {
   const m = new Map<string, string>();
   for (const r of rows) m.set(String(r.name), String(r.setting));
   return m;
+}
+
+// Leading UPDATE/DELETE target of a normalized statement (schema-qualified or
+// not, quoted or not). Anchored so it only matches the statement's own verb.
+const WRITE_RX =
+  /^\s*(update|delete)\s+(?:from\s+)?((?:"[^"]+"|[a-zA-Z0-9_]+)(?:\.(?:"[^"]+"|[a-zA-Z0-9_]+))?)/i;
+
+/**
+ * Map each table to the UPDATE/DELETE call volume targeting it, deduped by
+ * queryid across the query planes. Lets a bloat / dead-tuple finding name the
+ * likely CHURN SOURCE (e.g. a hot counter UPDATE driving a table's bloat) that
+ * the independent finding cards otherwise leave unconnected. Keyed by the bare
+ * table name (last identifier segment) so it matches a schema.table bloat row.
+ */
+function writeTargets(a: Analysis): Map<string, { calls: number; kind: string }> {
+  const map = new Map<string, { calls: number; kind: string }>();
+  const seen = new Set<string>();
+  for (const r of [...a.sql.topByCalls, ...a.sql.topStatements, ...a.sql.queryIoStats]) {
+    const q = String(r.query ?? "");
+    const id = String(r.queryid ?? q);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const m = WRITE_RX.exec(q);
+    if (!m?.[1] || !m[2]) continue;
+    const table = m[2].replaceAll('"', "").split(".").pop() ?? "";
+    if (!table) continue;
+    const cur = map.get(table) ?? { calls: 0, kind: m[1].toUpperCase() };
+    cur.calls += num(r.calls);
+    map.set(table, cur);
+  }
+  return map;
 }
 
 function groupAdvisors(
@@ -307,7 +348,7 @@ export function deriveFindings(a: Analysis): Finding[] {
     out.push({
       severity: "med",
       category: "Performance",
-      title: `${seqScan} public ${seqScan === 1 ? "table" : "tables"} sequential-scan heavy (missing index?)`,
+      title: `${countCapped(a.sql.seqScanHeavy.length, seqScan)} public ${seqScan === 1 ? "table" : "tables"} sequential-scan heavy (missing index?)`,
       anchor: "#seqscan",
       ...meta("seq_scan_heavy"),
     });
@@ -408,7 +449,7 @@ export function deriveFindings(a: Analysis): Finding[] {
     out.push({
       severity: "med",
       category: "Capacity",
-      title: `${overdue} ${overdue === 1 ? "table" : "tables"} past the autovacuum dead-tuple threshold (vacuum not keeping up)`,
+      title: `${countCapped(a.sql.deadTuples.length, overdue)} ${overdue === 1 ? "table" : "tables"} past the autovacuum dead-tuple threshold (vacuum not keeping up)`,
       anchor: "#deadtuples",
       ...meta("autovacuum_overdue"),
     });
@@ -464,16 +505,89 @@ export function deriveFindings(a: Analysis): Finding[] {
       ...meta("wal_slot_lag"),
     });
   }
-  // Estimated bloat: reclaimable space (>=50MB wasted or >=100MB with 2x+ bloat).
-  const worstBloat = a.sql.bloat.reduce((mx, r) => Math.max(mx, num(r.waste_bytes)), 0);
-  if (worstBloat >= THRESHOLDS.bloatMinBytes) {
-    const top = a.sql.bloat.find((r) => num(r.waste_bytes) === worstBloat);
+  // Reclaimable bloat. Prefer MEASURED pgstattuple(_approx) bytes when present
+  // (superuser + extension installed); otherwise the pg_stats ESTIMATE, clearly
+  // labelled as an estimate to verify. Either way, annotate with the likely
+  // churn source when a high-frequency write targets the table.
+  const writes = writeTargets(a);
+  const churnNote = (tableName: string): string | undefined => {
+    const seg = tableName.split(".").pop() ?? tableName;
+    const w = writes.get(seg);
+    return w && w.calls >= THRESHOLDS.hotWriteMinCalls
+      ? `Likely churn-driven: ${w.calls.toLocaleString()} ${w.kind} calls target this table.`
+      : undefined;
+  };
+  const exactBloat = a.sql.bloatExact
+    .map((r) => ({
+      name: String(r.name),
+      bytes: num(r.reclaimable_bytes),
+      pretty: String(r.reclaimable ?? ""),
+    }))
+    .filter((r) => r.bytes > 0)
+    .sort((x, y) => y.bytes - x.bytes)[0];
+  if (exactBloat && exactBloat.bytes >= THRESHOLDS.bloatMinBytes) {
     out.push({
-      severity: worstBloat >= THRESHOLDS.bloatMedBytes ? "med" : "low",
+      severity: exactBloat.bytes >= THRESHOLDS.bloatMedBytes ? "med" : "low",
       category: "Capacity",
-      title: `~${String(top?.waste ?? "")} reclaimable bloat on ${String(top?.name ?? "a table")} (VACUUM FULL / pg_repack)`,
+      title: `~${exactBloat.pretty} reclaimable on ${exactBloat.name} (measured via pgstattuple; pg_repack)`,
       anchor: "#bloat",
+      evidence: churnNote(exactBloat.name),
       ...meta("table_bloat"),
+    });
+  } else {
+    const worstBloat = a.sql.bloat.reduce((mx, r) => Math.max(mx, num(r.waste_bytes)), 0);
+    if (worstBloat >= THRESHOLDS.bloatMinBytes) {
+      const top = a.sql.bloat.find((r) => num(r.waste_bytes) === worstBloat);
+      const name = String(top?.name ?? "a table");
+      out.push({
+        severity: worstBloat >= THRESHOLDS.bloatMedBytes ? "med" : "low",
+        category: "Capacity",
+        title: `~${String(top?.waste ?? "")} estimated reclaimable bloat on ${name} (pg_stats estimate - verify, then pg_repack)`,
+        anchor: "#bloat",
+        evidence: churnNote(name),
+        ...meta("table_bloat"),
+      });
+    }
+  }
+  // Storage attribution: name the table that dominates disk, as a share of the
+  // whole database. Answers "what is filling the disk" - which the biggest-
+  // tables drill has, but no finding surfaced. Needs the byte columns + db size.
+  const dbBytes = a.sql.dbSizeBytes ?? 0;
+  const topTable = a.sql.biggestTables[0];
+  if (topTable && dbBytes > 0 && num(topTable.total_bytes) > 0) {
+    const share = num(topTable.total_bytes) / dbBytes;
+    if (share >= THRESHOLDS.storageConcentrationFrac) {
+      const idxShare = num(topTable.index_bytes) / num(topTable.total_bytes);
+      out.push({
+        severity: "low",
+        category: "Capacity",
+        title: `${String(topTable.table)} is ${Math.round(share * 100)}% of the database (${String(topTable.total_size)} of ${String(a.sql.dbSize ?? "")})`,
+        anchor: "#tables",
+        evidence: `${String(topTable.index_size)} of it is indexes (${Math.round(idxShare * 100)}%); ${String(topTable.live_rows ?? "?")} live rows.`,
+        ...meta("storage_concentration"),
+      });
+    }
+  }
+  // Index-heavy large tables: indexes rivalling the heap = disk + write cost.
+  // Capped to the worst few by absolute index size so a wide schema can't
+  // produce a wall of low findings; the drill-down still lists every table.
+  const indexHeavy = a.sql.biggestTables
+    .filter(
+      (r) =>
+        num(r.total_bytes) >= THRESHOLDS.indexHeavyMinBytes &&
+        num(r.index_bytes) / num(r.total_bytes) >= THRESHOLDS.indexHeavyFrac,
+    )
+    .sort((x, y) => num(y.index_bytes) - num(x.index_bytes))
+    .slice(0, THRESHOLDS.indexHeavyMaxFindings);
+  for (const r of indexHeavy) {
+    const total = num(r.total_bytes);
+    const idx = num(r.index_bytes);
+    out.push({
+      severity: "low",
+      category: "Capacity",
+      title: `${String(r.table)} is index-heavy: ${String(r.index_size)} of indexes on a ${String(r.total_size)} table (${Math.round((idx / total) * 100)}%)`,
+      anchor: "#tables",
+      ...meta("index_heavy_table"),
     });
   }
   // Point-in-time: a blocking chain exists right now (real even as a snapshot).

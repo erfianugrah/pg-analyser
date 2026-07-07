@@ -66,7 +66,9 @@ const NOT_APP_STATEMENT =
 
 export const QUERIES = {
   dbSize: /* sql */ `
-    select pg_size_pretty(pg_database_size(current_database())) as db_size`,
+    select
+      pg_size_pretty(pg_database_size(current_database())) as db_size,
+      pg_database_size(current_database()) as db_size_bytes`,
 
   // Table + index cache-hit ratio. Only meaningful relative to how long stats
   // have accumulated (see statsResetAge) - a fresh reset shows a misleading 100%.
@@ -168,6 +170,8 @@ export const QUERIES = {
       schemaname || '.' || relname as table,
       pg_size_pretty(pg_total_relation_size(relid)) as total_size,
       pg_size_pretty(pg_indexes_size(relid)) as index_size,
+      pg_total_relation_size(relid) as total_bytes,
+      pg_indexes_size(relid) as index_bytes,
       n_live_tup as live_rows
     from pg_stat_user_tables
     order by pg_total_relation_size(relid) desc
@@ -311,8 +315,44 @@ export const QUERIES = {
       (case when relpages < otta then 0 else (bs * (relpages - otta)::bigint)::bigint end) as waste_bytes
     from table_bloat
     where relpages > otta
+      -- Ignore tiny tables: the pg_stats estimator divides by an estimated
+      -- optimal page count, so on a small table a rounding artifact reads as a
+      -- huge bloat_x (e.g. 500x on a 300KB table) - pure noise, and there is
+      -- nothing worth reclaiming anyway. 10MB floor kills the false positives.
+      and relpages * bs >= 10 * 1024 * 1024
     order by waste_bytes desc
     limit 20`,
+
+  // EXACT reclaimable space via pgstattuple_approx - run ONLY when the
+  // pgstattuple extension is already installed and we have superuser SQL (see
+  // collect.ts; the read-only user can't exec it, and sbperf never CREATEs an
+  // extension - that would be a write). This replaces the noisy pg_stats
+  // ESTIMATE with measured dead-tuple + free-space bytes on the biggest heap
+  // tables. `_approx` uses the visibility map to skip all-visible pages, so it
+  // is cheap on a well-vacuumed table; the top-N-then-scan shape (limit BEFORE
+  // the lateral) ensures pgstattuple runs on just those N tables, not all.
+  bloatExact: /* sql */ `
+    with big as (
+      select c.oid, n.nspname, c.relname
+      from pg_class c
+      join pg_namespace n on n.oid = c.relnamespace
+      where c.relkind = 'r'
+        and n.nspname not in ('pg_catalog', 'information_schema')
+        and pg_relation_size(c.oid) >= 100 * 1024 * 1024
+      order by pg_relation_size(c.oid) desc
+      limit 5
+    )
+    select
+      nspname || '.' || relname as name,
+      s.table_len as total_bytes,
+      round(s.dead_tuple_percent::numeric, 1) as dead_pct,
+      s.dead_tuple_len as dead_bytes,
+      round(s.approx_free_percent::numeric, 1) as free_pct,
+      s.approx_free_space as free_bytes,
+      (s.dead_tuple_len + s.approx_free_space)::bigint as reclaimable_bytes,
+      pg_size_pretty((s.dead_tuple_len + s.approx_free_space)::bigint) as reclaimable
+    from big, lateral pgstattuple_approx(big.oid) s
+    order by reclaimable_bytes desc`,
 
   // Read-heavy vs write-heavy profile per table (blocks read vs write tuples).
   // Informs index/partitioning strategy. Adapted from the CLI's traffic-profile

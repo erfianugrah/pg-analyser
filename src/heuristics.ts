@@ -53,6 +53,23 @@ export const THRESHOLDS = {
   /** Estimated reclaimable bloat: minimum to report / bump to med. */
   bloatMinBytes: 50 * 1024 * 1024,
   bloatMedBytes: 500 * 1024 * 1024,
+  /** A single table this fraction (or more) of total DB size = worth
+   * attributing in a finding ("table X is N% of the database"), so the disk
+   * story names its dominant consumer instead of leaving it in a drill-down. */
+  storageConcentrationFrac: 0.25,
+  /** A large table whose indexes are this fraction (or more) of its total size
+   * is index-heavy - worth reviewing for unused/redundant indexes (they cost
+   * disk + write amplification). Gated by a size floor so small tables with a
+   * couple of natural indexes don't trip it. */
+  indexHeavyFrac: 0.4,
+  indexHeavyMinBytes: 1024 * 1024 * 1024,
+  /** Cap on how many index-heavy tables get their own finding (worst-first by
+   * index size); the rest stay in the biggest-tables drill-down. */
+  indexHeavyMaxFindings: 3,
+  /** Write calls (UPDATE/DELETE) against one table above which it is a plausible
+   * churn source for that table's bloat/dead-tuples - used to annotate the
+   * bloat finding with the likely cause (a hot counter update, say). */
+  hotWriteMinCalls: 100_000,
   /** Active replication slot retained WAL that counts as lag. */
   slotLagBytes: 1_073_741_824,
   /** Edge-function server-error rate: warn / high fraction, and min sample. */
@@ -354,6 +371,30 @@ export const HEURISTICS: Record<string, Heuristic> = {
     remediation:
       "Reclaim online with pg_repack (brief final lock); VACUUM FULL needs an exclusive lock throughout. Run when no long-running transactions are open.",
     docUrl: "https://supabase.com/blog/postgres-bloat",
+    reviewed: R,
+  },
+  storage_concentration: {
+    id: "storage_concentration",
+    plane: "Storage",
+    howToVerify:
+      "Confirm with pg_total_relation_size on the named table; the share of pg_database_size should match.",
+    whyItMatters:
+      "One or two tables usually account for most of the disk you pay for. Knowing which - and how much of it is indexes vs heap - is where capacity work (archival, partitioning, dropping indexes, reclaiming bloat) has the most leverage.",
+    remediation:
+      "Attribution, not a defect: this is where the disk goes. If it is growing, consider archiving cold rows, partitioning by time, dropping unused indexes on it, or reclaiming bloat (pg_repack) before sizing up.",
+    docUrl: "https://supabase.com/docs/guides/platform/database-size",
+    reviewed: R,
+  },
+  index_heavy_table: {
+    id: "index_heavy_table",
+    plane: "Storage",
+    howToVerify:
+      "Compare pg_indexes_size(relid) to pg_total_relation_size(relid) for the table; cross-check the unused-index list for candidates to drop.",
+    whyItMatters:
+      "When indexes rival or exceed the heap they can dominate disk and add write amplification on every insert/update. Some are load-bearing; unused or redundant ones are pure cost.",
+    remediation:
+      "Review this table's indexes against the unused-index list and query patterns; drop the ones no query uses (each is disk + write overhead), and de-duplicate overlapping ones.",
+    docUrl: "https://supabase.com/docs/guides/database/query-optimization",
     reviewed: R,
   },
   txid_wraparound: {

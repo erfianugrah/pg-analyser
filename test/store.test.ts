@@ -67,6 +67,8 @@ function makeAnalysis(opts: {
       authAudit: [],
       authMfa: [],
       cronJobs: [],
+      dbSizeBytes: null,
+      bloatExact: [],
     },
     metrics: { available: (opts.samples?.length ?? 0) > 0, samples: opts.samples ?? [] },
     trends: [],
