@@ -75,6 +75,43 @@ describe("collect", () => {
     expect(backupsUnused).toBeDefined();
   });
 
+  test("an INACTIVE project short-circuits DB-dependent planes with one note", async () => {
+    const inactive = { ...project, status: "INACTIVE" };
+    const t = fakeTransport({
+      onMgmt: fullRoutes({ "/v1/projects/ref": () => jsonResponse(inactive) }),
+      onMetrics: okMetrics,
+    });
+    const a = await collect("ref", t, "0.0.0-test", { syncCheck: false });
+
+    // ONE summary note, not a per-plane warn for each of the ~19 SQL queries.
+    const dbNotes = a.errors.filter((e) => e.source === "database");
+    expect(dbNotes).toHaveLength(1);
+    expect(dbNotes[0]?.message).toContain("INACTIVE");
+    // No SQL plane failures were recorded (the queries were never attempted).
+    expect(a.errors.some((e) => e.source.startsWith("sql:"))).toBe(false);
+
+    // The read-only SQL endpoint and the metrics scrape were never hit.
+    expect(t.calls.mgmt.some((p) => p.includes("query/read-only"))).toBe(false);
+    expect(t.calls.metrics).toHaveLength(0);
+    expect(a.metrics.available).toBe(false);
+
+    // DB/service-dependent Management planes were skipped too...
+    for (const seg of [
+      "/health",
+      "/config/disk/util",
+      "/upgrade/eligibility",
+      "/ssl-enforcement",
+      "/storage/buckets",
+    ]) {
+      expect(t.calls.mgmt.some((p) => p.split("?")[0]!.endsWith(seg))).toBe(false);
+    }
+    // ...but static platform-metadata planes still ran (project meta + advisors).
+    expect(a.meta.name).toBe("example-project");
+    expect(a.meta.status).toBe("INACTIVE");
+    expect(a.advisors.performance).toHaveLength(2);
+    expect(t.calls.mgmt.some((p) => p.endsWith("/config/database/pooler"))).toBe(true);
+  });
+
   test("PAT mode: Management /storage/buckets wins over the SQL fallback", async () => {
     const t = fakeTransport({
       onMgmt: fullRoutes({
