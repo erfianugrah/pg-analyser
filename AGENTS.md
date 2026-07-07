@@ -82,6 +82,14 @@ of planes, so a superuser `--db-url` reaches that data directly):
   bypass). NOT an SSL check: Supabase's standard pg_hba is all
   `host ... scram-sha-256` with TLS terminated at the proxy, so host-vs-hostssl
   is noise that matches every project (this was the retune after a real run).
+  GATED to the superuser SQL tier in collect.ts (`runner.source === "superuser"`):
+  the PAT read-only user (`supabase_read_only_user`) is always denied
+  `pg_hba_file_rules` with 42501, so attempting it in PAT mode can never succeed
+  and only spams a warn+note on every run. It runs whenever a superuser --db-url
+  is present (no-PAT OR PAT+--db-url); a PAT alone never triggers it. The tier
+  flag can't see the role INSIDE a superuser connstring, so a `postgres`-role
+  --db-url still 42501s through the normal `safe()` note - the gate only kills
+  the guaranteed-failure read-only path.
 - **Genuinely NOT reachable via SQL** (platform/infra, correctly left null/[]):
   service health, disk provisioning (size/IOPS/type), pooler CONFIG (Supavisor),
   GoTrue authConfig, network restrictions (cloud firewall), edge functions,
@@ -205,7 +213,20 @@ src/
                  captures the FULL scrape; curate() only picks the HTML slice)
   collect.ts     orchestrate all planes -> validated Analysis (per-source errors
                  captured); captures the COMPLETE metrics corpus (all ~321
-                 families, no curation) - the corpus is the product
+                 families, no curation) - the corpus is the product. Short-
+                 circuits DB-dependent planes for a non-serving project: a PAT-
+                 mode project whose status != ACTIVE_HEALTHY (paused/INACTIVE/
+                 coming-up) has no live DB or metrics endpoint, so every SQL
+                 query 544s (connection timeout) and metrics has no service_role.
+                 dbServing (`!project || status==="ACTIVE_HEALTHY"`) gates all
+                 SQL, the metrics scrape, and the five Management planes that
+                 proxy live services (health/diskUtil/upgrade/sslEnforcement/
+                 buckets, via `mgmtLive`), recording ONE `database` note instead
+                 of ~24 per-plane warns (and dropping a ~16s run to ~2s). Static
+                 platform-metadata planes (disk/pgConfig/pooler/backups/
+                 authConfig/network-restrictions/functions/advisors/apiCounts)
+                 still run - they work on a paused project. No-PAT superuser mode
+                 keeps dbServing true (the --db-url points at a live DB).
   check.ts       CI gate: evaluateGate turns deriveFindings into a pass/fail by
                  severity (--fail-on), optional --category scope + --new-since
                  baseline (gate only on NEWLY-appeared findings). CLI exits 1 on
@@ -353,7 +374,15 @@ src/
   to paper over a shape mismatch** - it silently masks upstream changes. Use
   `.refine()` to fail loud, then let `collect.ts`'s per-source `safe()` wrapper
   record it as a collection note. (Learned the hard way: the advisors REST
-  endpoint wraps findings under `lints`, not `results`.)
+  endpoint wraps findings under `lints`, not `results`.) Corollary on
+  optionality: an API field that is EXPLICITLY sent as `null` (not omitted)
+  must be `.nullable()`, not just `.optional()` - `.optional()` alone rejects
+  null and throws, which drops the WHOLE plane via `safe()`. E.g.
+  `AuthConfig.password_required_characters` is null (not absent) when no
+  character-class requirement is set; it was `.string().optional()` and
+  silently lost every such project's GoTrue security findings until made
+  `.string().nullable().optional()`. `.nullable()` here is the real shape, not
+  papering over a mismatch - the field genuinely IS null.
 - Generated reports contain live query text - `reports/` is gitignored.
 - Scraper dirs contain a live credential in `prometheus.yml` - gitignored.
 

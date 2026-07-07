@@ -426,6 +426,11 @@ check - not advisor-lint passthrough. `hba_weak_auth` needs a TRUE superuser
 (`supabase_admin`) and fires only on a real auth bypass (a non-`scram-sha-256`
 rule from a non-loopback address), NOT on host-vs-hostssl (Supabase terminates
 TLS at the proxy, so its standard pg_hba is all `host ... scram-sha-256`).
+The `hbaRules` query is only ATTEMPTED on the superuser SQL tier
+(`runner.source === "superuser"` in collect.ts): the PAT read-only user is
+always denied `pg_hba_file_rules` (42501), so PAT-mode audits skip it silently
+rather than logging a warn+note per run. Present whenever a superuser --db-url
+is (no-PAT or PAT+--db-url).
 
 Sources: Supabase Network Restrictions / SSL Enforcement docs; PG docs pg_hba.conf.
 
