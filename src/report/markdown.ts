@@ -9,8 +9,13 @@
 const escapeHtml = (s: string): string =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
-/** Inline spans on an ALREADY-escaped text run: links, bold, italic, code. */
-function inline(text: string): string {
+/**
+ * Render the inline-markdown subset of a single text run to safe HTML: links,
+ * bold, italic, code spans - all on HTML-escaped text so no markup injects.
+ * Exported for one-line strings (e.g. an advisor detail cell) that want the
+ * inline formatting WITHOUT block wrapping.
+ */
+export function mdInline(text: string): string {
   let s = escapeHtml(text);
   // [label](http(s)://url) - only http(s) to avoid javascript: etc.
   s = s.replace(
@@ -38,13 +43,13 @@ export function mdToHtml(md: string): string {
 
   const flushPara = () => {
     if (para.length) {
-      out.push(`<p>${inline(para.join(" "))}</p>`);
+      out.push(`<p>${mdInline(para.join(" "))}</p>`);
       para = [];
     }
   };
   const flushList = () => {
     if (list) {
-      const items = list.items.map((it) => `<li>${inline(it)}</li>`).join("");
+      const items = list.items.map((it) => `<li>${mdInline(it)}</li>`).join("");
       out.push(`<${list.type}>${items}</${list.type}>`);
       list = null;
     }
@@ -92,7 +97,7 @@ export function mdToHtml(md: string): string {
     if (h) {
       flush();
       const level = h[1]!.length;
-      out.push(`<h${level}>${inline(h[2]!.trim())}</h${level}>`);
+      out.push(`<h${level}>${mdInline(h[2]!.trim())}</h${level}>`);
       i++;
       continue;
     }

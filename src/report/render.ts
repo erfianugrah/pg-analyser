@@ -9,7 +9,7 @@ import {
 import { THRESHOLDS } from "../heuristics.ts";
 import { EMPTY_OVERLAY, type Overlay } from "../overlay.ts";
 import type { Advisor, Analysis, SqlRow } from "../schemas.ts";
-import { mdToHtml } from "./markdown.ts";
+import { mdInline, mdToHtml } from "./markdown.ts";
 
 /** Header block: brand logo + title, shared by every rendered page. */
 function brandHead(brand: Brand, title: string): string {
@@ -35,8 +35,14 @@ const esc = (s: unknown): string =>
     (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[m] as string,
   );
 
-/** Advisor text is markdown with backslash-escaped backticks; unescape for display. */
-const cleanText = (s: unknown): string => esc(String(s ?? "").replace(/\\`/g, "`"));
+/**
+ * Advisor detail is inline markdown (`code` spans, [docs](url) links) with
+ * backslash-escaped backticks. Unescape the backticks, then render the inline
+ * subset to HTML (mdInline HTML-escapes first, so it's injection-safe) - so
+ * `public.foo` shows monospaced and [docs](...) becomes a real link instead of
+ * literal markdown syntax in the cell.
+ */
+const cleanText = (s: unknown): string => mdInline(String(s ?? "").replace(/\\`/g, "`"));
 
 /**
  * Header identity: "name (ref)" but just "ref" when name === ref (the no-PAT,
