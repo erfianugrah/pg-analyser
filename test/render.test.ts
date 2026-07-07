@@ -121,11 +121,35 @@ function tagBalance(html: string): boolean {
 }
 
 describe("render", () => {
+  test("capabilities strip: shows optional features either way (absent -> explicit, not hidden)", () => {
+    // Empty fixture: no pg_cron extension, no buckets, no auth rows.
+    const html = render(fixture());
+    expect(html).toContain("Capabilities");
+    expect(html).toContain("not installed"); // pg_cron
+    expect(html).toContain("none configured"); // storage buckets
+    expect(html).toContain("auth schema not present"); // auth
+
+    // Present: pg_cron installed with a job, a bucket, and auth users.
+    const a = fixture();
+    a.sql.extensions = [{ name: "pg_cron", version: "1.6" }];
+    a.sql.cronJobs = [{ jobname: "nightly", failed_runs: 0, runs_7d: 7 }];
+    a.buckets = [{ id: "b1", name: "avatars", public: false }];
+    a.sql.authAudit = [{ total_users: 42, confirmed_users: 40, active_30d: 10 }];
+    a.sql.authMfa = [{ mfa_users: 5 }];
+    const html2 = render(a);
+    expect(html2).toContain("1 job");
+    expect(html2).toContain("all healthy");
+    expect(html2).toContain("1 bucket");
+    expect(html2).toContain("42 users");
+    expect(html2).toContain("5 MFA-enrolled");
+  });
+
   test("emits the always-on section headings", () => {
     const html = render(fixture());
     for (const h of [
       "Findings",
       "Evidence",
+      "Capabilities",
       "Infrastructure",
       "Advisors - performance",
       "Query outliers",

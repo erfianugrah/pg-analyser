@@ -130,13 +130,14 @@ describe("collect", () => {
     expect(t.calls.mgmt.some((p) => p.includes("query/read-only"))).toBe(false);
   });
 
-  test("a missing optional relation is a debug 'plane absent', not a warn", async () => {
+  test("a missing optional relation is NOT a collection note (debug 'plane absent', not warn)", async () => {
     const lines: string[] = [];
     const logger = makeLogger({ level: "debug", json: true, sink: (l) => lines.push(l) });
     const runner = {
       source: "superuser" as const,
       run: async (q: string) => {
-        if (q.includes("cron.job")) throw new Error('relation "cron.job" does not exist');
+        if (q.includes("storage.buckets"))
+          throw new Error('relation "storage.buckets" does not exist');
         return [];
       },
     };
@@ -146,14 +147,32 @@ describe("collect", () => {
       sqlRunner: runner,
       logger,
     });
-    // The collection note is still recorded (so the report + notes count show it)...
-    expect(a.errors.some((e) => e.source === "sql:cronJobs")).toBe(true);
-    // ...but it was logged at debug as "plane absent", NOT warn "plane failed".
-    const cron = lines.map((l) => JSON.parse(l)).filter((o) => o.source === "sql:cronJobs");
-    const failed = cron.find((o) => o.msg === "plane failed");
-    const absent = cron.find((o) => o.msg === "plane absent");
-    expect(failed).toBeUndefined();
-    expect(absent?.level).toBe("debug");
+    // An absent OPTIONAL relation is not a failure, so it does NOT become a
+    // collection note (which would read like something went wrong)...
+    expect(a.errors.some((e) => e.source === "sql:bucketList")).toBe(false);
+    // ...it is only a debug "plane absent", never a warn "plane failed".
+    const notes = lines.map((l) => JSON.parse(l)).filter((o) => o.source === "sql:bucketList");
+    expect(notes.find((o) => o.msg === "plane failed")).toBeUndefined();
+    expect(notes.find((o) => o.msg === "plane absent")?.level).toBe("debug");
+  });
+
+  test("cronJobs is gated on the pg_cron extension - never fired (nor noted) when absent", async () => {
+    let cronQueried = false;
+    const runner = {
+      source: "superuser" as const,
+      run: async (q: string) => {
+        if (q.includes("cron.job")) {
+          cronQueried = true;
+          throw new Error('relation "cron.job" does not exist');
+        }
+        return []; // extensions query returns [] -> pg_cron not installed
+      },
+    };
+    const t = fakeTransport({ onMgmt: fullRoutes(), onMetrics: okMetrics });
+    const a = await collect("ref", t, "0.0.0-test", { syncCheck: false, sqlRunner: runner });
+    expect(cronQueried).toBe(false); // detected via the inventory, not fire-and-catch
+    expect(a.errors.some((e) => e.source === "sql:cronJobs")).toBe(false);
+    expect(a.sql.cronJobs).toEqual([]);
   });
 
   test("threads --interval through to the analytics endpoints", async () => {

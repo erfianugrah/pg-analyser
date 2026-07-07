@@ -905,6 +905,10 @@ ${auditFindings(findings, degraded)}
 <h2 id="evidence">Evidence &amp; drill-down</h2>
 <p class=note>Substantiating data for every finding above - each finding's "Evidence" link lands in one of these sections.</p>
 
+<h2 id="capabilities">Capabilities</h2>
+<p class=note>Optional Postgres features, detected from the database - shown whether in use or not.</p>
+${capabilitiesSection(a)}
+
 <h2 id="infra">Infrastructure</h2>
 <table class=kv>
   <tr><td>Postgres version</td><td class=mono>${esc(m.pgVersion)}</td><td>${upgradeNote}</td></tr>
@@ -1238,6 +1242,63 @@ function poolerSection(a: Analysis): string {
     )
     .join("");
   return `<table><thead><tr><th>database</th><th>port</th><th>pool mode</th><th>default pool size</th><th>max client conn</th></tr></thead><tbody>${body}</tbody></table>`;
+}
+
+/**
+ * Optional-feature capabilities strip: whether pg_cron / storage / auth are
+ * present, with a status EITHER way, rather than silently omitting a section
+ * for a feature the database doesn't use ("not installed" is more honest than a
+ * blank). Detected from the collected data - extensions inventory (install
+ * state, independent of job count), resolved buckets, auth summary - so it reads
+ * identically in PAT and no-PAT mode.
+ */
+function capabilitiesSection(a: Analysis): string {
+  const yes = (s: string) => `<span class="badge ok">${esc(s)}</span>`;
+  const no = (s: string) => `<span class=badge>${esc(s)}</span>`;
+  const row = (label: string, badge: string, extra = "") =>
+    `<tr><td>${label}</td><td>${badge}</td><td>${esc(extra)}</td></tr>`;
+  const rows: string[] = [];
+
+  const hasCron = a.sql.extensions.some((r) => String(r.name) === "pg_cron");
+  if (!hasCron) {
+    rows.push(row("Scheduled jobs (pg_cron)", no("not installed")));
+  } else if (!a.sql.cronJobs.length) {
+    rows.push(row("Scheduled jobs (pg_cron)", yes("installed"), "no jobs scheduled"));
+  } else {
+    const failing = a.sql.cronJobs.filter((r) => Number(r.failed_runs) > 0).length;
+    const n = a.sql.cronJobs.length;
+    rows.push(
+      row(
+        "Scheduled jobs (pg_cron)",
+        yes(`${n} job${n === 1 ? "" : "s"}`),
+        failing ? `${failing} with recent failures` : "all healthy",
+      ),
+    );
+  }
+
+  const nb = a.buckets.length;
+  rows.push(
+    nb
+      ? row("Storage buckets", yes(`${nb} bucket${nb === 1 ? "" : "s"}`))
+      : row("Storage buckets", no("none configured")),
+  );
+
+  const au = a.sql.authAudit[0];
+  if (!au) {
+    rows.push(row("Auth (users)", no("auth schema not present")));
+  } else {
+    const users = Number(au.total_users) || 0;
+    const mfa = a.sql.authMfa[0] ? Number(a.sql.authMfa[0].mfa_users) || 0 : null;
+    rows.push(
+      row(
+        "Auth (users)",
+        yes(`${users} user${users === 1 ? "" : "s"}`),
+        mfa == null ? "" : `${mfa} MFA-enrolled`,
+      ),
+    );
+  }
+
+  return `<table class=kv>${rows.join("")}</table>`;
 }
 
 function authSection(a: Analysis): string {
