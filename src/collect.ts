@@ -113,7 +113,35 @@ export async function collect(
       })
     : null;
 
-  const sql = (key: keyof typeof QUERIES) => safe(`sql:${key}`, () => runner.run(QUERIES[key]), []);
+  // A paused / not-yet-up project has no live database or metrics endpoint:
+  // every SQL query hits a connection timeout (544) and the metrics scrape has
+  // no service_role, so fanning out all ~19 DB-dependent planes just yields a
+  // per-plane warn each (and burns the connection-timeout wall-clock). When a
+  // PAT-mode project is not ACTIVE_HEALTHY, skip those planes and record ONE
+  // note instead. Platform-metadata planes (config/backups/advisors/pooler)
+  // don't need a live DB and are still collected. In no-PAT mode (project is
+  // null) the superuser --db-url points at a live DB, so dbServing stays true.
+  const dbServing = !project || project.status === "ACTIVE_HEALTHY";
+  if (!dbServing) {
+    errors.push({
+      source: "database",
+      message: `project status is ${project?.status} (not ACTIVE_HEALTHY): the database and metrics endpoint are not serving, so SQL diagnostics and the metrics scrape were skipped. Platform metadata (config, backups, advisors) was still collected.`,
+    });
+    clog.warn("database not serving - skipping SQL + metrics planes", {
+      status: project?.status,
+    });
+  }
+
+  // Management planes that proxy the live database / running services also fail
+  // on a paused project; gate them on dbServing too so an inactive project
+  // emits no spurious per-plane warns. Static platform metadata planes (disk,
+  // pgConfig, pooler, backups, advisors, ...) don't need a live DB and stay on
+  // the plain `mgmt`.
+  const mgmtLive = <T>(source: string, fn: (mm: Management) => Promise<T>, fallback: T) =>
+    dbServing ? mgmt(source, fn, fallback) : Promise.resolve(fallback);
+
+  const sql = (key: keyof typeof QUERIES) =>
+    dbServing ? safe(`sql:${key}`, () => runner.run(QUERIES[key]), []) : Promise.resolve([]);
 
   const [
     health,
@@ -164,18 +192,18 @@ export async function collect(
     authMfa,
     metricsText,
   ] = await Promise.all([
-    mgmt("health", (mm) => mm.health(ref), []),
+    mgmtLive("health", (mm) => mm.health(ref), []),
     mgmt("disk", (mm) => mm.disk(ref), null),
-    mgmt("diskUtil", (mm) => mm.diskUtil(ref), null),
+    mgmtLive("diskUtil", (mm) => mm.diskUtil(ref), null),
     mgmt("pgConfig", (mm) => mm.pgConfig(ref), null),
     mgmt("pooler", (mm) => mm.pooler(ref), null),
     mgmt("backups", (mm) => mm.backups(ref), null),
-    mgmt("upgrade", (mm) => mm.upgrade(ref), null),
+    mgmtLive("upgrade", (mm) => mm.upgrade(ref), null),
     mgmt("authConfig", (mm) => mm.authConfig(ref), null),
     mgmt("networkRestrictions", (mm) => mm.networkRestrictions(ref), null),
-    mgmt("sslEnforcement", (mm) => mm.sslEnforcement(ref), null),
+    mgmtLive("sslEnforcement", (mm) => mm.sslEnforcement(ref), null),
     mgmt("functions", (mm) => mm.functions(ref), []),
-    mgmt("buckets", (mm) => mm.buckets(ref), []),
+    mgmtLive("buckets", (mm) => mm.buckets(ref), []),
     mgmt("advisors:performance", (mm) => mm.advisors(ref, "performance"), []),
     mgmt("advisors:security", (mm) => mm.advisors(ref, "security"), []),
     mgmt("apiCounts", (mm) => mm.apiCounts(ref, interval), []),
@@ -213,7 +241,7 @@ export async function collect(
     runner.source === "superuser" ? sql("hbaRules") : Promise.resolve([]),
     sql("authAudit"),
     sql("authMfa"),
-    transport
+    transport && dbServing
       ? safe(
           "metrics",
           async () => {
