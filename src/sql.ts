@@ -168,15 +168,25 @@ export const QUERIES = {
 
   biggestTables: /* sql */ `
     select
-      schemaname as schema,
-      schemaname || '.' || relname as table,
-      pg_size_pretty(pg_total_relation_size(relid)) as total_size,
-      pg_size_pretty(pg_indexes_size(relid)) as index_size,
-      pg_total_relation_size(relid) as total_bytes,
-      pg_indexes_size(relid) as index_bytes,
-      n_live_tup as live_rows
-    from pg_stat_user_tables
-    order by pg_total_relation_size(relid) desc
+      s.schemaname as schema,
+      s.schemaname || '.' || s.relname as table,
+      pg_size_pretty(pg_total_relation_size(s.relid)) as total_size,
+      pg_size_pretty(pg_indexes_size(s.relid)) as index_size,
+      pg_total_relation_size(s.relid) as total_bytes,
+      pg_indexes_size(s.relid) as index_bytes,
+      -- TOAST relation (out-of-line storage for oversized values) isolated, so a
+      -- table dominated by large blobs / JSON / vectors is visible as such
+      -- rather than hidden in the total. Includes the TOAST index.
+      case when c.reltoastrelid <> 0 then pg_total_relation_size(c.reltoastrelid) else 0 end as toast_bytes,
+      -- pretty size only when the TOAST relation actually holds data. Postgres
+      -- always creates a TOAST relation for a TOAST-able column, so an empty one
+      -- is ~1-2 pages (<= 16KB); showing "8192 bytes" on every table is noise.
+      case when c.reltoastrelid <> 0 and pg_total_relation_size(c.reltoastrelid) > 16384
+        then pg_size_pretty(pg_total_relation_size(c.reltoastrelid)) end as toast_size,
+      s.n_live_tup as live_rows
+    from pg_stat_user_tables s
+    join pg_class c on c.oid = s.relid
+    order by pg_total_relation_size(s.relid) desc
     limit 20`,
 
   // All indexes ranked by size, with scan counts and an unused flag. A large,
@@ -391,6 +401,44 @@ export const QUERIES = {
       else '1:1 balanced' end as profile
     from tl
     order by (blocks_read + blocks_write) desc
+    limit 20`,
+
+  // Per-table I/O attribution from pg_statio_user_tables: heap / index / TOAST
+  // blocks read-from-disk vs served-from-cache, with computed cache-hit ratios.
+  // sbperf-ORIGINAL (no upstream inspect equivalent) - the layer the global
+  // cache-hit ratio lacks: WHICH relation is disk-bound, and specifically
+  // whether the cost is de-toasting an out-of-line column that can't stay
+  // cached (low toast_hit_pct + high toast_blks_read - the classic large-
+  // blob / large-vector IO trap). Ratios are NULL when that tier had no access
+  // (0/0 is "not exercised", not "0% cached"). App-scoped + ordered by total
+  // disk reads so the IO-bound tables surface first. Counters are cumulative
+  // since the last stats reset (findings gate on statsResetAge, like cache-hit).
+  tableIoStats: /* sql */ `
+    select
+      schemaname as schema,
+      schemaname || '.' || relname as table,
+      heap_blks_read,
+      heap_blks_hit,
+      idx_blks_read,
+      idx_blks_hit,
+      coalesce(toast_blks_read, 0) as toast_blks_read,
+      coalesce(toast_blks_hit, 0) as toast_blks_hit,
+      case when heap_blks_read + heap_blks_hit > 0
+        then round(100.0 * heap_blks_hit / (heap_blks_read + heap_blks_hit), 1)
+        end as heap_hit_pct,
+      case when coalesce(idx_blks_read, 0) + coalesce(idx_blks_hit, 0) > 0
+        then round(100.0 * idx_blks_hit / (idx_blks_read + idx_blks_hit), 1)
+        end as idx_hit_pct,
+      case when coalesce(toast_blks_read, 0) + coalesce(toast_blks_hit, 0) > 0
+        then round(100.0 * toast_blks_hit / (toast_blks_read + toast_blks_hit), 1)
+        end as toast_hit_pct
+    from pg_statio_user_tables
+    where schemaname not in (${NON_APP_SCHEMAS_SQL})
+      and (heap_blks_read + heap_blks_hit
+           + coalesce(idx_blks_read, 0) + coalesce(idx_blks_hit, 0)
+           + coalesce(toast_blks_read, 0) + coalesce(toast_blks_hit, 0)) > 0
+    order by (heap_blks_read + coalesce(idx_blks_read, 0)
+              + coalesce(toast_blks_read, 0)) desc
     limit 20`,
 
   // Autovacuum-behind, threshold-aware. Rather than a fixed dead-tuple cutoff,
@@ -685,11 +733,27 @@ export const QUERIES = {
   // exist so t.typname='vector' matches nothing (zero rows), and the ANN index
   // AMs simply aren't present. A vector column queried by distance without an
   // ANN index does an exact scan of every row - the classic pgvector slow path.
+  // Enriched with dimension (atttypmod = raw dims for vector), column storage
+  // strategy (attstorage), and an out_of_line flag: the vector type defaults to
+  // EXTENDED storage, so any vector wider than the ~2KB TOAST threshold (>~500
+  // float32 dims) is stored out-of-line and de-toasted from disk on every exact
+  // scan - compounding the no-ANN-index slow path (the large-vector IO trap).
   unindexedVectors: /* sql */ `
     select
       n.nspname as schema,
       c.relname as table,
-      a.attname as column
+      a.attname as column,
+      nullif(a.atttypmod, -1) as dimensions,
+      case a.attstorage
+        when 'p' then 'plain'
+        when 'e' then 'extended'
+        when 'm' then 'main'
+        when 'x' then 'external'
+        else a.attstorage::text end as storage,
+      case when a.attstorage <> 'p'
+        and nullif(a.atttypmod, -1) is not null
+        and (4 * a.atttypmod + 8) > 2000
+        then true else false end as out_of_line
     from pg_attribute a
     join pg_class c on c.oid = a.attrelid
     join pg_namespace n on n.oid = c.relnamespace
