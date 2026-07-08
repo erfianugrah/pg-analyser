@@ -25,6 +25,8 @@ function fullRoutes(overrides: Record<string, () => Response> = {}) {
     if (clean.endsWith("/health")) return jsonResponse(health);
     if (clean.endsWith("/config/disk")) return jsonResponse(disk);
     if (clean.endsWith("/config/disk/util")) return jsonResponse(diskUtil);
+    if (clean.endsWith("/config/disk/autoscale"))
+      return jsonResponse({ growth_percent: 50, min_increment_gb: 4, max_size_gb: 200 });
     if (clean.endsWith("/config/database/postgres")) return jsonResponse({});
     if (clean.endsWith("/config/database/pooler")) return jsonResponse(pooler);
     if (clean.endsWith("/database/backups"))

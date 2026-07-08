@@ -51,6 +51,20 @@ export const THRESHOLDS = {
   roleConnShowFrac: 0.5,
   /** Disk used / total warning fraction. */
   diskFullFrac: 0.8,
+  /** Disk over-provisioned (downsize candidate): filesystem used at/below this
+   * fraction of the provisioned volume, AND at least diskOversizeMinWasteGb of
+   * unused headroom (so a small volume with natural slack isn't flagged). */
+  diskOversizeUsedFrac: 0.4,
+  diskOversizeMinWasteGb: 20,
+  /** work_mem blast radius: worst-case (work_mem x max_connections x parallel)
+   * at/above this multiple of estimated RAM is an OOM risk worth flagging.
+   * RAM is estimated from shared_buffers (Supabase sets it to ~25% of RAM). */
+  workMemBlastFrac: 1.0,
+  /** maintenance_work_mem below this (MB) slows autovacuum + index builds. */
+  maintWorkMemMinMb: 256,
+  /** checkpoint_completion_target below this spreads checkpoint I/O too tightly
+   * (spiky flushes); modern Postgres defaults to 0.9. */
+  checkpointCompletionMin: 0.7,
   /** Derived disk IOPS / provisioned warning fraction. */
   diskIopsFrac: 0.8,
   /** Derived disk throughput / provisioned warning fraction. */
@@ -443,6 +457,123 @@ export const HEURISTICS: Record<string, Heuristic> = {
     remediation:
       "Reclaim bloat (pg_repack), drop unused indexes, or expand the disk. Note cloud providers limit disk modifications to ~4 per rolling 24h.",
     docUrl: "https://supabase.com/docs/guides/platform/database-size",
+    reviewed: R,
+  },
+  disk_oversized: {
+    id: "disk_oversized",
+    plane: "Storage",
+    howToVerify:
+      "Confirm the used fraction stays low across peak periods, then resize the volume down (or reclaim first with pg_repack / dropping unused indexes) and re-audit.",
+    whyItMatters:
+      "A volume provisioned far above its true footprint is paid-for headroom that is never used. Disk autoscaling is grow-only - it never shrinks back - so an over-provisioned volume keeps costing until an explicit resize. The true minimum footprint (used minus reclaimable) is the size to target.",
+    remediation:
+      "Reclaim first (pg_repack bloat, drop unused indexes), then resize the volume down to the true footprint plus a growth margin. Note providers cap disk modifications to ~4 per rolling 24h, and gp3 lets you buy IOPS/throughput independently of size.",
+    docUrl: "https://supabase.com/docs/guides/platform/compute-and-disk",
+    reviewed: R,
+  },
+  checksum_failure: {
+    id: "checksum_failure",
+    plane: "Storage",
+    howToVerify:
+      "After restoring the affected relation, confirm pg_stat_database.checksum_failures stops incrementing (it is cumulative since the last stats reset).",
+    whyItMatters:
+      "A non-zero page-checksum failure count is on-disk data corruption the checksum layer caught - a block whose contents no longer match its checksum. Left unaddressed it risks silent wrong-answer reads or a crash. This is the strongest integrity signal Postgres emits.",
+    remediation:
+      "Identify the affected relation, restore it from a known-good backup / PITR, and investigate the storage layer. Run amcheck (bt_index_check / verify_heapam) to scope the damage. Do not ignore even a single failure.",
+    docUrl:
+      "https://www.postgresql.org/docs/current/monitoring-stats.html#MONITORING-PG-STAT-DATABASE-VIEW",
+    reviewed: R,
+  },
+  index_corruption: {
+    id: "index_corruption",
+    plane: "Storage",
+    sql: "-- rebuild the corrupt index (online):\nREINDEX INDEX CONCURRENTLY <schema>.<index>;",
+    howToVerify:
+      "Re-run bt_index_check on the index after REINDEX - it should return without raising an error.",
+    whyItMatters:
+      "amcheck's bt_index_check found a B-tree index whose on-disk structure violates its invariants - queries using it can return wrong results or error. Structural index corruption usually points to a storage fault or a Postgres/OS bug and warrants investigating the heap too.",
+    remediation:
+      "REINDEX INDEX CONCURRENTLY the affected index to rebuild it from the heap. If verify_heapam also flags the table, restore from backup - a rebuild trusts a possibly-corrupt heap.",
+    docUrl: "https://www.postgresql.org/docs/current/amcheck.html",
+    reviewed: R,
+  },
+  heap_corruption: {
+    id: "heap_corruption",
+    plane: "Storage",
+    howToVerify: "After restoring the relation, re-run verify_heapam - it should return zero rows.",
+    whyItMatters:
+      "amcheck's verify_heapam found structurally invalid or logically inconsistent heap pages - actual table-data corruption, not just an index. This risks silent wrong reads and cannot be fixed by a rebuild (a REINDEX would trust the corrupt heap).",
+    remediation:
+      "Restore the affected relation from a known-good backup / PITR and investigate the storage layer. Capture the verify_heapam output (block/offset) before restoring for root-cause.",
+    docUrl: "https://www.postgresql.org/docs/current/amcheck.html",
+    reviewed: R,
+  },
+  work_mem_blast: {
+    id: "work_mem_blast",
+    plane: "Config",
+    sql: "-- lower the global default and raise per-session for heavy paths instead:\nALTER DATABASE postgres SET work_mem = '<smaller>';\n-- or per role/session: SET work_mem = '64MB';",
+    howToVerify:
+      "Recompute work_mem x max_connections x parallelism against RAM after lowering work_mem (or max_connections) - the worst case should sit well under available memory.",
+    whyItMatters:
+      "work_mem is per-operation per-connection, so a single complex query can use several multiples of it, and the whole server can multiply it by max_connections. When that worst case exceeds RAM the box is one busy moment away from OOM-killing backends. A high global work_mem trades a broad OOM risk for a narrow speedup.",
+    remediation:
+      "Keep the global work_mem modest and raise it per-session/role only for the specific heavy query paths that spill. Lowering max_connections (front with a pooler) also shrinks the worst case.",
+    docUrl: "https://www.postgresql.org/docs/current/runtime-config-resource.html#GUC-WORK-MEM",
+    reviewed: R,
+  },
+  maintenance_work_mem_low: {
+    id: "maintenance_work_mem_low",
+    plane: "Config",
+    sql: "ALTER DATABASE postgres SET maintenance_work_mem = '256MB';",
+    howToVerify:
+      "After raising it, confirm autovacuum passes and CREATE INDEX complete faster (fewer index-build passes in the logs).",
+    whyItMatters:
+      "maintenance_work_mem bounds the memory autovacuum, VACUUM, and CREATE INDEX get. A low value forces multiple passes over dead tuples and slower index builds - so vacuum falls behind on a busy table and DDL windows stretch.",
+    remediation:
+      "Raise maintenance_work_mem (256MB-1GB is typical) - it is only used by maintenance ops, not every backend, so it does not carry the work_mem blast risk.",
+    docUrl:
+      "https://www.postgresql.org/docs/current/runtime-config-resource.html#GUC-MAINTENANCE-WORK-MEM",
+    reviewed: R,
+  },
+  checkpoint_completion_low: {
+    id: "checkpoint_completion_low",
+    plane: "Config",
+    sql: "ALTER SYSTEM SET checkpoint_completion_target = 0.9;  -- then reload",
+    howToVerify:
+      "After the change, confirm checkpoint write I/O is smoother (pg_stat_bgwriter / checkpoint write time spread over the interval rather than spiking).",
+    whyItMatters:
+      "checkpoint_completion_target sets how much of the interval Postgres spreads checkpoint writes over. A low value bunches the flush into a short window, spiking disk I/O and latency. Modern Postgres defaults to 0.9 for this reason.",
+    remediation:
+      "Set checkpoint_completion_target to 0.9 so checkpoint writes are paced across the interval instead of flushed in a burst.",
+    docUrl:
+      "https://www.postgresql.org/docs/current/runtime-config-wal.html#GUC-CHECKPOINT-COMPLETION-TARGET",
+    reviewed: R,
+  },
+  track_io_timing_off: {
+    id: "track_io_timing_off",
+    plane: "Config",
+    sql: "ALTER SYSTEM SET track_io_timing = on;  -- then reload",
+    howToVerify:
+      "After enabling, confirm pg_stat_statements shows non-null blk_read_time/blk_write_time and EXPLAIN (ANALYZE, BUFFERS) reports I/O timings.",
+    whyItMatters:
+      "With track_io_timing off, Postgres cannot attribute time spent on disk I/O - pg_stat_statements I/O timings are null and EXPLAIN can't show read/write time. That blinds both this tool's I/O analysis and your own query tuning. The overhead is negligible on modern kernels.",
+    remediation:
+      "Enable track_io_timing so per-query and per-statement I/O time is captured. Overhead is measured in nanoseconds on clocksource=tsc hosts.",
+    docUrl:
+      "https://www.postgresql.org/docs/current/runtime-config-statistics.html#GUC-TRACK-IO-TIMING",
+    reviewed: R,
+  },
+  timeout_unbounded: {
+    id: "timeout_unbounded",
+    plane: "Config",
+    sql: "-- bound runaway work (per database or role):\nALTER DATABASE postgres SET statement_timeout = '120s';\nALTER DATABASE postgres SET idle_in_transaction_session_timeout = '60s';\nALTER DATABASE postgres SET lock_timeout = '30s';",
+    howToVerify:
+      "Confirm SHOW for each timeout returns a non-zero value, and that a deliberately long test statement is cancelled.",
+    whyItMatters:
+      "A timeout of 0 is unlimited. Without statement_timeout a runaway query runs forever; without idle_in_transaction_session_timeout an abandoned open transaction pins locks and the xmin horizon (blocking autovacuum, driving bloat); without lock_timeout a blocked statement waits indefinitely. Each is a stability guardrail.",
+    remediation:
+      "Set sane non-zero bounds (statement_timeout, idle_in_transaction_session_timeout, lock_timeout) at the database or role level - scope longer values to the roles that need them (batch/migration).",
+    docUrl: "https://www.postgresql.org/docs/current/runtime-config-client.html",
     reviewed: R,
   },
   mem_pressure_paging: {

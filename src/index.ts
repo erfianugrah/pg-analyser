@@ -83,6 +83,10 @@ Flags:
                        sweep several DBs ('full' -> per-DB reports + index;
                        'snapshot' -> each to store). Env fallback (no flag given):
                        SBPERF_DB_URL plus numbered SBPERF_DB_URL_2, _3, ...
+  --amcheck [heap]     data-integrity check (opt-in; superuser --db-url + amcheck
+                       already installed). Bare: bt_index_check on app B-tree
+                       indexes (light). 'heap': also verify_heapam on the biggest
+                       tables (HEAVY - reads every page). Never installs amcheck.
   --db-config <file>   JSON list of {name?,ref?,dbUrl} targets (gitignored); an
                        alternative to repeated --db-url. ref auto-derived if omitted.
                        ./sbperf.databases.json is auto-loaded when no db flag/env set.
@@ -179,6 +183,7 @@ type Flags = {
   import?: string;
   brand?: string;
   overlay?: string;
+  amcheck?: boolean | "heap";
 };
 
 /** Analytics-endpoint timeframe enum (verified live 2026-07; iso ranges are clamped). */
@@ -215,7 +220,14 @@ function parseFlags(argv: string[]): Flags {
     else if (a === "--retention-days") out.retentionDays = Number(argv[++i]);
     else if (a === "--interval") out.interval = argv[++i];
     else if (a === "--db-url") out.dbUrls.push(argv[++i]!);
-    else if (a === "--db-config") out.dbConfig = argv[++i];
+    else if (a === "--amcheck") {
+      // --amcheck (index-only, light) or --amcheck heap (also verify_heapam,
+      // heavy). Superuser + amcheck-installed + opt-in; see collect.ts.
+      if (argv[i + 1] === "heap") {
+        out.amcheck = "heap";
+        i++;
+      } else out.amcheck = true;
+    } else if (a === "--db-config") out.dbConfig = argv[++i];
     else if (a === "--brand") out.brand = argv[++i];
     else if (a === "--overlay") out.overlay = argv[++i];
     else if (a === "--all") out.all = true;
@@ -697,11 +709,16 @@ async function doAnalyze(
   interval?: string,
   dbUrl?: string,
   syncCheck?: boolean,
+  amcheck?: boolean | "heap",
 ): Promise<string> {
   const transport = resolveTransport();
   if (!transport && !dbUrl)
     throw new Error(
       "no PAT and no --db-url: nothing to analyze. Set SUPABASE_ACCESS_TOKEN, or pass a --db-url connstring for no-PAT db-url mode.",
+    );
+  if (amcheck && !dbUrl)
+    console.error(
+      "> --amcheck ignored: it needs a superuser --db-url (integrity checks run there)",
     );
   const runner = dbUrl ? new DirectSqlRunner(dbUrl) : undefined;
   if (runner)
@@ -716,6 +733,7 @@ async function doAnalyze(
     interval,
     sqlRunner: runner,
     syncCheck,
+    amcheck,
     region: dbUrl ? (regionFromConnstring(dbUrl) ?? undefined) : undefined,
   }).finally(() => runner?.close());
   await mkdir(outDir, { recursive: true });
@@ -1145,6 +1163,7 @@ async function main(): Promise<void> {
           flags.interval,
           singleDbUrl,
           !flags.noSyncCheck,
+          flags.amcheck,
         );
         break;
       }
@@ -1290,6 +1309,7 @@ async function main(): Promise<void> {
           flags.interval,
           singleDbUrl,
           !flags.noSyncCheck,
+          flags.amcheck,
         );
         await doReport(dir, undefined, undefined, flags.overlay);
         await doPdf(dir, undefined, undefined, flags.overlay);

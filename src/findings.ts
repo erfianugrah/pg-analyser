@@ -69,6 +69,46 @@ function settingsMap(rows: SqlRow[]): Map<string, string> {
   return m;
 }
 
+// Convert a pg_settings row (setting + unit) to bytes. Memory GUCs carry a unit
+// of 'kB' / 'MB' / 'GB' / '8kB' (shared_buffers/effective_cache_size use the
+// block size). Returns null when the setting is absent or has no memory unit.
+const MEM_UNIT_BYTES: Record<string, number> = {
+  B: 1,
+  kB: 1024,
+  MB: 1024 * 1024,
+  GB: 1024 * 1024 * 1024,
+  "8kB": 8 * 1024,
+  "16kB": 16 * 1024,
+  "32kB": 32 * 1024,
+};
+function gucBytes(rows: SqlRow[], name: string): number | null {
+  const r = rows.find((x) => String(x.name) === name);
+  if (!r) return null;
+  const mult = MEM_UNIT_BYTES[String(r.unit ?? "")];
+  if (mult == null) return null;
+  const v = Number(r.setting);
+  return Number.isFinite(v) ? v * mult : null;
+}
+
+const bytesGb = (b: number): string => `${(b / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+
+// Space recoverable without losing data: measured/estimated table bloat +
+// droppable unused indexes (app-scoped) + WAL pinned by INACTIVE replication
+// slots (reclaimed by dropping the slot). The whole pg_wal dir is NOT counted -
+// it is baseline overhead the running server needs. Feeds the disk
+// over-provisioning finding's "true footprint" (used minus reclaimable).
+function reclaimableDiskBytes(a: Analysis): number {
+  const exact = a.sql.bloatExact.reduce((s, r) => s + num(r.reclaimable_bytes), 0);
+  const bloat = exact > 0 ? exact : a.sql.bloat.reduce((s, r) => s + num(r.waste_bytes), 0);
+  const unusedIdx = appRows(a.sql.indexStats)
+    .filter((r) => r.unused === true)
+    .reduce((s, r) => s + num(r.index_bytes), 0);
+  const slotWal = a.sql.replicationSlots
+    .filter((r) => r.active === false)
+    .reduce((s, r) => s + num(r.retained_wal_bytes), 0);
+  return bloat + unusedIdx + slotWal;
+}
+
 // Leading UPDATE/DELETE target of a normalized statement (schema-qualified or
 // not, quoted or not). Anchored so it only matches the statement's own verb.
 const WRITE_RX =
@@ -162,6 +202,93 @@ function groupAdvisors(
  * beta-gated endpoint) skips just its checks. Fields are optional at the schema
  * boundary, so a check only fires when the value was actually present.
  */
+/**
+ * Static GUC-tuning findings derived from pgSettings (both modes). Each is a
+ * deterministic sanity check on a server setting; the values come from the
+ * pg_settings snapshot, so no live workload is required.
+ */
+export function configTuningFindings(a: Analysis): Finding[] {
+  const out: Finding[] = [];
+  const rows = a.sql.pgSettings;
+  if (rows.length === 0) return out;
+  const set = settingsMap(rows);
+  const anchor = "#infra";
+
+  // work_mem blast radius: worst-case per-backend memory (work_mem x
+  // max_connections x parallel workers) vs RAM estimated from shared_buffers
+  // (Supabase provisions shared_buffers ~= 25% of RAM). Flag when the worst
+  // case could exceed RAM - a broad OOM risk from a high global work_mem.
+  const workMem = gucBytes(rows, "work_mem");
+  const sharedBuffers = gucBytes(rows, "shared_buffers");
+  const maxConn = num(set.get("max_connections"));
+  if (workMem != null && sharedBuffers != null && sharedBuffers > 0 && maxConn > 0) {
+    const estRam = sharedBuffers * 4; // shared_buffers ~= 25% of RAM
+    const parallel = Math.max(1, num(set.get("max_parallel_workers_per_gather")) || 1) + 1;
+    const worstCase = workMem * maxConn * parallel;
+    if (worstCase >= estRam * THRESHOLDS.workMemBlastFrac) {
+      out.push({
+        severity: "med",
+        category: "Capacity",
+        title: `work_mem worst case (~${bytesGb(worstCase)}) can exceed estimated RAM (~${bytesGb(estRam)})`,
+        anchor,
+        evidence: `work_mem ${set.get("work_mem")}kB x max_connections ${maxConn} x ~${parallel} ops. RAM estimated from shared_buffers.`,
+        ...meta("work_mem_blast"),
+      });
+    }
+  }
+
+  // Unbounded stability guardrails (a value of 0 = unlimited).
+  const unbounded = ["statement_timeout", "idle_in_transaction_session_timeout", "lock_timeout"]
+    .filter((k) => set.get(k) === "0")
+    .map((k) => k.replace(/_/g, " "));
+  if (unbounded.length > 0) {
+    out.push({
+      severity: "low",
+      category: "Capacity",
+      title: `${unbounded.length} unbounded timeout${unbounded.length === 1 ? "" : "s"} (${unbounded.join(", ")} = 0)`,
+      anchor,
+      ...meta("timeout_unbounded"),
+    });
+  }
+
+  // maintenance_work_mem too low (slows autovacuum + index builds).
+  const maintMem = gucBytes(rows, "maintenance_work_mem");
+  if (maintMem != null && maintMem < THRESHOLDS.maintWorkMemMinMb * 1024 * 1024) {
+    out.push({
+      severity: "low",
+      category: "Capacity",
+      title: `maintenance_work_mem is low (${set.get("maintenance_work_mem")}kB)`,
+      anchor,
+      ...meta("maintenance_work_mem_low"),
+    });
+  }
+
+  // checkpoint_completion_target too low (spiky checkpoint I/O).
+  const cct = Number(set.get("checkpoint_completion_target"));
+  if (Number.isFinite(cct) && cct > 0 && cct < THRESHOLDS.checkpointCompletionMin) {
+    out.push({
+      severity: "low",
+      category: "Performance",
+      title: `checkpoint_completion_target is ${cct} (below 0.9)`,
+      anchor,
+      ...meta("checkpoint_completion_low"),
+    });
+  }
+
+  // track_io_timing off (blinds I/O attribution).
+  if (set.get("track_io_timing") === "off") {
+    out.push({
+      severity: "low",
+      category: "Performance",
+      title: "track_io_timing is off (no per-query I/O timing)",
+      anchor,
+      ...meta("track_io_timing_off"),
+    });
+  }
+
+  return out;
+}
+
 export function securityConfigFindings(a: Analysis): Finding[] {
   const s = a.security;
   if (!s) return [];
@@ -451,6 +578,36 @@ export function deriveFindings(a: Analysis): Finding[] {
         anchor: "#infra",
         ...meta("disk_full"),
       });
+    } else if (a.disk.sizeGb != null && a.disk.sizeGb > 0) {
+      // Over-provisioned volume (downsize candidate): filesystem used well below
+      // the provisioned size, with meaningful absolute waste. The disk analogue
+      // of cpu_oversized. Reclaimable (bloat + droppable unused indexes + WAL
+      // dir + retained slot WAL) refines the "true footprint" the report shows.
+      const provisioned = a.disk.sizeGb * 1024 * 1024 * 1024;
+      const usedFrac = a.disk.usedBytes / provisioned;
+      const wasteGb = (provisioned - a.disk.usedBytes) / (1024 * 1024 * 1024);
+      if (
+        usedFrac <= THRESHOLDS.diskOversizeUsedFrac &&
+        wasteGb >= THRESHOLDS.diskOversizeMinWasteGb
+      ) {
+        const reclaimableBytes = reclaimableDiskBytes(a);
+        const footprintGb = Math.max(
+          0,
+          (a.disk.usedBytes - reclaimableBytes) / (1024 * 1024 * 1024),
+        );
+        const reclaimNote =
+          reclaimableBytes > 0
+            ? ` ~${bytesGb(reclaimableBytes)} is reclaimable (bloat, unused indexes, slot-pinned WAL), so the true footprint is ~${footprintGb.toFixed(1)} GB.`
+            : "";
+        out.push({
+          severity: "low",
+          category: "Capacity",
+          title: `Disk over-provisioned: ${a.disk.sizeGb} GB volume, ${Math.round(usedFrac * 100)}% used (${bytesGb(a.disk.usedBytes)})`,
+          anchor: "#infra",
+          evidence: `~${wasteGb.toFixed(0)} GB unused.${reclaimNote}${a.disk.autoscale ? " Autoscale is grow-only - it will not shrink this back." : ""}`,
+          ...meta("disk_oversized"),
+        });
+      }
     }
   }
   const overdue = a.sql.deadTuples.filter((r) => r.overdue === "yes").length;
@@ -1073,6 +1230,48 @@ export function deriveFindings(a: Analysis): Finding[] {
       });
     }
   }
+
+  // Data integrity: page-checksum failures (pg_stat_database, both modes). A
+  // non-zero count is on-disk corruption caught by the checksum layer - the
+  // strongest integrity signal Postgres emits, so it is high severity.
+  const cksum = num(a.sql.checksumFailures[0]?.checksum_failures);
+  if (cksum > 0) {
+    const when = a.sql.checksumFailures[0]?.checksum_last_failure;
+    out.push({
+      severity: "high",
+      category: "Capacity",
+      title: `${cksum} page-checksum failure${cksum === 1 ? "" : "s"} detected (on-disk corruption)`,
+      anchor: "#infra",
+      evidence: when ? `Most recent: ${String(when)}.` : undefined,
+      ...meta("checksum_failure"),
+    });
+  }
+
+  // amcheck integrity findings (opt-in, superuser + extension gated in collect).
+  // Each row from bt_index_check / verify_heapam is a corruption hit.
+  for (const r of a.sql.amcheckIndex) {
+    out.push({
+      severity: "high",
+      category: "Capacity",
+      title: `Index corruption: ${String(r.index ?? r.name ?? "an index")} failed amcheck`,
+      anchor: "#infra",
+      evidence: r.message ? String(r.message) : undefined,
+      ...meta("index_corruption"),
+    });
+  }
+  for (const r of a.sql.amcheckHeap) {
+    out.push({
+      severity: "high",
+      category: "Capacity",
+      title: `Heap corruption: ${String(r.table ?? r.relation ?? "a table")} failed verify_heapam`,
+      anchor: "#infra",
+      evidence: r.message ? String(r.message) : undefined,
+      ...meta("heap_corruption"),
+    });
+  }
+
+  // Config tuning (static GUC sanity, from pgSettings - both modes).
+  out.push(...configTuningFindings(a));
 
   // Security config (auth / network / SSL) - sbperf-original Security findings.
   out.push(...securityConfigFindings(a));

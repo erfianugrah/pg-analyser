@@ -32,6 +32,13 @@ export class Management {
     return this.#json(`/v1/projects/${ref}/config/disk/util`).then((d) => S.DiskUtil.parse(d));
   }
 
+  /** Grow-only disk autoscale policy (growth %, increment, ceiling). */
+  diskAutoscale(ref: string) {
+    return this.#json(`/v1/projects/${ref}/config/disk/autoscale`).then((d) =>
+      S.DiskAutoscaleConfig.parse(d),
+    );
+  }
+
   pgConfig(ref: string) {
     return this.#json(`/v1/projects/${ref}/config/database/postgres`).then((d) =>
       S.PgConfig.parse(d),

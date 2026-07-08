@@ -27,6 +27,8 @@ function fixture(overrides: Partial<Analysis> = {}): Analysis {
       throughputMibps: 125,
       usedBytes: 972496896,
       availBytes: 7444385792,
+      lastModifiedAt: null,
+      autoscale: null,
     },
     pgConfig: { max_connections: 60, shared_buffers: "256MB" },
     pooler: [{ database_type: "PRIMARY", db_port: 6543, pool_mode: "transaction" }],
@@ -85,6 +87,10 @@ function fixture(overrides: Partial<Analysis> = {}): Analysis {
       cronJobs: [],
       dbSizeBytes: null,
       bloatExact: [],
+      checksumFailures: [],
+      walDirSize: [],
+      amcheckIndex: [],
+      amcheckHeap: [],
     },
     metrics: {
       available: true,
@@ -574,6 +580,10 @@ describe("renderSummary", () => {
         cronJobs: [],
         dbSizeBytes: null,
         bloatExact: [],
+        checksumFailures: [],
+        walDirSize: [],
+        amcheckIndex: [],
+        amcheckHeap: [],
       },
     });
     const html = renderSummary(clean);

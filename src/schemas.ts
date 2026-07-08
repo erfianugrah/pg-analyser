@@ -41,7 +41,20 @@ export const DiskConfig = z.object({
     type: z.string().optional(),
     throughput_mibps: z.number().optional(),
   }),
+  // When the volume was last resized (grow-only autoscale or a manual change).
+  last_modified_at: z.string().optional(),
 });
+
+// GET /v1/projects/{ref}/config/disk/autoscale. Autoscale is GROW-ONLY: the
+// volume expands by growth_percent in min_increment_gb steps up to max_size_gb
+// and never shrinks, so reclaiming over-provisioned space always needs an
+// explicit resize. All three fields are explicitly nullable in the spec.
+export const DiskAutoscaleConfig = z.object({
+  growth_percent: z.number().nullable(),
+  min_increment_gb: z.number().nullable(),
+  max_size_gb: z.number().nullable(),
+});
+export type DiskAutoscaleConfig = z.infer<typeof DiskAutoscaleConfig>;
 
 export const DiskUtil = z.object({
   timestamp: z.string().optional(),
@@ -264,6 +277,17 @@ export const Analysis = z.object({
       throughputMibps: z.number().nullable(),
       usedBytes: z.number().nullable(),
       availBytes: z.number().nullable(),
+      // When the volume was last resized. Optional/defaulted for back-compat.
+      lastModifiedAt: z.string().nullable().default(null),
+      // Grow-only autoscale policy (null when not configured / not fetched).
+      autoscale: z
+        .object({
+          growthPercent: z.number().nullable(),
+          minIncrementGb: z.number().nullable(),
+          maxSizeGb: z.number().nullable(),
+        })
+        .nullable()
+        .default(null),
     })
     .nullable(),
   pgConfig: z.record(z.string(), z.unknown()).nullable(),
@@ -342,6 +366,16 @@ export const Analysis = z.object({
     // PITR when the Management API backups plane is absent. Defaulted for
     // back-compat with analysis.json written before the query existed.
     walArchiving: SqlRows.default([]),
+    // Cluster-wide page-checksum failure counters (pg_stat_database). Both
+    // modes; nonzero = on-disk corruption. Defaulted for back-compat.
+    checksumFailures: SqlRows.default([]),
+    // pg_wal directory size (superuser only). Feeds disk-footprint math.
+    // Empty when not superuser / not granted pg_monitor. Back-compat default.
+    walDirSize: SqlRows.default([]),
+    // amcheck integrity results (opt-in, superuser + extension gated). One row
+    // per corruption hit; empty means "not run" OR "ran clean". Back-compat.
+    amcheckIndex: SqlRows.default([]),
+    amcheckHeap: SqlRows.default([]),
     // Host-based auth rules (pg_hba_file_rules) - the SQL proxy for SSL
     // enforcement when the Management API ssl-enforcement plane is absent.
     hbaRules: SqlRows.default([]),
