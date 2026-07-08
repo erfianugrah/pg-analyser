@@ -1,3 +1,5 @@
+import { NON_APP_SCHEMAS_SQL } from "./appschema.ts";
+
 /**
  * The perf diagnostic query set. Sourced from the Supabase Postgres
  * best-practices `monitor-` rules and the Supabase RLS performance guide.
@@ -196,9 +198,12 @@ export const QUERIES = {
     join pg_namespace n on c.relnamespace = n.oid
     join pg_class tc on tc.oid = i.indrelid
     join pg_namespace tn on tn.oid = tc.relnamespace
-    where n.nspname not in ('pg_catalog', 'information_schema')
+    -- Exclude Postgres-internal + Supabase-managed schemas (single source of
+    -- truth: NON_APP_SCHEMAS in appschema.ts, drift-synced to splinter.sql) so
+    -- managed indexes never crowd the user's own out of the row cap.
+    where n.nspname not in (${NON_APP_SCHEMAS_SQL})
     order by pg_relation_size(i.indexrelid) desc
-    limit 30`,
+    limit 50`,
 
   // Duplicate indexes: two or more indexes with an identical definition on the
   // same table (normalized by stripping the index name from indexdef). Each
@@ -214,7 +219,7 @@ export const QUERIES = {
     from pg_indexes pi
     join pg_namespace n on n.nspname = pi.schemaname
     join pg_class c on pi.tablename = c.relname and n.oid = c.relnamespace
-    where n.nspname not in ('pg_catalog', 'information_schema')
+    where n.nspname not in (${NON_APP_SCHEMAS_SQL})
       and c.relkind in ('r', 'm')
     group by n.nspname, c.relname, replace(pi.indexdef, pi.indexname, '')
     having count(*) > 1
@@ -278,6 +283,8 @@ export const QUERIES = {
     from pg_stat_user_tables
     where seq_scan > coalesce(idx_scan, 0)
       and n_live_tup > 1000
+      -- app-object scope (see indexStats); managed tables aren't user-actionable
+      and schemaname not in (${NON_APP_SCHEMAS_SQL})
     order by seq_scan desc
     limit 20`,
 

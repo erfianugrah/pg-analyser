@@ -44,3 +44,7 @@ jobs:
         run: bun run scripts/check-api-drift.ts
       - name: Check derived inspect SQL against upstream CLI (advisory)
         run: bun run scripts/check-inspect-drift.ts
+      - name: Check advisor-lint catalog against splinter.sql (advisory)
+        run: bun run scripts/check-lints-drift.ts
+      - name: Check app-schema denylist against splinter.sql (advisory)
+        run: bun run scripts/check-schemas-drift.ts

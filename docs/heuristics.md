@@ -53,9 +53,9 @@ date tracks when we last confirmed them against upstream.
 
 | id | signal | threshold | sev | status |
 |---|---|---|---|---|
-| `seq_scan_heavy` | `pg_stat_user_tables` seq_scan >> idx_scan on a public table | seq-scan dominant | med | HAVE |
-| `unused_index` | `pg_stat_user_indexes.idx_scan = 0`, non-constraint | idx_scan 0 | low | HAVE |
-| `duplicate_index` | two indexes with identical column set on a table | any pair | med | HAVE |
+| `seq_scan_heavy` | `pg_stat_user_tables` seq_scan >> idx_scan on an application-schema table (`appRows`, not `public`-only) | seq-scan dominant | med | HAVE |
+| `unused_index` | `pg_stat_user_indexes.idx_scan = 0`, non-constraint, application schema; SQL fallback suppressed when the advisor's `unused_index` lint already fired | idx_scan 0 | low | HAVE |
+| `duplicate_index` | two indexes with identical column set on a table; SQL fallback suppressed when the advisor's `duplicate_index` lint already fired | any pair | med | HAVE |
 | `top_time_query` | `pg_stat_statements` top by total_exec_time | >= 10% of DB time | med | PARTIAL |
 | `functional_predicate` | WHERE wraps an indexed col in a function (e.g. `left(id::text,n)`) defeats the index -> seq scan | any on large table | med | NEW (best-effort; narrate diagnoses root cause) |
 | `query_temp_spill` | a single query's `pg_stat_statements.temp_blks_written` (sorts/hashes spilling to disk) | >= `tempSpillBlocks` 12500 blks (~100MB) | med | HAVE |

@@ -1,5 +1,6 @@
+import { appRows, isAppSchema } from "./appschema.ts";
 import { deriveFindings, derivePositives } from "./findings.ts";
-import type { Analysis, SqlRow } from "./schemas.ts";
+import type { Analysis } from "./schemas.ts";
 import { sufficient, trendStat } from "./trendstats.ts";
 
 /**
@@ -37,8 +38,12 @@ const truncate = (s: unknown, n: number): string => {
   return str.length > n ? `${str.slice(0, n)}...` : str;
 };
 
-const publicRows = (rows: SqlRow[]): SqlRow[] =>
-  rows.filter((r) => String(r.schema ?? "") === "public");
+const num = (v: unknown): number => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+};
+
+const isOverdue = (v: unknown): boolean => v === true || v === "yes";
 
 /**
  * Bounded, JSON-serialisable digest of an Analysis for the model. Pure and
@@ -89,6 +94,53 @@ export function buildNarrativeInput(a: Analysis) {
     table: r.table,
     size: r.total_size ?? r.size ?? null,
   }));
+  // Unused indexes NAMED (not just a count) so the model can point at the
+  // specific object. Scoped to application schemas so a Supabase-managed index
+  // is never suggested for removal - matches the advisor's own scope.
+  const unusedIndexes = appRows(a.sql.indexStats).filter((r) => r.unused === true);
+  const unusedIndexesTop = unusedIndexes.slice(0, 10).map((r) => ({
+    index: r.index ?? null,
+    table: r.table ?? null,
+    size: r.index_size ?? null,
+    scans: r.scans ?? null,
+  }));
+  // Dead-tuple / autovacuum lag: overdue tables first, then by dead-tuple count.
+  // Lets the model connect write-heavy tables to where bloat is accruing. Scoped
+  // to application schemas - a Supabase-managed table's vacuum is not the user's
+  // to act on (matches the unused-index scoping).
+  const deadTuples = appRows(a.sql.deadTuples)
+    .sort((x, y) => {
+      const o = (isOverdue(y.overdue) ? 1 : 0) - (isOverdue(x.overdue) ? 1 : 0);
+      return o !== 0 ? o : num(y.dead_rows) - num(x.dead_rows);
+    })
+    .slice(0, 8)
+    .map((r) => ({
+      table: r.table ?? null,
+      dead_rows: r.dead_rows ?? null,
+      live_rows: r.live_rows ?? null,
+      overdue: r.overdue ?? null,
+      last_autovacuum: r.last_autovacuum ?? null,
+    }));
+  // Per-table read/write profile (write-heavy tables accrue dead tuples fastest).
+  // trafficProfile carries a qualified `schema.table` but no separate schema
+  // column, so derive the schema from the prefix to keep app-only scoping.
+  const writeHeavyTables = a.sql.trafficProfile
+    .filter((r) => isAppSchema(String(r.table ?? "").split(".")[0]))
+    .slice(0, 8)
+    .map((r) => ({
+      table: r.table ?? null,
+      profile: r.profile ?? null,
+      write_tuples: r.write_tuples ?? null,
+      blocks_read: r.blocks_read ?? null,
+    }));
+  // Outdated extensions (a version behind) - a low-effort currency signal.
+  const extensionsOutdated = a.sql.extensions
+    .filter((r) => r.outdated === true)
+    .map((r) => ({
+      name: r.name ?? null,
+      installed: r.installed ?? null,
+      latest: r.latest ?? null,
+    }));
   // Full trend shape so the model reasons over the TRAJECTORY (headroom,
   // direction, projection), not just the last value. `sufficient` tells it when
   // the window is trustworthy for sustained/projection claims.
@@ -141,11 +193,15 @@ export function buildNarrativeInput(a: Analysis) {
       frequentQueries: frequent,
       queryIoOutliers: ioOutliers,
       biggestTables: tables,
-      unusedIndexes: publicRows(a.sql.indexStats).filter((r) => r.unused === true).length,
-      duplicateIndexes: publicRows(a.sql.duplicateIndexes).length,
-      rlsUnindexedColumns: publicRows(a.sql.rlsUnindexed).map((r) => `${r.table}.${r.column}`),
-      seqScanHeavy: a.sql.seqScanHeavy.slice(0, 6),
+      unusedIndexes: unusedIndexes.length,
+      unusedIndexesTop,
+      duplicateIndexes: appRows(a.sql.duplicateIndexes).length,
+      rlsUnindexedColumns: appRows(a.sql.rlsUnindexed).map((r) => `${r.table}.${r.column}`),
+      seqScanHeavy: appRows(a.sql.seqScanHeavy).slice(0, 6),
       bloat: a.sql.bloat.slice(0, 5),
+      deadTuples,
+      writeHeavyTables,
+      extensionsOutdated,
       connections: a.sql.connections,
       roleStats: a.sql.roleStats.slice(0, 6),
       functionStats: a.functionStats.slice(0, 8),
@@ -177,6 +233,7 @@ Grounding (hard rules):
 - Some findings carry a "changelog" URL: a documented Supabase platform change or known issue behind the finding (e.g. a default that changed). When present, reference it - it is the authoritative "this is a known change, here is the background" link the reader wants. Same rule as doc URLs: cite the changelog only if it is present in the JSON for that finding; never invent or guess one.
 - Be concrete, not vague. When a finding's remediation names a specific recommended value or target - a timeout, a size, a percentage, a fraction, a starting figure - carry that exact value into your prose. Do NOT flatten "set statement_timeout to something like 30s-60s" into "set a statement_timeout", or "raise work_mem toward 16-64MB" into "raise work_mem". The reader's complaint is being told what is wrong but not what to set it to; the values are in the remediation, so surface them. Never invent a value the remediation does not give.
 - If "degraded" is true or there are collectionNotes, say plainly that some checks could not run and the absence of a finding is not proof of health.
+- The evidence digest also carries: dead-tuple / autovacuum rows (overdue=yes means autovacuum is behind on that table), a per-table read/write profile (write-heavy tables accrue dead tuples fastest), the NAMED unused indexes (evidence.unusedIndexesTop), and any outdated extensions. Where - and only where - the numbers support it, draw the cross-cutting link the finding cards cannot: a write-heavy table that also tops the dead-tuple list, an unused index on a table that also appears in the query outliers, and so on. If a link is not supported by the data, leave it out.
 
 Tone - conversational, observational, understated. Write like a colleague talking through what they saw, not a consultant issuing orders:
 - No imperative openers (Address / Fix / Tackle / Prioritise / Start with / Focus on) and no modal directives (should / must / need to). The closest you get is "you might want to ..." / "it may be worth ...".

@@ -38,6 +38,7 @@ HTML + PDF report. No superuser `--db-url`, no manual Grafana screenshots.
 | `bun run check:api` | assert endpoints still exist in the upstream OpenAPI spec |
 | `bun run check:inspect` | warn when upstream CLI inspect SQL drifts from our derived baseline |
 | `bun run check:lints` | warn when splinter lints drift from the src/lints.ts fix catalog |
+| `bun run check:schemas` | warn when the app-schema denylist (src/appschema.ts) drifts from splinter.sql's unused_index exclusions |
 | `bun test` | run tests |
 | `bun run build` | compile a standalone `sbperf` binary |
 
@@ -119,8 +120,8 @@ equivalent to `supabase inspect db` plus ranked findings, splinter advisors, and
 trends. `--all` still needs a PAT (it enumerates projects via the Management
 API); the explicit `--db-url` / `sbperf.databases.json` sweep (`doAllDbs`) is the
 no-PAT multi-DB path. The db-url SQL + splinter are drift-synced by
-`check:inspect` + `check:lints` (advisory) - this mode's sync guarantee the way
-`check:api` is for PAT mode.
+`check:inspect` + `check:lints` + `check:schemas` (all advisory) - this mode's
+sync guarantee the way `check:api` is for PAT mode.
 
 **Profile** (`--profile <file.json>`, `profile.ts`): the whole no-PAT
 config in ONE gitignored JSON - `{ noPat, grafana: { hostTemplate, datasourceUid,
@@ -209,6 +210,15 @@ src/
                  the extension is already installed + superuser SQL (collect.ts
                  gates it; sbperf never CREATEs an extension - that's a write);
                  findings prefer it over the estimate, else label the estimate.
+                 The app-object-inventory queries (index-stats, duplicate-
+                 indexes, seq-scan-heavy) exclude Postgres-internal + Supabase-
+                 managed schemas IN SQL via `NON_APP_SCHEMAS_SQL` (appschema.ts,
+                 the same denylist findings/narrate scope by), so a project with
+                 many managed (e.g. `auth`) indexes can't crowd the user's own
+                 out of the row cap - a real bug seen in the field: 27 auth + 3
+                 public indexes hit the LIMIT 30 and hid 7 unused public indexes
+                 the advisor did flag. rlsUnindexed deliberately does NOT exclude
+                 `storage` (bucket-access RLS policies are user-authored).
   metrics.ts     Prometheus text parser + DISPLAY-only allowlist (collect
                  captures the FULL scrape; curate() only picks the HTML slice)
   collect.ts     orchestrate all planes -> validated Analysis (per-source errors
@@ -244,6 +254,20 @@ src/
                  {plainTitle, whatToDo, sql?, howToVerify}; makes advisor findings
                  a one-stop shop (concrete fix, not "go to the Advisor"). Kept in
                  sync with splinter.sql by scripts/check-lints-drift.ts.
+  appschema.ts   isAppSchema()/appRows(): decides which schemas are the USER's
+                 tables vs Postgres-internal / Supabase-managed. `NON_APP_SCHEMAS`
+                 mirrors the exclusion set in splinter.sql's unused_index lint, so
+                 findings.ts and the narrate digest scope index/RLS/vacuum signals
+                 to the SAME objects the advisor does - never flagging a managed
+                 index (e.g. `auth`), never missing a custom app schema (e.g.
+                 `app1`). Replaced the old `schema==="public"` heuristic that
+                 silently under-reported every project not living in `public`.
+                 Fail-open (an unknown schema is treated as app). Drift-synced to
+                 splinter.sql by scripts/check-schemas-drift.ts (superset
+                 invariant: NON_APP_SCHEMAS must contain every schema splinter
+                 excludes; extras are fine). Also exports `NON_APP_SCHEMAS_SQL`
+                 (the denylist as a SQL `IN (...)` fragment) so the sql.ts
+                 inventory queries apply the SAME scope server-side.
   (security)     collect also pulls three security-config Management planes -
                  config/auth (GoTrue: MFA/password/signup/anon/jwt_exp),
                  network-restrictions (DB IP allowlist), ssl-enforcement - into
@@ -268,6 +292,13 @@ src/
                  frequency UPDATE/DELETE statements to a bloated/dead-tuple table
                  and annotates the bloat finding with the likely cause (e.g. a
                  hot counter update), the cross-cutting read the cards lack.
+                 SQL-derived index/RLS findings + positives scope via appRows
+                 (application schemas), NOT `public` only. The unused/duplicate
+                 index SQL findings are FALLBACKS: suppressed when the advisor's
+                 own `unused_index`/`duplicate_index` lint already fired (the
+                 advisor's richer catalogued card wins), so the same objects are
+                 never reported twice. The "No unused indexes" positive is
+                 likewise gated on the advisor not having reported any.
   trendstats.ts  trend-analysis primitives (slope/growth, sustained-fraction,
                  peak, linear projection) behind sufficient() gating; the shapes
                  the capacity findings + trend-health positives reason over.
@@ -314,6 +345,15 @@ src/
                  (not the whole corpus); system prompt forbids inventing facts.
                  OpenAI-compatible client (OpenAI / local llama-server / ...),
                  injectable for tests; SBPERF_LLM_BASE_URL + _MODEL (+ _API_KEY).
+                 buildNarrativeInput is the SOLE digest projection (feeds both
+                 the direct-LLM path and the `narrate --print-prompt` pi round-
+                 trip). Evidence carries: query outliers/frequent/IO, biggest
+                 tables, NAMED unused indexes (unusedIndexesTop), dead-tuple /
+                 autovacuum lag, per-table write profile, outdated extensions,
+                 connections, roles, trends. Index/RLS/dead-tuple/write-profile
+                 rows are scoped app-only (appRows / schema-prefix) - see the
+                 Conventions note on why the digest is app-scoped while the
+                 report shows all schemas.
   sync.ts        on-by-default soft-fail upstream sync check -> analysis.sync:
                  catalog vintage/age + vendored splinter.sql vs upstream hash;
                  rendered in the report footer. --no-sync-check to skip.
@@ -383,6 +423,39 @@ src/
   silently lost every such project's GoTrue security findings until made
   `.string().nullable().optional()`. `.nullable()` here is the real shape, not
   papering over a mismatch - the field genuinely IS null.
+- **App-schema scoping (`src/appschema.ts`), not `public`-only.** "Which schema
+  is the user's?" is decided by `isAppSchema()`/`appRows()` - a denylist of
+  Postgres-internal + Supabase-managed schemas mirrored from splinter.sql's
+  `unused_index` lint - NOT by `schema === "public"`. The old public-only
+  heuristic silently reported ZERO unused/duplicate/unindexed-RLS objects for
+  any project that keeps its tables in a custom schema (e.g. `app1`), while the
+  advisor path (splinter, schema-aware) correctly flagged them - the two
+  diverged. `scripts/check-schemas-drift.ts` enforces a SUPERSET invariant
+  (NON_APP_SCHEMAS must contain every schema splinter excludes; extra defensive
+  entries are fine) so the denylist can't drift more-permissive than the
+  advisor. When adding a schema-scoped signal, filter with `appRows` (or, when
+  the row has only a qualified `schema.table` string and no schema column,
+  `isAppSchema(table.split(".")[0])`).
+- **Advisor findings are authoritative; the SQL-derived index findings are
+  fallbacks.** deriveFindings suppresses the SQL `unused_index`/`duplicate_index`
+  findings (and the "No unused indexes" positive) when the advisor's own lint of
+  that name already fired - the advisor's catalogued card (plain title + concrete
+  fix from lints.ts) is richer, and emitting both double-reports the same
+  objects. The SQL path exists for when advisors are unavailable (hosted
+  endpoint 400s AND no superuser --db-url to run splinter). Keep new
+  SQL-vs-advisor overlaps mutually exclusive the same way (guard on the lint
+  `name` present in `a.advisors.performance`).
+- **The narrate digest is app-scoped; the report shows all schemas. This is
+  deliberate - don't "fix" the inconsistency.** buildNarrativeInput scopes
+  index/RLS/dead-tuple/write-profile evidence to application schemas; the report
+  evidence tables render every schema. Different contracts: the report is the
+  complete auditable record (a human reads `auth.sessions` bloat and knows it's
+  Supabase's to manage), whereas the digest is the input to a RECOMMENDATION
+  layer - feeding it managed-table internals invites the model to turn
+  platform-internal state into a fake action item ("vacuum your refresh_tokens
+  table") the user can't act on. If narrate ever becomes observability-
+  description rather than advice, revert the scoping (one-liner per field); until
+  then app-only is the correct default.
 - Generated reports contain live query text - `reports/` is gitignored.
 - Scraper dirs contain a live credential in `prometheus.yml` - gitignored.
 
