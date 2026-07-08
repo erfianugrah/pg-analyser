@@ -1051,7 +1051,8 @@ ${faviconTag(brand)}
   tbody tr:nth-child(even){background:var(--stripe)}
   tbody tr.flag{background:var(--warnbg)}
   td.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;white-space:pre-wrap;max-width:620px;word-break:break-word}
-  table.kv td:first-child{white-space:nowrap;font-weight:600;width:1%}
+  table.kv td:first-child,table.kv td:nth-child(2){white-space:nowrap;width:1%}
+  table.kv td:first-child{font-weight:600}
   table.kv td:nth-child(3){width:100%;word-break:break-word}
   table.find td:first-child,table.find td:nth-child(2){white-space:nowrap;width:1%}
   .count{display:inline-block;background:var(--fg);color:var(--bg);border-radius:10px;padding:0 7px;font-size:11px;vertical-align:middle}
