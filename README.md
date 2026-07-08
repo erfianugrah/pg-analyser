@@ -135,8 +135,11 @@ bun run src/index.ts report <dir>            # draws trends from accumulated sna
   in no-PAT mode
 - **Read-only SQL** - `pg_stat_statements` outliers + most-frequent queries
   (keyed by `queryid` for cross-run regression tracking), **per-query I/O depth**
-  (temp-file spill, disk-read miss, latency variance), table/index cache-hit %
-  (with stats-window age), biggest tables, unused indexes, duplicate indexes,
+  (temp-file spill, disk-read miss, latency variance), global + **per-table I/O
+  attribution** (heap/index/**TOAST** cache-hit % from `pg_statio` - flags a
+  table de-toasting a large out-of-line column from disk every scan, the
+  IO-saturation trap the global ratio hides), biggest tables (with TOAST size
+  isolated), unused indexes, duplicate indexes,
   sequential-scan-heavy tables, estimated bloat, traffic profile (read/write
   ratio), threshold-aware autovacuum lag, txid wraparound, replication-slot lag,
   connection state + per-role usage, and **point-in-time contention** (locks,
@@ -153,7 +156,10 @@ bun run src/index.ts report <dir>            # draws trends from accumulated sna
 - **Scheduled jobs (pg_cron)** - per-job run health over the last 7 days
   (failed-run count, last run) - the ETL/automation plane the advisor can't see
 - **Extensions** - full extension inventory + an outdated-version nudge, plus
-  pgvector ANN-index health (a vector column with no HNSW/IVFFlat index)
+  pgvector ANN-index health (a vector column with no HNSW/IVFFlat index),
+  enriched with dimension + storage strategy + an out-of-line flag (EXTENDED
+  vectors past ~500 dims are TOASTed, so exact scans de-toast from disk;
+  remediation names HNSW / halfvec / `SET STORAGE PLAIN`)
 - **Metrics-derived signals** - cumulative deadlocks, work_mem spill to disk
   (temp-file rate), and a `postgres_changes` -> Broadcast nudge for realtime at
   scale (swap is kept as a trend series, not a finding - static swap occupancy
@@ -611,6 +617,7 @@ bun test             # unit tests
 bun run check:api    # upstream Management API drift check (live spec, pass/fail)
 bun run check:inspect # advisory: warn when upstream CLI inspect SQL drifts from our derived baseline
 bun run check:lints  # advisory: warn when splinter lints drift from src/lints.ts fix catalog
+bun run check:schemas # advisory: warn when the app-schema denylist drifts from splinter.sql
 bun run build        # standalone binary
 ```
 
