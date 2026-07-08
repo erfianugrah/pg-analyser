@@ -42,6 +42,11 @@ const ENDPOINTS: ReadonlyArray<{ method: string; path: string; used: string }> =
   { method: "get", path: "/v1/projects/{ref}/health", used: "service health" },
   { method: "get", path: "/v1/projects/{ref}/config/disk", used: "disk spec" },
   { method: "get", path: "/v1/projects/{ref}/config/disk/util", used: "disk utilization" },
+  {
+    method: "get",
+    path: "/v1/projects/{ref}/config/disk/autoscale",
+    used: "grow-only autoscale policy",
+  },
   { method: "get", path: "/v1/projects/{ref}/config/database/postgres", used: "pg config" },
   { method: "get", path: "/v1/projects/{ref}/config/database/pooler", used: "pooler config" },
   { method: "get", path: "/v1/projects/{ref}/database/backups", used: "backups" },

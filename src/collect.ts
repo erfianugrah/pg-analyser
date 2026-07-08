@@ -3,7 +3,7 @@ import { Management } from "./management.ts";
 import { parsePrometheus } from "./metrics.ts";
 import { fetchTrends } from "./prometheus.ts";
 import { isUnwrappedAuth } from "./rls.ts";
-import { type Analysis, MetricSample } from "./schemas.ts";
+import { type Analysis, MetricSample, type SqlRow } from "./schemas.ts";
 import { collectSplinterLints } from "./splinter.ts";
 import { QUERIES } from "./sql.ts";
 import { ManagementSqlRunner, type SqlRunner } from "./sqlrunner.ts";
@@ -36,6 +36,12 @@ export async function collect(
     // A multi-project sweep injects a quieter (warn-floor) logger so routine
     // per-plane INFO doesn't clutter the progress bar; single runs use info.
     logger?: Logger;
+    // amcheck data-integrity checks (opt-in). false/undefined = off (default);
+    // true = bt_index_check on app B-tree indexes (light, AccessShareLock);
+    // "heap" = also verify_heapam over the biggest app tables (HEAVY - reads
+    // every page). Requires superuser SQL + amcheck already installed; sbperf
+    // never CREATEs the extension.
+    amcheck?: boolean | "heap";
   } = {},
 ): Promise<Analysis> {
   // No-PAT mode: transport == null. No Supabase Management API at all - a
@@ -147,6 +153,7 @@ export async function collect(
     health,
     disk,
     diskUtil,
+    diskAutoscale,
     pgConfig,
     pooler,
     backups,
@@ -188,7 +195,9 @@ export async function collect(
     unindexedVectors,
     bucketList,
     walArchiving,
+    checksumFailures,
     hbaRules,
+    walDirSize,
     authAudit,
     authMfa,
     metricsText,
@@ -196,6 +205,9 @@ export async function collect(
     mgmtLive("health", (mm) => mm.health(ref), []),
     mgmt("disk", (mm) => mm.disk(ref), null),
     mgmtLive("diskUtil", (mm) => mm.diskUtil(ref), null),
+    // Autoscale policy is static platform metadata (works on a paused project),
+    // so plain mgmt() - it is null in no-PAT mode (no Management API).
+    mgmt("diskAutoscale", (mm) => mm.diskAutoscale(ref), null),
     mgmt("pgConfig", (mm) => mm.pgConfig(ref), null),
     mgmt("pooler", (mm) => mm.pooler(ref), null),
     mgmt("backups", (mm) => mm.backups(ref), null),
@@ -237,10 +249,16 @@ export async function collect(
     sql("unindexedVectors"),
     sql("bucketList"),
     sql("walArchiving"),
+    // Checksum failures read from pg_stat_database - no superuser needed, runs
+    // in both modes.
+    sql("checksumFailures"),
     // pg_hba_file_rules requires a true superuser (supabase_admin); the PAT
     // read-only user is denied it (42501). Only attempt it on the superuser
     // SQL tier - otherwise it warns + records a note on every PAT run.
     runner.source === "superuser" ? sql("hbaRules") : Promise.resolve([]),
+    // pg_ls_waldir() needs superuser / pg_monitor; the PAT read-only user lacks
+    // it. Gate to the superuser tier so it never warns on a PAT run.
+    runner.source === "superuser" ? sql("walDirSize") : Promise.resolve([]),
     sql("authAudit"),
     sql("authMfa"),
     transport && dbServing
@@ -373,6 +391,46 @@ export async function collect(
   const cronJobs = hasPgCron
     ? await safe("sql:cronJobs", () => runner.run(QUERIES.cronJobs), [])
     : [];
+
+  // amcheck integrity checks - opt-in, superuser SQL only, and only when the
+  // extension is ALREADY installed (sbperf never CREATEs it - a write). Index
+  // check calls bt_index_check per index (it RAISES on corruption, so a thrown
+  // error is the hit); the heavier heap check (verify_heapam) is row-returning
+  // and gated behind --amcheck=heap.
+  const amcheckIndex: SqlRow[] = [];
+  let amcheckHeap: SqlRow[] = [];
+  if (opts.amcheck && runner.source === "superuser") {
+    const hasAmcheck = extensions.some((r) => String(r.name) === "amcheck");
+    if (!hasAmcheck) {
+      errors.push({
+        source: "amcheck",
+        message:
+          "amcheck requested but the extension is not installed. Enable it (CREATE EXTENSION amcheck) to run integrity checks - sbperf never installs extensions itself.",
+      });
+    } else {
+      const targets = await safe(
+        "sql:btreeIndexTargets",
+        () => runner.run(QUERIES.btreeIndexTargets),
+        [],
+      );
+      for (const t of targets) {
+        const oid = Number(t.oid);
+        if (!Number.isFinite(oid)) continue;
+        try {
+          await runner.run(`select bt_index_check(${oid}::regclass, false)`);
+        } catch (err) {
+          amcheckIndex.push({
+            index: String(t.index),
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+      clog.info("amcheck index scan", { indexes: targets.length, hits: amcheckIndex.length });
+      if (opts.amcheck === "heap") {
+        amcheckHeap = await safe("sql:amcheckHeap", () => runner.run(QUERIES.amcheckHeap), []);
+      }
+    }
+  }
   const rawCacheHit = cacheHitRows[0]?.cache_hit_pct;
   const cacheHitPct = rawCacheHit == null ? null : Number(rawCacheHit);
   const rawBlksAccessed = cacheHitRows[0]?.heap_blks_accessed;
@@ -441,6 +499,14 @@ export async function collect(
           throughputMibps: disk.attributes.throughput_mibps ?? null,
           usedBytes: diskUtil?.metrics.fs_used_bytes ?? null,
           availBytes: diskUtil?.metrics.fs_avail_bytes ?? null,
+          lastModifiedAt: disk.last_modified_at ?? null,
+          autoscale: diskAutoscale
+            ? {
+                growthPercent: diskAutoscale.growth_percent,
+                minIncrementGb: diskAutoscale.min_increment_gb,
+                maxSizeGb: diskAutoscale.max_size_gb,
+              }
+            : null,
         }
       : null,
     pgConfig: pgConfigResolved,
@@ -489,6 +555,10 @@ export async function collect(
       extensions,
       unindexedVectors,
       walArchiving,
+      checksumFailures,
+      walDirSize,
+      amcheckIndex,
+      amcheckHeap,
       hbaRules,
       authAudit,
       authMfa,

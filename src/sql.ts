@@ -102,9 +102,71 @@ export const QUERIES = {
       'max_connections', 'shared_buffers', 'effective_cache_size', 'work_mem',
       'maintenance_work_mem', 'statement_timeout', 'lock_timeout',
       'idle_in_transaction_session_timeout', 'random_page_cost',
-      'max_parallel_workers', 'server_version'
+      'max_parallel_workers', 'max_parallel_workers_per_gather', 'server_version',
+      -- tuning-finding inputs (see findings.ts config section): checkpoint
+      -- pacing, planner stats depth, I/O timing capture, prefetch concurrency,
+      -- WAL compression, and whether page checksums are on.
+      'checkpoint_completion_target', 'default_statistics_target',
+      'track_io_timing', 'effective_io_concurrency', 'wal_compression',
+      'data_checksums'
     )
     order by name`,
+
+  // Page-checksum failure counters (pg_stat_database, cluster-wide row). A
+  // NON-ZERO checksums_failures is on-disk corruption caught by the checksum
+  // layer - a CRITICAL, actionable integrity signal available in BOTH modes
+  // with no extension. checksums_last_failure dates the most recent hit.
+  // Columns exist from PG12+; datname IS NULL is the shared/cluster aggregate.
+  checksumFailures: /* sql */ `
+    select
+      coalesce(sum(checksum_failures), 0) as checksum_failures,
+      max(checksum_last_failure)::text as checksum_last_failure
+    from pg_stat_database`,
+
+  // pg_wal directory size (superuser). WAL lives on the data volume, so a large
+  // pg_wal is provisioned disk NOT reflected in pg_database_size - it feeds the
+  // disk over-provisioning / true-footprint math. pg_ls_waldir() needs a
+  // superuser or a role granted pg_monitor; safe() degrades to [] otherwise.
+  walDirSize: /* sql */ `
+    select
+      sum(size)::bigint as wal_bytes,
+      pg_size_pretty(sum(size)) as wal_size,
+      count(*) as wal_segments
+    from pg_ls_waldir()`,
+
+  // amcheck targets: valid app-schema B-tree indexes, biggest first (capped).
+  // collect.ts calls bt_index_check(oid, false) per row - a thrown error is a
+  // corruption hit. Superuser + amcheck-installed + opt-in only (see collect).
+  btreeIndexTargets: /* sql */ `
+    select
+      i.indexrelid::text as oid,
+      n.nspname || '.' || c.relname as index
+    from pg_index i
+    join pg_class c on c.oid = i.indexrelid
+    join pg_namespace n on n.oid = c.relnamespace
+    join pg_am am on am.oid = c.relam
+    where i.indisvalid and am.amname = 'btree'
+      and n.nspname not in (${NON_APP_SCHEMAS_SQL})
+    order by pg_relation_size(i.indexrelid) desc
+    limit 100`,
+
+  // amcheck heap verification (verify_heapam) over the biggest N app tables.
+  // Row-returning (one row per corruption), so it runs as a normal query -
+  // unlike bt_index_check which raises. HEAVY (reads every page of each target
+  // table); gated to opt-in --amcheck=heap + superuser + amcheck installed.
+  amcheckHeap: /* sql */ `
+    with targets as (
+      select c.oid, n.nspname || '.' || c.relname as "table"
+      from pg_class c
+      join pg_namespace n on n.oid = c.relnamespace
+      where c.relkind in ('r', 'm')
+        and n.nspname not in (${NON_APP_SCHEMAS_SQL})
+      order by pg_total_relation_size(c.oid) desc
+      limit 5
+    )
+    select t."table", v.blkno, v.offnum, v.attnum, v.msg as message
+    from targets t
+    cross join lateral verify_heapam(t.oid, on_error_stop => false, check_toast => true) v`,
 
   // App workload only - platform/introspection noise filtered out. queryid is
   // pg_stat_statements' stable per-normalized-query identity (survives literal
@@ -198,6 +260,7 @@ export const QUERIES = {
       n.nspname || '.' || c.relname as index,
       tn.nspname || '.' || tc.relname as table,
       pg_size_pretty(pg_relation_size(i.indexrelid)) as index_size,
+      pg_relation_size(i.indexrelid) as index_bytes,
       ui.idx_scan as scans,
       case when ui.idx_scan = 0
         and i.indexrelid not in (select conindid from pg_constraint where contype in ('p', 'u'))

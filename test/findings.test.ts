@@ -64,6 +64,10 @@ function base(): Analysis {
       cronJobs: [],
       dbSizeBytes: null,
       bloatExact: [],
+      checksumFailures: [],
+      walDirSize: [],
+      amcheckIndex: [],
+      amcheckHeap: [],
     },
     metrics: { available: false, samples: [] },
     trends: [],
@@ -323,6 +327,8 @@ describe("deriveFindings", () => {
       throughputMibps: 125,
       usedBytes: 1,
       availBytes: 9,
+      lastModifiedAt: null,
+      autoscale: null,
     };
     a.trends = [
       { title: "Disk read IOPS", unit: "", points: [{ t: 1, v: 1800 }] },
@@ -342,6 +348,8 @@ describe("deriveFindings", () => {
       throughputMibps: 125,
       usedBytes: 1,
       availBytes: 9,
+      lastModifiedAt: null,
+      autoscale: null,
     };
     a.trends = [{ title: "Disk read IOPS", unit: "", points: [{ t: 1, v: 100 }] }];
     expect(deriveFindings(a).some((x) => x.title.includes("Disk IOPS"))).toBe(false);
@@ -1109,5 +1117,168 @@ describe("extension health findings", () => {
 
   test("no extension data -> no extension findings", () => {
     expect(deriveFindings(base()).some((f) => f.anchor === "#extensions")).toBe(false);
+  });
+});
+
+describe("disk over-provisioning (downsize candidate)", () => {
+  function withDisk(sizeGb: number, usedBytes: number, autoscale = false): Analysis {
+    const a = base();
+    a.disk = {
+      sizeGb,
+      iops: 3000,
+      type: "gp3",
+      throughputMibps: 125,
+      usedBytes,
+      availBytes: sizeGb * 1024 ** 3 - usedBytes,
+      lastModifiedAt: null,
+      autoscale: autoscale ? { growthPercent: 50, minIncrementGb: 4, maxSizeGb: 500 } : null,
+    };
+    return a;
+  }
+
+  test("large volume, low used fraction -> disk_oversized (low)", () => {
+    const a = withDisk(200, 10 * 1024 ** 3); // 200 GB, 10 GB used (5%)
+    const f = deriveFindings(a).find((x) => x.heuristicId === "disk_oversized");
+    expect(f).toBeDefined();
+    expect(f?.severity).toBe("low");
+    expect(f?.title).toContain("over-provisioned");
+  });
+
+  test("autoscale note appears when grow-only autoscale is configured", () => {
+    const a = withDisk(200, 10 * 1024 ** 3, true);
+    const f = deriveFindings(a).find((x) => x.heuristicId === "disk_oversized");
+    expect(f?.evidence).toContain("grow-only");
+  });
+
+  test("true-footprint math nets out reclaimable bloat + unused indexes", () => {
+    const a = withDisk(200, 50 * 1024 ** 3); // 50 GB used
+    a.sql.bloat = [{ name: "public.t", waste_bytes: 5 * 1024 ** 3 }];
+    a.sql.indexStats = [
+      {
+        schema: "public",
+        index: "public.idx",
+        table: "public.t",
+        unused: true,
+        index_bytes: 2 * 1024 ** 3,
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "disk_oversized");
+    expect(f?.evidence).toContain("reclaimable");
+    expect(f?.evidence).toContain("true footprint");
+  });
+
+  test("small volume with natural slack does NOT fire (min-waste floor)", () => {
+    const a = withDisk(8, 1 * 1024 ** 3); // 8 GB, 1 GB used - only 7 GB waste
+    expect(deriveFindings(a).some((x) => x.heuristicId === "disk_oversized")).toBe(false);
+  });
+
+  test("nearly-full disk fires disk_full, not disk_oversized", () => {
+    const a = withDisk(100, 90 * 1024 ** 3);
+    const ids = deriveFindings(a).map((x) => x.heuristicId);
+    expect(ids).toContain("disk_full");
+    expect(ids).not.toContain("disk_oversized");
+  });
+});
+
+describe("data integrity", () => {
+  test("non-zero page-checksum failures -> high finding", () => {
+    const a = base();
+    a.sql.checksumFailures = [
+      { checksum_failures: 3, checksum_last_failure: "2026-07-01T00:00:00Z" },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "checksum_failure");
+    expect(f?.severity).toBe("high");
+    expect(f?.evidence).toContain("2026-07-01");
+  });
+
+  test("zero checksum failures -> no finding", () => {
+    const a = base();
+    a.sql.checksumFailures = [{ checksum_failures: 0, checksum_last_failure: null }];
+    expect(deriveFindings(a).some((x) => x.heuristicId === "checksum_failure")).toBe(false);
+  });
+
+  test("amcheck index/heap corruption rows -> high findings", () => {
+    const a = base();
+    a.sql.amcheckIndex = [{ index: "public.idx", message: "item order invariant violated" }];
+    a.sql.amcheckHeap = [{ table: "public.t", message: "tuple points past end" }];
+    const ids = deriveFindings(a)
+      .filter((f) => f.severity === "high")
+      .map((f) => f.heuristicId);
+    expect(ids).toContain("index_corruption");
+    expect(ids).toContain("heap_corruption");
+  });
+});
+
+describe("config tuning (static GUC findings)", () => {
+  const guc = (name: string, setting: string, unit: string | null = null) => ({
+    name,
+    setting,
+    unit,
+  });
+
+  test("work_mem worst case exceeding estimated RAM -> work_mem_blast", () => {
+    const a = base();
+    // shared_buffers 256MB (unit 8kB) -> est RAM ~1GB; work_mem 64MB x 200 conns = huge
+    a.sql.pgSettings = [
+      guc("shared_buffers", String((256 * 1024 * 1024) / (8 * 1024)), "8kB"),
+      guc("work_mem", String(64 * 1024), "kB"),
+      guc("max_connections", "200"),
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "work_mem_blast");
+    expect(f).toBeDefined();
+    expect(f?.severity).toBe("med");
+  });
+
+  test("unbounded timeouts (0) -> timeout_unbounded", () => {
+    const a = base();
+    a.sql.pgSettings = [
+      guc("statement_timeout", "0"),
+      guc("idle_in_transaction_session_timeout", "0"),
+      guc("lock_timeout", "0"),
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "timeout_unbounded");
+    expect(f?.title).toContain("3 unbounded");
+  });
+
+  test("track_io_timing off -> finding", () => {
+    const a = base();
+    a.sql.pgSettings = [guc("track_io_timing", "off")];
+    expect(deriveFindings(a).some((x) => x.heuristicId === "track_io_timing_off")).toBe(true);
+  });
+
+  test("low maintenance_work_mem -> finding", () => {
+    const a = base();
+    a.sql.pgSettings = [guc("maintenance_work_mem", String(32 * 1024), "kB")]; // 32MB
+    expect(deriveFindings(a).some((x) => x.heuristicId === "maintenance_work_mem_low")).toBe(true);
+  });
+
+  test("low checkpoint_completion_target -> finding", () => {
+    const a = base();
+    a.sql.pgSettings = [guc("checkpoint_completion_target", "0.5")];
+    expect(deriveFindings(a).some((x) => x.heuristicId === "checkpoint_completion_low")).toBe(true);
+  });
+
+  test("healthy settings -> none of the tuning findings", () => {
+    const a = base();
+    a.sql.pgSettings = [
+      guc("shared_buffers", String((256 * 1024 * 1024) / (8 * 1024)), "8kB"),
+      guc("work_mem", String(4 * 1024), "kB"),
+      guc("max_connections", "60"),
+      guc("statement_timeout", "120000"),
+      guc("idle_in_transaction_session_timeout", "60000"),
+      guc("lock_timeout", "30000"),
+      guc("maintenance_work_mem", String(256 * 1024), "kB"),
+      guc("checkpoint_completion_target", "0.9"),
+      guc("track_io_timing", "on"),
+    ];
+    const tuningIds = [
+      "work_mem_blast",
+      "timeout_unbounded",
+      "track_io_timing_off",
+      "maintenance_work_mem_low",
+      "checkpoint_completion_low",
+    ];
+    const ids = deriveFindings(a).map((f) => f.heuristicId);
+    for (const id of tuningIds) expect(ids).not.toContain(id);
   });
 });

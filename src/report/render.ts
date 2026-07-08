@@ -860,6 +860,18 @@ export function render(
   const diskLine = disk
     ? `${disk.sizeGb} GB ${esc(disk.type)} / ${disk.iops ?? "-"} IOPS / ${disk.throughputMibps ?? "-"} MiB/s`
     : "-";
+  const autoscale = disk?.autoscale;
+  const autoscaleLine =
+    autoscale && (autoscale.maxSizeGb != null || autoscale.growthPercent != null)
+      ? `grow-only: +${autoscale.growthPercent ?? "?"}% steps${autoscale.minIncrementGb != null ? ` (min ${autoscale.minIncrementGb} GB)` : ""} up to ${autoscale.maxSizeGb ?? "?"} GB - never shrinks`
+      : "";
+  const walDirRow = a.sql.walDirSize[0]?.wal_size
+    ? `<tr><td>WAL directory</td><td class=mono>${esc(String(a.sql.walDirSize[0]?.wal_size))}</td><td class=note>pg_wal on the data volume (${esc(String(a.sql.walDirSize[0]?.wal_segments ?? "?"))} segments)</td></tr>`
+    : "";
+  const cksumFail = Number(a.sql.checksumFailures[0]?.checksum_failures ?? 0);
+  const cksumRow = a.sql.checksumFailures.length
+    ? `<tr><td>Page checksums</td><td class=mono>${cksumFail === 0 ? "0 failures" : `${cksumFail} FAILURES`}</td><td>${cksumFail === 0 ? '<span class="badge ok">clean</span>' : '<span class="badge err">corruption</span>'}</td></tr>`
+    : "";
   const diskPctTrend = diskUsedPctTrend(a);
   const diskUsed =
     disk && disk.usedBytes != null
@@ -916,7 +928,9 @@ ${capabilitiesSection(a)}
 <h2 id="infra">Infrastructure</h2>
 <table class=kv>
   <tr><td>Postgres version</td><td class=mono>${esc(m.pgVersion)}</td><td>${upgradeNote}</td></tr>
-  <tr><td>Disk</td><td class=mono>${diskLine}</td><td>${diskUsed}</td></tr>
+  <tr><td>Disk</td><td class=mono>${diskLine}</td><td>${diskUsed}${autoscaleLine ? `<br><span class=note>${autoscaleLine}</span>` : ""}</td></tr>
+  ${walDirRow}
+  ${cksumRow}
   <tr><td>DB size</td><td class=mono>${esc(a.sql.dbSize ?? (errored.has("sql:dbSize") ? "not collected" : "-"))}</td><td></td></tr>
   <tr><td>Cache hit (table)</td><td class=mono>${a.sql.cacheHitPct == null ? "-" : `${a.sql.cacheHitPct}%`}</td><td>${a.sql.cacheHitPct != null && a.sql.cacheHitPct < 99 ? '<span class="badge warn">below 99%</span>' : ""}</td></tr>
   <tr><td>Cache hit (index)</td><td class=mono>${a.sql.indexHitPct == null ? "-" : `${a.sql.indexHitPct}%`}</td><td>${a.sql.indexHitPct != null && a.sql.indexHitPct < 99 ? '<span class="badge warn">below 99%</span>' : ""}</td></tr>
