@@ -447,14 +447,6 @@ function healthBadges(a: Analysis): string {
 
 const SEV_CLASS: Record<Severity, string> = { high: "ERROR", med: "WARN", low: "INFO" };
 
-/** Upstream sync annotation for the footer - advisor lints are live regardless. */
-function syncFooter(sync: Analysis["sync"]): string {
-  if (!sync) return "";
-  const flagged = sync.stale || sync.advisorSqlDrifted === true;
-  const cls = flagged ? "warn-text" : "";
-  return `<p class="meta ${cls}">Heuristics sync: ${esc(sync.note)} Live advisor lints (performance + security) are fetched per run and are always current.</p>`;
-}
-
 /** "What's looking good" - confirmed-healthy observations, only when present. */
 function positivesSection(positives: Positive[]): string {
   if (!positives.length) return "";
@@ -1106,13 +1098,12 @@ ${brandHead(brand, "Supabase performance report")}
   ])}</div>
 ${banner}
 ${sections}
-<p class=meta style="margin-top:32px">Generated deterministically from ${
+<p class=meta style="margin-top:32px">Data sources: ${
     m.managementApi === false
       ? `superuser SQL (--db-url) and the self-hosted splinter advisors${a.trends.length ? " + Grafana trends" : ""} (no-PAT mode)`
       : `the Supabase Management API, ${m.sqlSource === "superuser" ? "superuser SQL (--db-url)" : "read-only SQL"}, and the project metrics endpoint`
-  }. No values inferred.</p>
+  }.</p>
 ${noPatFooter}
-${syncFooter(a.sync)}
 </body></html>`;
 }
 

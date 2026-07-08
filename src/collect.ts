@@ -501,6 +501,17 @@ export async function collect(
     errors,
   };
 
+  // Tool-provenance signal (catalog vintage + vendored-splinter drift). Logged
+  // here and persisted to analysis.json; deliberately NOT rendered in the
+  // report - it describes sbperf's currency, not the audited database.
+  if (analysis.sync)
+    clog.info("sync check", {
+      catalogReviewed: analysis.sync.catalogReviewed,
+      stale: analysis.sync.stale,
+      upstreamChecked: analysis.sync.upstreamChecked,
+      advisorSqlDrifted: analysis.sync.advisorSqlDrifted,
+    });
+
   clog.info("collect done", {
     collectionMs,
     errors: errors.length,

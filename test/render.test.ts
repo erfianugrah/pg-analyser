@@ -283,7 +283,10 @@ describe("render", () => {
     expect(html).toContain('class="sevbar"');
   });
 
-  test("sync footer renders the catalog vintage + drift note when present", () => {
+  test("sync status is tool provenance - never rendered in the report", () => {
+    // The sync check (catalog vintage + vendored-splinter drift) describes
+    // sbperf's own currency, not the audited database, so it lives in
+    // analysis.json + logs and must NOT leak into the customer-facing report.
     const html = render(
       fixture({
         sync: {
@@ -296,13 +299,8 @@ describe("render", () => {
         },
       }),
     );
-    expect(html).toContain("Heuristics sync:");
-    expect(html).toContain("vintage 2026-07");
-    expect(html).toContain("always current");
-  });
-
-  test("sync footer omitted when no sync status recorded (back-compat)", () => {
-    expect(render(fixture())).not.toContain("Heuristics sync:");
+    expect(html).not.toContain("Heuristics sync:");
+    expect(html).not.toContain("catalog vintage");
   });
 
   test("default report carries Supabase branding (favicon + logo + green accent)", () => {
