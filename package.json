@@ -18,6 +18,7 @@
     "check:api": "bun run scripts/check-api-drift.ts",
     "check:inspect": "bun run scripts/check-inspect-drift.ts",
     "check:lints": "bun run scripts/check-lints-drift.ts",
+    "check:schemas": "bun run scripts/check-schemas-drift.ts",
     "smoke": "bun run smoke.ts",
     "build": "bun build ./src/index.ts --compile --outfile sbperf"
   },

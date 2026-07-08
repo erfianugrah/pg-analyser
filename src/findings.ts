@@ -1,3 +1,4 @@
+import { appRows } from "./appschema.ts";
 import { meta, THRESHOLDS } from "./heuristics.ts";
 import { lintFix } from "./lints.ts";
 import type { Analysis, SqlRow } from "./schemas.ts";
@@ -280,7 +281,12 @@ export function securityConfigFindings(a: Analysis): Finding[] {
 export function deriveFindings(a: Analysis): Finding[] {
   const out: Finding[] = [];
   const set = settingsMap(a.sql.pgSettings);
-  const publicRows = (rows: SqlRow[]) => rows.filter((r) => String(r.schema ?? "") === "public");
+  // Which upstream advisor lints already fired. The SQL-derived unused/duplicate
+  // index findings below are FALLBACKS for when advisors are unavailable (e.g.
+  // the hosted advisors/performance endpoint 400s and no superuser --db-url is
+  // present to run splinter): when the advisor already covers a lint, its richer
+  // catalogued card wins and we must not emit a second card for the same objects.
+  const advisorLints = new Set(a.advisors.performance.map((l) => String(l.name)));
 
   // Advisors (grouped by title)
   out.push(...groupAdvisors(a.advisors.performance, "Performance", "#adv-perf", a.meta.ref));
@@ -343,37 +349,40 @@ export function deriveFindings(a: Analysis): Finding[] {
       ...meta("rls_initplan"),
     });
   }
-  const seqScan = publicRows(a.sql.seqScanHeavy).length;
+  const seqScanRows = appRows(a.sql.seqScanHeavy);
+  const seqScan = seqScanRows.length;
   if (seqScan > 0) {
     out.push({
       severity: "med",
       category: "Performance",
-      title: `${countCapped(a.sql.seqScanHeavy.length, seqScan)} public ${seqScan === 1 ? "table" : "tables"} sequential-scan heavy (missing index?)`,
+      title: `${countCapped(seqScanRows.length, seqScan)} ${seqScan === 1 ? "table" : "tables"} sequential-scan heavy (missing index?)`,
       anchor: "#seqscan",
       ...meta("seq_scan_heavy"),
     });
   }
-  const unused = publicRows(a.sql.indexStats).filter((r) => r.unused === true).length;
-  if (unused > 0) {
+  // Suppress when the advisor's own `unused_index` lint already covers it, else
+  // the same indexes are reported twice (advisor card + this fallback).
+  const unused = appRows(a.sql.indexStats).filter((r) => r.unused === true).length;
+  if (unused > 0 && !advisorLints.has("unused_index")) {
     out.push({
       severity: "low",
       category: "Performance",
-      title: `${unused} unused ${unused === 1 ? "index" : "indexes"} in public (write overhead)`,
+      title: `${unused} unused ${unused === 1 ? "index" : "indexes"} (write overhead)`,
       anchor: "#unused",
       ...meta("unused_index"),
     });
   }
-  const dupIdx = publicRows(a.sql.duplicateIndexes).length;
-  if (dupIdx > 0) {
+  const dupIdx = appRows(a.sql.duplicateIndexes).length;
+  if (dupIdx > 0 && !advisorLints.has("duplicate_index")) {
     out.push({
       severity: "med",
       category: "Performance",
-      title: `${dupIdx} public ${dupIdx === 1 ? "table has" : "tables have"} duplicate indexes (drop the copies)`,
+      title: `${dupIdx} ${dupIdx === 1 ? "table has" : "tables have"} duplicate indexes (drop the copies)`,
       anchor: "#dupidx",
       ...meta("duplicate_index"),
     });
   }
-  const rlsUnindexed = publicRows(a.sql.rlsUnindexed).length;
+  const rlsUnindexed = appRows(a.sql.rlsUnindexed).length;
   if (rlsUnindexed > 0) {
     out.push({
       severity: "med",
@@ -1050,7 +1059,7 @@ export function derivePositives(a: Analysis): Positive[] {
   const out: Positive[] = [];
   const errored = new Set(a.errors.map((e) => e.source));
   const set = settingsMap(a.sql.pgSettings);
-  const publicRows = (rows: SqlRow[]) => rows.filter((r) => String(r.schema ?? "") === "public");
+  const advisorLints = new Set(a.advisors.performance.map((l) => String(l.name)));
 
   // Never claim health when diagnostics were incomplete. In no-PAT mode the
   // project status is simply unknown (no Management API) - that's NOT degraded,
@@ -1120,16 +1129,20 @@ export function derivePositives(a: Analysis): Positive[] {
   if (
     totalPolicies > 0 &&
     !errored.has("sql:rlsUnindexed") &&
-    publicRows(a.sql.rlsUnindexed).length === 0
+    appRows(a.sql.rlsUnindexed).length === 0
   ) {
     out.push({ category: "Performance", title: "All RLS policy columns are indexed" });
   }
+  // Mirror the finding's mutual exclusivity: don't claim "no unused indexes" when
+  // the advisor reported some (its scope is authoritative), nor when our own
+  // application-schema scan finds any.
   if (
     !errored.has("sql:indexStats") &&
-    publicRows(a.sql.indexStats).length > 0 &&
-    publicRows(a.sql.indexStats).filter((r) => r.unused === true).length === 0
+    !advisorLints.has("unused_index") &&
+    appRows(a.sql.indexStats).length > 0 &&
+    appRows(a.sql.indexStats).filter((r) => r.unused === true).length === 0
   ) {
-    out.push({ category: "Performance", title: "No unused indexes in public" });
+    out.push({ category: "Performance", title: "No unused indexes" });
   }
   if (
     a.upgrade?.current_app_version &&

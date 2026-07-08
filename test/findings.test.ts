@@ -184,18 +184,32 @@ describe("deriveFindings", () => {
     expect(f?.dashUrl).toContain("/advisors/performance");
   });
 
-  test("only public-schema unused indexes counted", () => {
+  test("unused indexes: application schemas counted, Supabase-managed excluded", () => {
     const a = base();
     a.sql.indexStats = [
-      { schema: "auth", table: "auth.users", index: "auth.i1", unused: true },
-      { schema: "public", table: "public.x", index: "public.i2", unused: true },
+      { schema: "auth", table: "auth.users", index: "auth.i1", unused: true }, // managed -> excluded
+      { schema: "storage", table: "storage.objects", index: "storage.i5", unused: true }, // managed
+      { schema: "public", table: "public.x", index: "public.i2", unused: true }, // app
+      { schema: "app1", table: "app1.matches", index: "app1.i4", unused: true }, // custom app schema
       { schema: "public", table: "public.x", index: "public.i3", unused: false },
     ];
     const f = deriveFindings(a).find((x) => x.anchor === "#unused");
-    expect(f?.title).toContain("1 unused index in public");
+    // public.i2 + app1.i4 (auth/storage dropped); wording is schema-neutral
+    expect(f?.title).toContain("2 unused indexes");
+    expect(f?.title).not.toContain("in public");
   });
 
-  test("duplicate indexes in public -> med Performance finding", () => {
+  test("advisor unused_index lint suppresses the SQL fallback (no double-report)", () => {
+    const a = base();
+    a.advisors.performance = [{ name: "unused_index", title: "Unused Index", level: "INFO" }];
+    a.sql.indexStats = [{ schema: "app1", table: "app1.t", index: "app1.i", unused: true }];
+    const perf = deriveFindings(a).filter((x) => x.category === "Performance");
+    // exactly one unused-index card - the advisor's, not the SQL fallback
+    expect(perf.filter((x) => x.anchor === "#unused")).toHaveLength(0);
+    expect(perf.some((x) => x.anchor === "#adv-perf")).toBe(true);
+  });
+
+  test("duplicate indexes -> med Performance finding (managed schema excluded)", () => {
     const a = base();
     a.sql.duplicateIndexes = [
       { schema: "public", table: "public.x", indexes: "i1, i2", copies: 2 },
@@ -204,7 +218,8 @@ describe("deriveFindings", () => {
     const f = deriveFindings(a).find((x) => x.anchor === "#dupidx");
     expect(f?.severity).toBe("med");
     expect(f?.category).toBe("Performance");
-    expect(f?.title).toContain("1 public table has duplicate indexes");
+    expect(f?.title).toContain("1 table has duplicate indexes");
+    expect(f?.title).not.toContain("public");
   });
 
   test("RLS policy columns without an index -> med Performance finding", () => {

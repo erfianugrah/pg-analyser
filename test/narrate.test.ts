@@ -132,6 +132,62 @@ describe("buildNarrativeInput", () => {
     expect(input.evidence.scheduledJobs).toHaveLength(1);
   });
 
+  test("digest names unused indexes (app-scoped) and surfaces dead-tuple + write-profile signals", () => {
+    const a = base();
+    a.sql.indexStats = [
+      { schema: "auth", table: "auth.users", index: "auth.i1", unused: true }, // managed -> dropped
+      {
+        schema: "app1",
+        table: "app1.matches",
+        index: "app1.pg_x_idx",
+        index_size: "192 kB",
+        scans: 0,
+        unused: true,
+      },
+      { schema: "public", table: "public.y", index: "public.y_pkey", scans: 500, unused: false },
+    ];
+    a.sql.deadTuples = [
+      // managed schema with the MOST dead rows - must not sort to the top (excluded)
+      {
+        schema: "auth",
+        table: "auth.refresh_tokens",
+        dead_rows: 99999,
+        live_rows: 1,
+        overdue: "yes",
+      },
+      { schema: "app1", table: "app1.small", dead_rows: 10, live_rows: 100, overdue: "no" },
+      { schema: "app1", table: "app1.hot", dead_rows: 9000, live_rows: 1000, overdue: "yes" },
+    ];
+    a.sql.trafficProfile = [
+      { table: "app1.hot", profile: "567.4:1 write-heavy", write_tuples: 8298, blocks_read: 2 },
+      {
+        table: "storage.objects",
+        profile: "900:1 write-heavy",
+        write_tuples: 99999,
+        blocks_read: 1,
+      },
+    ];
+    a.sql.extensions = [
+      { name: "pg_stat_statements", installed: "1.11", latest: "1.11", outdated: false },
+      { name: "pgcrypto", installed: "1.2", latest: "1.3", outdated: true },
+    ];
+    const input = buildNarrativeInput(a);
+    // named unused index, auth-managed one excluded
+    expect(input.evidence.unusedIndexes).toBe(1);
+    expect(input.evidence.unusedIndexesTop).toHaveLength(1);
+    expect(input.evidence.unusedIndexesTop[0]?.index).toBe("app1.pg_x_idx");
+    // dead tuples: managed auth row excluded; overdue app1 row sorted first
+    expect(input.evidence.deadTuples.map((r) => r.table)).not.toContain("auth.refresh_tokens");
+    expect(input.evidence.deadTuples[0]?.table).toBe("app1.hot");
+    expect(input.evidence.deadTuples[0]?.overdue).toBe("yes");
+    // write-profile: managed storage row excluded, app row surfaced
+    expect(input.evidence.writeHeavyTables.map((r) => r.table)).not.toContain("storage.objects");
+    expect(input.evidence.writeHeavyTables[0]?.table).toBe("app1.hot");
+    expect(input.evidence.extensionsOutdated).toEqual([
+      { name: "pgcrypto", installed: "1.2", latest: "1.3" },
+    ]);
+  });
+
   test("flags degraded collection so the model can caveat", () => {
     const a = base();
     a.meta.status = "INACTIVE";
