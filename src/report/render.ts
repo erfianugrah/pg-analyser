@@ -461,7 +461,7 @@ function positivesSection(positives: Positive[]): string {
   const items = positives
     .map((p) => `<li><b>${esc(p.category)}:</b> ${esc(p.title)}</li>`)
     .join("");
-  return `<h2 id="healthy">What's looking good <span class=count>${positives.length}</span></h2>
+  return `<h2 id="healthy">Healthy <span class=count>${positives.length}</span></h2>
 <ul class="positives">${items}</ul>`;
 }
 
@@ -601,10 +601,17 @@ function auditFindings(findings: Finding[], degraded: boolean): string {
       ]
         .filter(Boolean)
         .join(" &middot; ");
-      // Inline bold labels read as a paragraph - cleaner hierarchy than the
-      // cramped uppercase label grid, matching the audit-report house style.
+      // Terse tooling register (ruff / splinter / clippy), not the chatbot
+      // "What's happening / Why it matters" question-scaffold. The observation
+      // and its consequence read as one lede paragraph; only the two imperative
+      // labels (Fix / Verify) survive - standard audit vocabulary, no per-item
+      // "why it matters" mini-essay.
       const leg = (label: string, text?: string) =>
-        text ? `<p class=fleg><b class=flabel>${label}.</b> ${esc(text)}</p>` : "";
+        text ? `<p class=fleg><b class=flabel>${label}</b> ${esc(text)}</p>` : "";
+      const lede = [f.evidence, f.whyItMatters]
+        .filter(Boolean)
+        .map((t) => esc(t as string))
+        .join(" ");
       const doText = esc(
         f.remediation ?? "See the linked evidence and the Supabase advisor detail.",
       );
@@ -613,10 +620,9 @@ function auditFindings(findings: Finding[], degraded: boolean): string {
         ? `<p class=fadv><a href="${esc(f.dashUrl)}">Open in the ${esc(f.category)} Advisor: ${esc(f.dashUrl)}</a></p>`
         : "";
       const body =
-        leg("What's happening", f.evidence) +
-        leg("Why it matters", f.whyItMatters) +
-        `<p class=fleg><b class=flabel>What to do.</b> ${doText}</p>${sqlBlock}${dashLink}` +
-        leg("How to verify", f.howToVerify);
+        (lede ? `<p class=fleg>${lede}</p>` : "") +
+        `<p class=fleg><b class=flabel>Fix</b> ${doText}</p>${sqlBlock}${dashLink}` +
+        leg("Verify", f.howToVerify);
       return `<div class="finding ${SEV_CLASS[f.severity]}" id="${fid(i)}">
   <h3><span class="lvl ${SEV_CLASS[f.severity]}">${SEV_WORD[f.severity]}</span> <span class=fcat>${esc(f.category)}</span> ${esc(f.title)}</h3>
   <div class=fbody>${body}</div>

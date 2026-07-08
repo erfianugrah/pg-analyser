@@ -394,10 +394,12 @@ describe("render", () => {
     expect(html).toContain('class="finding'); // per-finding deep-dive blocks
   });
 
-  test("findings deep-dive shows why-it-matters + what-to-do + evidence link", () => {
+  test("findings deep-dive shows consequence lede + Fix/Verify labels + evidence link", () => {
     const html = render(fixture());
-    expect(html).toContain("Why it matters"); // consequence rendered
-    expect(html).toContain("What to do"); // remediation rendered
+    expect(html).toContain("for every row"); // consequence prose folded into the lede
+    expect(html).toContain("<b class=flabel>Fix</b>"); // remediation label
+    expect(html).toContain("<b class=flabel>Verify</b>"); // verification label
+    expect(html).not.toContain("Why it matters"); // no chatbot question-scaffold
     expect(html).toContain("Evidence &#8595;"); // evidence jump link
   });
 
