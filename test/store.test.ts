@@ -50,6 +50,7 @@ function makeAnalysis(opts: {
       seqScanHeavy: [],
       bloat: [],
       trafficProfile: [],
+      tableIoStats: [],
       deadTuples: [],
       txidWraparound: [],
       replicationSlots: [],

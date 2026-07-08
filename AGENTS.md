@@ -210,9 +210,20 @@ src/
                  the extension is already installed + superuser SQL (collect.ts
                  gates it; sbperf never CREATEs an extension - that's a write);
                  findings prefer it over the estimate, else label the estimate.
+                 tableIoStats (pg_statio_user_tables) is per-table IO
+                 attribution - heap/idx/TOAST blocks read-from-disk vs cache-hit
+                 ratios; sbperf-ORIGINAL (no upstream inspect equivalent), the
+                 layer the GLOBAL cache-hit ratio lacks. A low toast_hit_pct +
+                 high toast_blks_read is de-toasting an out-of-line column from
+                 disk every scan (the large-blob / large-vector IO trap) ->
+                 finding `toast_cache_cold`. biggestTables isolates toast_bytes
+                 (pg_total_relation_size(reltoastrelid)) so a TOAST-dominated
+                 table is visible. unindexedVectors carries dimension
+                 (atttypmod) + storage strategy (attstorage) + an out_of_line
+                 flag (EXTENDED vectors >~500 dims are TOASTed).
                  The app-object-inventory queries (index-stats, duplicate-
-                 indexes, seq-scan-heavy) exclude Postgres-internal + Supabase-
-                 managed schemas IN SQL via `NON_APP_SCHEMAS_SQL` (appschema.ts,
+                 indexes, seq-scan-heavy, table-io-stats) exclude Postgres-
+                 internal + Supabase-managed schemas IN SQL via `NON_APP_SCHEMAS_SQL` (appschema.ts,
                  the same denylist findings/narrate scope by), so a project with
                  many managed (e.g. `auth`) indexes can't crowd the user's own
                  out of the row cap - a real bug seen in the field: 27 auth + 3

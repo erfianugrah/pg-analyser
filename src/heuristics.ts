@@ -28,6 +28,14 @@ export const THRESHOLDS = {
   /** Temp blocks written by a single query (since stats reset) above which it is
    * spilling sorts/hashes to disk. 12500 blocks x 8KB = ~100MB written. */
   tempSpillBlocks: 12500,
+  /** TOAST cache-hit ratio (toast_blks_hit / (hit+read)) at/below which a
+   * table's out-of-line column is being re-read from disk rather than served
+   * from cache - the de-toasting IO trap. */
+  toastColdHitPct: 95,
+  /** Minimum TOAST blocks read from disk (since stats reset) before the cold-
+   * TOAST finding fires - the activity floor so a tiny/idle TOAST table doesn't
+   * trip it. 50000 blocks x 8KB = ~400MB of de-toast reads. */
+  toastColdMinReadBlocks: 50000,
   /** Coefficient of variation (stddev/mean) at/above which a query's latency is
    * unstable enough to flag - paired with a mean-ms floor so trivial fast
    * queries don't trip it. */
@@ -254,6 +262,19 @@ export const HEURISTICS: Record<string, Heuristic> = {
     remediation:
       "Raise work_mem for that query's path (per session/role, not globally - work_mem is per-operation per-connection so a global bump multiplies fast), or cut the working set the sort/hash touches (add an index so it sorts fewer rows, reduce the result set, or restructure the join). Start around 32-64MB and confirm the spill clears.",
     docUrl: "https://supabase.com/docs/guides/database/query-optimization",
+    reviewed: R,
+  },
+  toast_cache_cold: {
+    id: "toast_cache_cold",
+    plane: "Storage",
+    sql: "-- see the de-toast reads (avoid SELECT * on the big column):\nSELECT relname, toast_blks_read, toast_blks_hit\nFROM pg_statio_user_tables WHERE relname = '<table>';\n-- if it's a vector column with no ANN index, add HNSW so search hits the index:\nCREATE INDEX ON <schema>.<table> USING hnsw (<vector_col> vector_cosine_ops);",
+    howToVerify:
+      "Re-check pg_statio_user_tables for the table: toast_blks_hit / (toast_blks_hit + toast_blks_read) should climb once the out-of-line column is no longer read from disk on every scan.",
+    whyItMatters:
+      "When a large out-of-line (TOAST) column can't fit in cache, every query that reads it re-fetches it from disk - so latency and IOPS are dominated by de-toasting, not by the row count. This is the common IO-saturation trap for large JSON/blob and high-dimension vector columns, and the global cache-hit ratio hides it (the main heap stays hot while the TOAST relation thrashes).",
+    remediation:
+      "Stop reading the big column on hot paths (select only the columns you need, not SELECT *). If it's a vector, add an ANN index (HNSW) so search hits the index instead of exact-scanning the heap, or switch to halfvec to halve its size. For large blobs/JSON, consider storing them outside Postgres (object storage) and keeping only a reference in the row.",
+    docUrl: "https://www.postgresql.org/docs/current/storage-toast.html",
     reviewed: R,
   },
   query_high_variance: {
@@ -846,9 +867,9 @@ export const HEURISTICS: Record<string, Heuristic> = {
     howToVerify:
       "EXPLAIN a distance-ordered query (ORDER BY <col> <-> $1 LIMIT k) - it should use the ivfflat/hnsw index, not a full scan. Match the opclass (cosine/l2/ip) to your query operator.",
     whyItMatters:
-      "A vector column queried by distance without an ANN index does an exact scan of every row per query, so similarity-search latency scales with table size and burns CPU - the classic pgvector slow path. An HNSW/IVFFlat index turns it into an approximate index lookup.",
+      "A vector column queried by distance without an ANN index does an exact scan of every row per query, so similarity-search latency scales with table size and burns CPU - the classic pgvector slow path. It is worse when the vector is wide (>~500 dims): the vector type defaults to EXTENDED storage, so those values are TOASTed, and each exact scan de-toasts them from disk - and TOAST also defeats parallel seq scans. An HNSW index turns search into an index lookup (vectors live in the index, largely sidestepping de-toast).",
     remediation:
-      "Add an ANN index (HNSW or IVFFlat) on the vector column, with the opclass matching your distance operator (vector_cosine_ops / vector_l2_ops / vector_ip_ops).",
+      "Add an ANN index - HNSW (opclass matching your operator: vector_cosine_ops / vector_l2_ops / vector_ip_ops); search then hits the index instead of exact-scanning + de-toasting the heap. For wide vectors also consider halfvec (float16, halves storage + index size at ~equal recall) or, if dimensions are small enough to fit inline, ALTER COLUMN ... SET STORAGE PLAIN (needs a table rewrite) so exact scans stay in-heap and can go parallel.",
     docUrl: "https://supabase.com/docs/guides/ai/vector-indexes",
     reviewed: R,
   },

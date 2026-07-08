@@ -57,6 +57,7 @@ function base(): Analysis {
       seqScanHeavy: [],
       bloat: [],
       trafficProfile: [],
+      tableIoStats: [],
       deadTuples: [],
       txidWraparound: [],
       replicationSlots: [],
@@ -171,6 +172,16 @@ describe("buildNarrativeInput", () => {
       { name: "pg_stat_statements", installed: "1.11", latest: "1.11", outdated: false },
       { name: "pgcrypto", installed: "1.2", latest: "1.3", outdated: true },
     ];
+    a.sql.tableIoStats = [
+      {
+        schema: "app1",
+        table: "app1.embeddings",
+        heap_blks_read: 200,
+        heap_hit_pct: 99.1,
+        toast_blks_read: 500000,
+        toast_hit_pct: 12.3,
+      },
+    ];
     const input = buildNarrativeInput(a);
     // named unused index, auth-managed one excluded
     expect(input.evidence.unusedIndexes).toBe(1);
@@ -186,6 +197,10 @@ describe("buildNarrativeInput", () => {
     expect(input.evidence.extensionsOutdated).toEqual([
       { name: "pgcrypto", installed: "1.2", latest: "1.3" },
     ]);
+    // per-table I/O surfaces the de-toasting signal (low toast hit% + high reads)
+    expect(input.evidence.tableIo[0]?.table).toBe("app1.embeddings");
+    expect(input.evidence.tableIo[0]?.toast_hit_pct).toBe(12.3);
+    expect(input.evidence.tableIo[0]?.toast_blks_read).toBe(500000);
   });
 
   test("flags degraded collection so the model can caveat", () => {

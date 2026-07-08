@@ -317,6 +317,11 @@ export const Analysis = z.object({
     seqScanHeavy: SqlRows,
     bloat: SqlRows,
     trafficProfile: SqlRows,
+    // Per-table I/O breakdown (pg_statio_user_tables): heap/idx/TOAST blocks
+    // read vs cached + hit ratios. Powers per-relation IO attribution and the
+    // TOAST cache-cold finding. Internal composed field; defaulted for
+    // back-compat with analysis.json written before the query existed.
+    tableIoStats: SqlRows.default([]),
     deadTuples: SqlRows,
     txidWraparound: SqlRows,
     replicationSlots: SqlRows,

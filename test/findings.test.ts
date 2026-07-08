@@ -44,6 +44,7 @@ function base(): Analysis {
       seqScanHeavy: [],
       bloat: [],
       trafficProfile: [],
+      tableIoStats: [],
       deadTuples: [],
       txidWraparound: [],
       replicationSlots: [],
@@ -197,6 +198,33 @@ describe("deriveFindings", () => {
     // public.i2 + app1.i4 (auth/storage dropped); wording is schema-neutral
     expect(f?.title).toContain("2 unused indexes");
     expect(f?.title).not.toContain("in public");
+  });
+
+  test("cold TOAST cache -> med Performance de-toasting finding", () => {
+    const a = base();
+    a.sql.tableIoStats = [
+      // meaningful disk reads + low TOAST hit ratio = de-toasting from disk
+      {
+        schema: "public",
+        table: "public.embeddings",
+        toast_blks_read: 900000,
+        toast_hit_pct: 11.5,
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.anchor === "#tableio");
+    expect(f?.severity).toBe("med");
+    expect(f?.category).toBe("Performance");
+    expect(f?.title).toContain("de-toasting");
+    expect(f?.title).toContain("11.5%");
+  });
+
+  test("TOAST cache-cold below the read-volume floor does not fire", () => {
+    const a = base();
+    a.sql.tableIoStats = [
+      // low hit ratio but trivial read volume -> no finding
+      { schema: "public", table: "public.small", toast_blks_read: 100, toast_hit_pct: 5 },
+    ];
+    expect(deriveFindings(a).some((x) => x.anchor === "#tableio")).toBe(false);
   });
 
   test("advisor unused_index lint suppresses the SQL fallback (no double-report)", () => {
@@ -1029,6 +1057,23 @@ describe("extension health findings", () => {
     const f = deriveFindings(a).find((x) => x.heuristicId === "pgvector_unindexed");
     expect(f?.severity).toBe("med");
     expect(f?.evidence).toContain("public.docs.embedding");
+  });
+
+  test("unindexed pgvector: dimension + out-of-line (TOAST) surfaced in evidence", () => {
+    const a = base();
+    a.sql.unindexedVectors = [
+      {
+        schema: "public",
+        table: "docs",
+        column: "embedding",
+        dimensions: 1536,
+        storage: "extended",
+        out_of_line: true,
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "pgvector_unindexed");
+    expect(f?.evidence).toContain("public.docs.embedding (1536d, TOASTed)");
+    expect(f?.evidence).toContain("de-toast from disk");
   });
 
   test("pg_cron installed, no run visibility -> review nudge", () => {

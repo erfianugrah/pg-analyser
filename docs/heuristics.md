@@ -242,6 +242,7 @@ Sources: Supabase Compute & Disk docs; Supabase High Disk I/O docs.
 | `disk_io_budget_depleted` | small instance bursting then throttled to baseline | sustained at baseline under load | med | NEW |
 | `ebs_balance_low` | `aws_ec2_ebsiobalance_percent_minimum` / `aws_ec2_ebsbyte_balance_percent_minimum` (CloudWatch-backed source only) | worst point <= 20% | high | HAVE (trend) |
 | `disk_fill_projection` | rising disk-used% slope projected to 100% (trend; horizon capped to ~3x observed span so a short history can't claim a far-future date) | on track to full within <=120d | high/med | HAVE (trend) |
+| `toast_cache_cold` | `pg_statio_user_tables` TOAST cache-hit ratio `toast_blks_hit / (hit+read)` with meaningful read volume - an out-of-line column re-read from disk on every scan (large JSON/blob/vector de-toasting; per-relation IO the global cache-hit ratio hides) | hit <= 95% AND toast_blks_read >= 50000 (~400MB) | med | NEW (original; Postgres storage-toast) |
 | `wal_retained_inactive_slot` | inactive replication slot retaining WAL | any | high | HAVE |
 | `wal_slot_lag` | active slot retained WAL | >= 1GB | med | HAVE |
 | `wal_archival_backlog` | `pg_ls_archive_statusdir_wal_pending_count` (trend) | sustained avg >= 1 pending | high | HAVE (trend) |
@@ -440,7 +441,7 @@ Sources: Supabase Network Restrictions / SSL Enforcement docs; PG docs pg_hba.co
 
 | id | signal | threshold | sev | status |
 |---|---|---|---|---|
-| `pgvector_unindexed` | a `vector` column with no ANN (ivfflat/hnsw) index | any | med | HAVE |
+| `pgvector_unindexed` | a `vector` column with no ANN (ivfflat/hnsw) index; enriched with dimension + storage strategy + out-of-line flag (EXTENDED vectors >~500 dims are TOASTed -> exact scans de-toast from disk; remediation names HNSW / halfvec / SET STORAGE PLAIN) | any | med | HAVE |
 | `extensions_outdated` | installed extension behind `pg_available_extensions.default_version` | any | low | HAVE |
 | `cron_job_failing` | `cron.job_run_details` failed runs in the last 7 days | failed_runs > 0 | med | HAVE |
 | `pg_cron_review` | pg_cron installed but no run-detail visibility (fallback nudge) | pg_cron present + 0 cron jobs seen | low | HAVE |

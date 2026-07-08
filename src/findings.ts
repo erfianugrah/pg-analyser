@@ -558,6 +558,32 @@ export function deriveFindings(a: Analysis): Finding[] {
       });
     }
   }
+  // Cold TOAST cache: a table whose out-of-line (TOAST) column is being re-read
+  // from disk on nearly every access (low toast hit-ratio + meaningful read
+  // volume). The per-relation reason a DB is IO-bound that the global cache-hit
+  // ratio hides - classic for large JSON/blob and high-dimension vector columns.
+  // Ordered by disk reads (query already), so [0] is the worst; one finding is
+  // enough (the per-table I/O drill lists the rest).
+  const coldToast = a.sql.tableIoStats
+    .filter(
+      (r) =>
+        num(r.toast_blks_read) >= THRESHOLDS.toastColdMinReadBlocks &&
+        r.toast_hit_pct != null &&
+        num(r.toast_hit_pct) <= THRESHOLDS.toastColdHitPct,
+    )
+    .sort((x, y) => num(y.toast_blks_read) - num(x.toast_blks_read));
+  if (coldToast[0]) {
+    const r = coldToast[0];
+    const mb = Math.round((num(r.toast_blks_read) * 8) / 1024);
+    out.push({
+      severity: "med",
+      category: "Performance",
+      title: `${String(r.table)} is I/O-bound de-toasting (TOAST cache hit ${num(r.toast_hit_pct)}%)`,
+      anchor: "#tableio",
+      evidence: `~${mb.toLocaleString()} MB read from its TOAST relation off disk since stats reset - the out-of-line column can't stay cached, so each scan re-fetches it.`,
+      ...meta("toast_cache_cold"),
+    });
+  }
   // Storage attribution: name the table that dominates disk, as a share of the
   // whole database. Answers "what is filling the disk" - which the biggest-
   // tables drill has, but no finding surfaced. Needs the byte columns + db size.
@@ -945,15 +971,25 @@ export function deriveFindings(a: Analysis): Finding[] {
   }
   if (a.sql.unindexedVectors.length) {
     const v = a.sql.unindexedVectors;
+    // Flag the ones stored out-of-line (TOAST): those exact scans also de-toast
+    // from disk, not just scan the heap - the compounded large-vector IO trap.
+    const outOfLine = v.filter((r) => r.out_of_line === true);
+    const detail = v
+      .slice(0, 5)
+      .map((r) => {
+        const base = `${r.schema}.${r.table}.${r.column}`;
+        if (r.dimensions == null) return base;
+        return `${base} (${r.dimensions}d${r.out_of_line === true ? ", TOASTed" : ""})`;
+      })
+      .join(", ");
     out.push({
       severity: "med",
       category: "Performance",
       title: `${v.length} pgvector column${v.length === 1 ? "" : "s"} without an ANN index (ivfflat/hnsw)`,
       anchor: "#extensions",
-      evidence: v
-        .slice(0, 5)
-        .map((r) => `${r.schema}.${r.table}.${r.column}`)
-        .join(", "),
+      evidence: outOfLine.length
+        ? `${detail}. ${outOfLine.length} stored out-of-line (TOAST) - exact scans also de-toast from disk, compounding the cost.`
+        : detail,
       ...meta("pgvector_unindexed"),
     });
   }

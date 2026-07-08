@@ -68,6 +68,7 @@ function base(): Analysis {
       seqScanHeavy: [],
       bloat: [],
       trafficProfile: [],
+      tableIoStats: [],
       deadTuples: [],
       txidWraparound: [],
       replicationSlots: [],
