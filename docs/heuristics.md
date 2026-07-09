@@ -84,7 +84,7 @@ Sources: Supabase Query Optimization docs; `supabase/cli` inspect queries.
 
 | id | signal | threshold | sev | status |
 |---|---|---|---|---|
-| `rls_initplan` | policy `USING/WITH CHECK` calls `auth.uid()`/`auth.jwt()`/`auth.role()`/`current_setting()` bare (not wrapped in a subselect) | any policy | med | HAVE |
+| `rls_initplan` | policy `USING/WITH CHECK` calls `auth.uid()`/`auth.jwt()`/`auth.role()`/`current_setting()` bare (not wrapped in a subselect); suppressed when the advisor's `auth_rls_initplan` lint already fired (the "all wrapped" positive is gated on it too) | any policy | med | HAVE |
 | `rls_col_unindexed` | column compared in an RLS policy has no btree index | any RLS table | med | HAVE |
 | `multiple_permissive_policies` | 2+ permissive policies for the same role + action on a table | any table | med | HAVE (via advisor) |
 | `policy_exists_rls_disabled` | policy defined but RLS not enabled on the table | any | high | HAVE (via advisor) |
@@ -335,8 +335,8 @@ tuning references.
 | `auth_5xx` | 500 on `/auth/v1/*` (usually a DB trigger/function on `auth.users`) | any | high | NEW |
 | `auth_email_default_smtp` | built-in email provider (2 emails/hr cap) | using default SMTP | low | NEW (config) |
 | `auth_email_autoconfirm` | GoTrue `mailer_autoconfirm = true` (signups auto-confirmed without verifying the address) | enabled | med | HAVE |
-| `auth_mfa_disabled` | no `mfa_*_verify_enabled` factor enabled project-wide (fields present) | none enabled | low | HAVE |
-| `auth_weak_password_policy` | `password_min_length < 8` OR `password_hibp_enabled = false` | len < `passwordMinLength` 8 (med) / HIBP off (low) | med/low | HAVE |
+| `auth_mfa_disabled` | no `mfa_*_verify_enabled` factor enabled project-wide (fields present); suppressed when the advisor's `auth_insufficient_mfa_options` lint already fired | none enabled | low | HAVE |
+| `auth_weak_password_policy` | `password_min_length < 8` OR `password_hibp_enabled = false`; the HIBP part is suppressed when the advisor's `auth_leaked_password_protection` lint fired (min-length is ours - the advisor doesn't check it), so a PAT run doesn't double-report | len < `passwordMinLength` 8 (med) / HIBP off (low) | med/low | HAVE |
 | `auth_anonymous_users` | `external_anonymous_users_enabled = true` (awareness - confirm RLS + rate limits) | enabled | low | HAVE |
 | `auth_long_jwt` | access-token TTL `jwt_exp` above the 1h default | > `jwtExpMaxSec` 3600s | low | HAVE |
 

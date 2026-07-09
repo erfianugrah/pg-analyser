@@ -518,7 +518,24 @@ src/
   objects. The SQL path exists for when advisors are unavailable (hosted
   endpoint 400s AND no superuser --db-url to run splinter). Keep new
   SQL-vs-advisor overlaps mutually exclusive the same way (guard on the lint
-  `name` present in `a.advisors.performance`).
+  `name` present in `a.advisors.performance`). The same rule now covers MORE than
+  the index findings - all verified dedups (guard against the named lint before
+  emitting):
+  - `unused_index` / `duplicate_index` / `fk_unindexed` -> `a.advisors.performance`
+    (`unused_index` / `duplicate_index` / `unindexed_foreign_keys`).
+  - `rls_initplan` -> `a.advisors.performance` (`auth_rls_initplan`); the "all RLS
+    policies wrap auth" positive is gated on the same lint so it can't contradict
+    the advisor.
+  - `auth_weak_password_policy` (HIBP part) -> `a.advisors.security`
+    (`auth_leaked_password_protection`); the min-length part stays ours (the
+    advisor doesn't check it). `auth_mfa_disabled` -> `a.advisors.security`
+    (`auth_insufficient_mfa_options`). These use a `secLints` set built from
+    `a.advisors.security` (splinter carries no auth lints, so in no-PAT mode our
+    GoTrue-config findings are the sole source - hence fallback, not removal).
+  Non-overlapping advisor lints (`rls_enabled_no_policy`,
+  `multiple_permissive_policies`, `extension_in_public`,
+  `auth_db_connections_absolute`) have NO sbperf finding, so nothing to dedup;
+  `rls_col_unindexed` is sbperf-original (no advisor equivalent).
 - **The narrate digest is app-scoped; the report shows all schemas. This is
   deliberate - don't "fix" the inconsistency.** buildNarrativeInput scopes
   index/RLS/dead-tuple/write-profile evidence to application schemas; the report
