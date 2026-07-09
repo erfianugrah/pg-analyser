@@ -193,12 +193,26 @@ function parseFlags(argv: string[]): Flags {
   const out: Flags = { _: [], dbUrls: [], refs: [], refFiles: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
+    // Consume the NEXT arg as this flag's value, failing loud if it is missing
+    // or itself looks like a flag - so `--db-config --amcheck` errors clearly
+    // instead of trying to open a file literally named "--amcheck". `-` is
+    // allowed (stdin sentinel). Advances the loop index.
+    const need = (flag: string): string => {
+      const v = argv[++i];
+      if (v === undefined || (v.startsWith("--") && v !== "-")) {
+        console.error(
+          `error: ${flag} expects a value, got ${v === undefined ? "nothing (end of arguments)" : `'${v}'`}`,
+        );
+        process.exit(1);
+      }
+      return v;
+    };
     if (a === "--help" || a === "-h") usage(0);
     // --ref is repeatable AND accepts comma/space-delimited lists in a single
     // value (--ref a,b or --ref "a b"). Each token accumulates into refs[]; the
     // last also sets `ref` so single-ref call sites keep working unchanged.
     else if (a === "--ref") {
-      for (const r of splitRefs(argv[++i]!)) {
+      for (const r of splitRefs(need("--ref"))) {
         out.refs.push(r);
         out.ref = r;
       }
@@ -206,21 +220,21 @@ function parseFlags(argv: string[]): Flags {
     // --ref-file <path>: read refs from a .txt (one per line) or .csv. Any
     // ref-shaped token (20 lowercase letters) is picked up; headers, names,
     // blank lines and #-comments are ignored. Repeatable.
-    else if (a === "--ref-file") out.refFiles.push(argv[++i]!);
-    else if (a === "--out") out.out = argv[++i];
-    else if (a === "--dir") out.dir = argv[++i];
-    else if (a === "--org") out.org = argv[++i];
-    else if (a === "--prometheus") out.prometheus = argv[++i];
-    else if (a === "--prometheus-token") out.prometheusToken = argv[++i];
-    else if (a === "--prometheus-cookie") out.prometheusCookie = argv[++i];
-    else if (a === "--prometheus-matcher") out.prometheusMatcher = argv[++i];
+    else if (a === "--ref-file") out.refFiles.push(need("--ref-file"));
+    else if (a === "--out") out.out = need("--out");
+    else if (a === "--dir") out.dir = need("--dir");
+    else if (a === "--org") out.org = need("--org");
+    else if (a === "--prometheus") out.prometheus = need("--prometheus");
+    else if (a === "--prometheus-token") out.prometheusToken = need("--prometheus-token");
+    else if (a === "--prometheus-cookie") out.prometheusCookie = need("--prometheus-cookie");
+    else if (a === "--prometheus-matcher") out.prometheusMatcher = need("--prometheus-matcher");
     else if (a === "--no-pat") out.noPat = true;
-    else if (a === "--profile") out.profile = argv[++i];
-    else if (a === "--trend-days") out.trendDays = argv[++i];
-    else if (a === "--store") out.store = argv[++i];
-    else if (a === "--retention-days") out.retentionDays = Number(argv[++i]);
-    else if (a === "--interval") out.interval = argv[++i];
-    else if (a === "--db-url") out.dbUrls.push(argv[++i]!);
+    else if (a === "--profile") out.profile = need("--profile");
+    else if (a === "--trend-days") out.trendDays = need("--trend-days");
+    else if (a === "--store") out.store = need("--store");
+    else if (a === "--retention-days") out.retentionDays = Number(need("--retention-days"));
+    else if (a === "--interval") out.interval = need("--interval");
+    else if (a === "--db-url") out.dbUrls.push(need("--db-url"));
     else if (a === "--amcheck") {
       // --amcheck (index-only, light) or --amcheck heap (also verify_heapam,
       // heavy). Superuser + amcheck-installed + opt-in; see collect.ts.
@@ -228,24 +242,18 @@ function parseFlags(argv: string[]): Flags {
         out.amcheck = "heap";
         i++;
       } else out.amcheck = true;
-    } else if (a === "--db-config") out.dbConfig = argv[++i];
-    else if (a === "--brand") out.brand = argv[++i];
-    else if (a === "--overlay") out.overlay = argv[++i];
+    } else if (a === "--db-config") out.dbConfig = need("--db-config");
+    else if (a === "--brand") out.brand = need("--brand");
+    else if (a === "--overlay") out.overlay = need("--overlay");
     else if (a === "--all") out.all = true;
-    else if (a === "--fail-on") out.failOn = argv[++i];
-    else if (a === "--category") out.category = argv[++i];
-    else if (a === "--new-since") out.newSince = argv[++i];
+    else if (a === "--fail-on") out.failOn = need("--fail-on");
+    else if (a === "--category") out.category = need("--category");
+    else if (a === "--new-since") out.newSince = need("--new-since");
     else if (a === "--no-sync-check") out.noSyncCheck = true;
     else if (a === "--narrative") out.narrative = true;
     else if (a === "--print-prompt") out.printPrompt = true;
-    else if (a === "--import") {
-      const v = argv[++i];
-      if (v === undefined || (v.startsWith("--") && v !== "-")) {
-        console.error("error: --import needs a file path (or - for stdin)");
-        process.exit(1);
-      }
-      out.import = v;
-    } else if (a?.startsWith("--")) usage();
+    else if (a === "--import") out.import = need("--import");
+    else if (a?.startsWith("--")) usage();
     else if (a) out._.push(a);
   }
   return out;
