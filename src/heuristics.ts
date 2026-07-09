@@ -60,8 +60,12 @@ export const THRESHOLDS = {
    * at/above this multiple of estimated RAM is an OOM risk worth flagging.
    * RAM is estimated from shared_buffers (Supabase sets it to ~25% of RAM). */
   workMemBlastFrac: 1.0,
-  /** maintenance_work_mem below this (MB) slows autovacuum + index builds. */
-  maintWorkMemMinMb: 256,
+  /** maintenance_work_mem is flagged low only RAM-relatively (Supabase
+   * auto-scales it per tier): fire when it is below this fraction of estimated
+   * RAM AND the instance has at least maintWorkMemMinRamGb of RAM, so small
+   * tiers with a correctly-small value are never flagged. */
+  maintWorkMemMinFrac: 0.03,
+  maintWorkMemMinRamGb: 8,
   /** checkpoint_completion_target below this spreads checkpoint I/O too tightly
    * (spiky flushes); modern Postgres defaults to 0.9. */
   checkpointCompletionMin: 0.7,
@@ -624,9 +628,9 @@ export const HEURISTICS: Record<string, Heuristic> = {
     howToVerify:
       "After raising it, confirm autovacuum passes and CREATE INDEX complete faster (fewer index-build passes in the logs).",
     whyItMatters:
-      "maintenance_work_mem bounds the memory autovacuum, VACUUM, and CREATE INDEX get. A low value forces multiple passes over dead tuples and slower index builds - so vacuum falls behind on a busy table and DDL windows stretch.",
+      "maintenance_work_mem bounds the memory autovacuum, VACUUM, and CREATE INDEX get. On a large instance a value left small relative to RAM forces multiple passes over dead tuples and slower index builds. (Supabase auto-scales this with the compute tier, so a small value on a small instance is correct - this only flags when it is lagging on a larger box.)",
     remediation:
-      "Raise maintenance_work_mem (256MB-1GB is typical) - it is only used by maintenance ops, not every backend, so it does not carry the work_mem blast risk.",
+      "Raise maintenance_work_mem (256MB-1GB is typical on larger instances) - it is only used by maintenance ops, not every backend, so it does not carry the work_mem blast risk. On Supabase it is tier-scaled; override it only if index builds / autovacuum are visibly slow.",
     docUrl:
       "https://www.postgresql.org/docs/current/runtime-config-resource.html#GUC-MAINTENANCE-WORK-MEM",
     reviewed: R,
@@ -666,9 +670,9 @@ export const HEURISTICS: Record<string, Heuristic> = {
     howToVerify:
       "Confirm SHOW for each timeout returns a non-zero value, and that a deliberately long test statement is cancelled.",
     whyItMatters:
-      "A timeout of 0 is unlimited. Without statement_timeout a runaway query runs forever; without idle_in_transaction_session_timeout an abandoned open transaction pins locks and the xmin horizon (blocking autovacuum, driving bloat); without lock_timeout a blocked statement waits indefinitely. Each is a stability guardrail.",
+      "A timeout of 0 is unlimited. Without statement_timeout a runaway query runs forever; without idle_in_transaction_session_timeout an abandoned open transaction pins locks and the xmin horizon (blocking autovacuum, driving bloat). Each is a stability guardrail. (lock_timeout is intentionally left at 0 globally - a cluster-wide lock_timeout cancels legitimate waits; scope it per-operation instead.)",
     remediation:
-      "Set sane non-zero bounds (statement_timeout, idle_in_transaction_session_timeout, lock_timeout) at the database or role level - scope longer values to the roles that need them (batch/migration).",
+      "Set sane non-zero bounds for statement_timeout and idle_in_transaction_session_timeout at the database or role level - scope longer values to the roles that need them (batch/migration). Supabase sets statement_timeout per-role for API traffic; this checks the global value.",
     docUrl: "https://www.postgresql.org/docs/current/runtime-config-client.html",
     reviewed: R,
   },
