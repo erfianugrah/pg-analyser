@@ -80,6 +80,13 @@ export class Management {
     return this.#json(`/v1/organizations`).then((d) => z.array(S.Organization).parse(d));
   }
 
+  /** Org feature entitlements (e.g. instances.disk_modifications, read_replicas). */
+  orgEntitlements(slug: string) {
+    return this.#json(`/v1/organizations/${slug}/entitlements`).then((d) =>
+      S.Entitlements.parse(d),
+    );
+  }
+
   upgrade(ref: string) {
     return this.#json(`/v1/projects/${ref}/upgrade/eligibility`).then((d) =>
       S.UpgradeEligibility.parse(d),

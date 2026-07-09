@@ -76,6 +76,8 @@ function base(): Analysis {
       fkUnindexed: [],
       invalidIndexes: [],
       topByWal: [],
+      visibilityMap: [],
+      publicSchemaCreate: [],
       replicationSlots: [],
       rlsPolicies: [],
       connections: [],

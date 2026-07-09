@@ -490,6 +490,32 @@ export const HEURISTICS: Record<string, Heuristic> = {
       "https://www.postgresql.org/docs/current/sql-createindex.html#SQL-CREATEINDEX-CONCURRENTLY",
     reviewed: R,
   },
+  visibility_map_low: {
+    id: "visibility_map_low",
+    plane: "Query",
+    sql: "VACUUM (ANALYZE) <schema>.<table>;  -- refreshes the visibility map",
+    howToVerify:
+      "After VACUUM, check pg_class.relallvisible / relpages climbs, and EXPLAIN shows an Index Only Scan with few/zero Heap Fetches.",
+    whyItMatters:
+      "The visibility map marks pages where every tuple is visible to all transactions; index-only scans can only skip the heap fetch for those pages. A low all-visible fraction on a big table means index-only scans still hit the heap (slower reads) and signals vacuum is behind on that table. Vacuum maintains the map.",
+    remediation:
+      "Run VACUUM (ANALYZE) to refresh the visibility map, and tune autovacuum so it keeps up on high-churn tables (lower autovacuum_vacuum_scale_factor). Insert-only tables benefit from autovacuum_vacuum_insert_scale_factor.",
+    docUrl: "https://www.postgresql.org/docs/current/indexes-index-only-scans.html",
+    reviewed: R,
+  },
+  public_schema_create: {
+    id: "public_schema_create",
+    plane: "Config",
+    sql: "REVOKE CREATE ON SCHEMA public FROM PUBLIC;",
+    howToVerify:
+      "Confirm the CREATE grant is gone: \\dn+ public (or check nspacl) should no longer list =UC for PUBLIC.",
+    whyItMatters:
+      "When the PUBLIC role can CREATE in schema public, any role that can connect can create objects (tables, functions) there - a privilege-escalation and supply-chain surface (a malicious function on the search_path can be invoked by a more-privileged role). Modern Postgres revokes this by default; a database that still grants it is usually older or migrated.",
+    remediation:
+      "REVOKE CREATE ON SCHEMA public FROM PUBLIC and grant it only to the specific roles that need it. Keep application objects in a dedicated schema owned by the app role.",
+    docUrl: "https://www.postgresql.org/docs/current/ddl-schemas.html#DDL-SCHEMAS-PATTERNS",
+    reviewed: R,
+  },
   wal_heavy_statement: {
     id: "wal_heavy_statement",
     plane: "Query",

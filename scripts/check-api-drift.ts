@@ -38,6 +38,11 @@ const warn = (msg: string): void => console.error(IN_GHA ? `::warning::${msg}` :
 const ENDPOINTS: ReadonlyArray<{ method: string; path: string; used: string }> = [
   { method: "get", path: "/v1/projects", used: "org-wide project iteration (--all)" },
   { method: "get", path: "/v1/organizations", used: "org grouping for --all output" },
+  {
+    method: "get",
+    path: "/v1/organizations/{slug}/entitlements",
+    used: "disk_modifications entitlement (disk over-provisioning context)",
+  },
   { method: "get", path: "/v1/projects/{ref}", used: "project meta (required)" },
   { method: "get", path: "/v1/projects/{ref}/health", used: "service health" },
   { method: "get", path: "/v1/projects/{ref}/config/disk", used: "disk spec" },

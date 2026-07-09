@@ -937,6 +937,42 @@ export const QUERIES = {
       and wal_bytes > 0
     order by wal_bytes desc
     limit 20`,
+
+  // Visibility-map readiness: large app tables whose all-visible page fraction
+  // (pg_class.relallvisible / relpages) is low. The VM gates index-only scans
+  // and is maintained by vacuum, so a low ratio on a big table means index-only
+  // scans can't skip heap fetches (slower reads) and vacuum is behind on it. No
+  // extension needed. 10MB floor (relpages > 1280 8KB pages) keeps noise out.
+  visibilityMap: /* sql */ `
+    select
+      n.nspname as schema,
+      n.nspname || '.' || c.relname as "table",
+      c.relpages,
+      c.relallvisible,
+      round(100.0 * c.relallvisible / nullif(c.relpages, 0), 1) as visible_pct
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    where c.relkind = 'r'
+      and c.relpages > 1280
+      and n.nspname not in (${NON_APP_SCHEMAS_SQL})
+      and (c.relallvisible::numeric / nullif(c.relpages, 0)) < 0.8
+    order by c.relpages desc
+    limit 20`,
+
+  // Whether the PUBLIC pseudo-role can CREATE objects in schema public. grantee
+  // 0 = PUBLIC in aclexplode. Modern Postgres (15+) revokes this by default, but
+  // older / migrated / manually-granted databases still allow any role to create
+  // objects in public - a privilege-escalation surface worth flagging. No
+  // special privilege needed to read.
+  publicSchemaCreate: /* sql */ `
+    select
+      nspname as schema,
+      exists (
+        select 1 from aclexplode(nspacl) a
+        where a.grantee = 0 and a.privilege_type = 'CREATE'
+      ) as public_create
+    from pg_namespace
+    where nspname = 'public'`,
 } as const;
 
 export type QueryKey = keyof typeof QUERIES;

@@ -52,6 +52,8 @@ function base(): Analysis {
       fkUnindexed: [],
       invalidIndexes: [],
       topByWal: [],
+      visibilityMap: [],
+      publicSchemaCreate: [],
       replicationSlots: [],
       rlsPolicies: [],
       connections: [],
@@ -333,6 +335,7 @@ describe("deriveFindings", () => {
       usedBytes: 1,
       availBytes: 9,
       lastModifiedAt: null,
+      modifiable: null,
       autoscale: null,
     };
     a.trends = [
@@ -354,6 +357,7 @@ describe("deriveFindings", () => {
       usedBytes: 1,
       availBytes: 9,
       lastModifiedAt: null,
+      modifiable: null,
       autoscale: null,
     };
     a.trends = [{ title: "Disk read IOPS", unit: "", points: [{ t: 1, v: 100 }] }];
@@ -1136,6 +1140,7 @@ describe("disk over-provisioning (downsize candidate)", () => {
       usedBytes,
       availBytes: sizeGb * 1024 ** 3 - usedBytes,
       lastModifiedAt: null,
+      modifiable: null,
       autoscale: autoscale ? { growthPercent: 50, minIncrementGb: 4, maxSizeGb: 500 } : null,
     };
     return a;
@@ -1377,5 +1382,53 @@ describe("index & vacuum depth (Tier B)", () => {
     ];
     const f = deriveFindings(above).find((x) => x.heuristicId === "wal_heavy_statement");
     expect(f?.title).toContain("55% of WAL");
+  });
+});
+
+describe("visibility map & public-schema privilege (Tier C)", () => {
+  test("low all-visible ratio on large tables -> low finding", () => {
+    const a = base();
+    a.sql.visibilityMap = [
+      {
+        schema: "public",
+        table: "public.big",
+        relpages: 100000,
+        relallvisible: 20000,
+        visible_pct: 20,
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "visibility_map_low");
+    expect(f?.severity).toBe("low");
+  });
+
+  test("PUBLIC CREATE on schema public -> med Security finding", () => {
+    const a = base();
+    a.sql.publicSchemaCreate = [{ schema: "public", public_create: true }];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "public_schema_create");
+    expect(f?.severity).toBe("med");
+    expect(f?.category).toBe("Security");
+  });
+
+  test("PUBLIC without CREATE -> no finding", () => {
+    const a = base();
+    a.sql.publicSchemaCreate = [{ schema: "public", public_create: false }];
+    expect(deriveFindings(a).some((x) => x.heuristicId === "public_schema_create")).toBe(false);
+  });
+
+  test("disk_oversized notes when the org cannot modify disk", () => {
+    const a = base();
+    a.disk = {
+      sizeGb: 200,
+      iops: 3000,
+      type: "gp3",
+      throughputMibps: 125,
+      usedBytes: 10 * 1024 ** 3,
+      availBytes: 190 * 1024 ** 3,
+      lastModifiedAt: null,
+      modifiable: false,
+      autoscale: null,
+    };
+    const f = deriveFindings(a).find((x) => x.heuristicId === "disk_oversized");
+    expect(f?.evidence).toContain("cannot modify disk");
   });
 });

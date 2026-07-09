@@ -865,6 +865,12 @@ export function render(
     autoscale && (autoscale.maxSizeGb != null || autoscale.growthPercent != null)
       ? `grow-only: +${autoscale.growthPercent ?? "?"}% steps${autoscale.minIncrementGb != null ? ` (min ${autoscale.minIncrementGb} GB)` : ""} up to ${autoscale.maxSizeGb ?? "?"} GB - never shrinks`
       : "";
+  const modifiableLine =
+    disk?.modifiable === false
+      ? "disk modifications not available on this org's plan (needs a compute upgrade)"
+      : disk?.modifiable === true
+        ? "disk modifications available on this plan"
+        : "";
   const walDirRow = a.sql.walDirSize[0]?.wal_size
     ? `<tr><td>WAL directory</td><td class=mono>${esc(String(a.sql.walDirSize[0]?.wal_size))}</td><td class=note>pg_wal on the data volume (${esc(String(a.sql.walDirSize[0]?.wal_segments ?? "?"))} segments)</td></tr>`
     : "";
@@ -928,7 +934,7 @@ ${capabilitiesSection(a)}
 <h2 id="infra">Infrastructure</h2>
 <table class=kv>
   <tr><td>Postgres version</td><td class=mono>${esc(m.pgVersion)}</td><td>${upgradeNote}</td></tr>
-  <tr><td>Disk</td><td class=mono>${diskLine}</td><td>${diskUsed}${autoscaleLine ? `<br><span class=note>${autoscaleLine}</span>` : ""}</td></tr>
+  <tr><td>Disk</td><td class=mono>${diskLine}</td><td>${diskUsed}${autoscaleLine ? `<br><span class=note>${autoscaleLine}</span>` : ""}${modifiableLine ? `<br><span class=note>${modifiableLine}</span>` : ""}</td></tr>
   ${walDirRow}
   ${cksumRow}
   <tr><td>DB size</td><td class=mono>${esc(a.sql.dbSize ?? (errored.has("sql:dbSize") ? "not collected" : "-"))}</td><td></td></tr>
@@ -958,6 +964,7 @@ ${drill("rlsunindexed", "RLS columns without an index", "policy-compared column 
 ${drill("seqscan", "Sequential-scan heavy", "seq_scan > idx_scan, >1k rows", sec(a.sql.seqScanHeavy, "sql:seqScanHeavy", { mono: ["table"], hide: ["schema"] }))}
 ${a.sql.fkUnindexed.length ? drill("fkunindexed", "Unindexed foreign keys", "FK referencing columns with no covering index - seq scan of the child on every parent UPDATE/DELETE", sqlTable(a.sql.fkUnindexed, { mono: ["table", "constraint", "definition"], hide: ["schema"] })) : ""}
 ${a.sql.invalidIndexes.length ? drill("invalididx", "Invalid indexes", "failed CONCURRENTLY builds - ignored by the planner but still write overhead; drop + rebuild", sqlTable(a.sql.invalidIndexes, { mono: ["index", "table"], hide: ["schema"] })) : ""}
+${a.sql.visibilityMap.length ? drill("visibilitymap", "Visibility-map readiness", "large tables with a low all-visible page fraction (relallvisible/relpages) - index-only scans still hit the heap; vacuum to refresh", sqlTable(a.sql.visibilityMap, { mono: ["table"], hide: ["schema"] })) : ""}
 ${drill("bloat", "Estimated bloat", "reclaimable wasted space (pg_stats estimate)", sec(a.sql.bloat, "sql:bloat", { mono: ["name"], hide: ["waste_bytes"] }))}
 ${a.sql.bloatExact.length ? drill("bloatexact", "Measured bloat (pgstattuple)", "exact dead-tuple + free-space bytes on the biggest tables (pgstattuple_approx; superuser + extension installed)", sec(a.sql.bloatExact, "sql:bloatExact", { mono: ["name"], hide: ["total_bytes", "dead_bytes", "free_bytes", "reclaimable_bytes"] })) : ""}
 ${drill("traffic", "Read/write profile", "per-table read-heavy vs write-heavy", sec(a.sql.trafficProfile, "sql:trafficProfile", { mono: ["table"] }))}
