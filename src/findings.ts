@@ -483,8 +483,12 @@ export function deriveFindings(a: Analysis): Finding[] {
       ...meta("query_high_variance"),
     });
   }
+  // FALLBACK for the advisor's auth_rls_initplan perf lint (which detects the
+  // same unwrapped-auth-per-row pattern). Suppress when the advisor already
+  // fired it so a PAT run (or a superuser run with splinter) never
+  // double-reports; ours covers the case where advisors are unavailable.
   const unwrapped = a.sql.rlsPolicies.filter((r) => r.unwrapped_auth === true).length;
-  if (unwrapped > 0) {
+  if (unwrapped > 0 && !advisorLints.has("auth_rls_initplan")) {
     out.push({
       severity: "med",
       category: "Performance",
@@ -1453,7 +1457,9 @@ export function derivePositives(a: Analysis): Positive[] {
   }
   const totalPolicies = a.sql.rlsPolicies.length;
   const unwrapped = a.sql.rlsPolicies.filter((r) => r.unwrapped_auth === true).length;
-  if (totalPolicies > 0 && unwrapped === 0) {
+  // Don't claim "all wrapped" if the advisor's auth_rls_initplan lint says
+  // otherwise (its detection can differ from ours - defer to the advisor).
+  if (totalPolicies > 0 && unwrapped === 0 && !advisorLints.has("auth_rls_initplan")) {
     out.push({
       category: "Performance",
       title: `All ${totalPolicies} RLS ${totalPolicies === 1 ? "policy wraps" : "policies wrap"} auth in a subselect`,
