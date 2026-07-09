@@ -397,6 +397,18 @@ regional Grafana. A region absent from the map just skips that project's trends
 keep it matching the `sbperf.profile.json` / `sbperf.*.profile.json` gitignore
 pattern so the cookies + connstrings are never committed.
 
+**PAT + profile (keep the graphs AND the Management-API planes):** the profile
+defaults to `"noPat": true` (the customer-audit mode - DB connstring + Grafana
+only). Set **`"noPat": false`** in the profile and, as long as a
+`SUPABASE_ACCESS_TOKEN` is resolvable, the run uses the PAT for the API planes +
+metrics (disk/autoscale/entitlement, backups, pooler, security config, hosted
+advisors) *and* the profile's per-region Grafana for the trend charts *and* the
+superuser connstrings for deep SQL. That's the fullest possible report: platform
+metadata from the PAT, graphs from Grafana, deep SQL from the connstring. With
+`"noPat": true` (or the `--no-pat` flag / `SBPERF_NO_PAT=1`) the PAT is ignored
+and those API planes are skipped - which is why a default profile "loses" the
+Management-API findings.
+
 ## 30-day trends
 
 No Supabase API returns 30 days of infra history - the metrics endpoint is a

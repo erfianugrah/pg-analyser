@@ -1038,6 +1038,57 @@ describe("securityConfigFindings", () => {
     expect(f?.evidence).toContain("min length 6");
   });
 
+  test("HIBP-off alone (min length OK) fires our finding in no-PAT (no advisor lint)", () => {
+    const a = withSec({
+      ...emptySec,
+      auth: { password_min_length: 8, password_hibp_enabled: false },
+    });
+    const f = deriveFindings(a).find((x) => x.heuristicId === "auth_weak_password_policy");
+    expect(f?.severity).toBe("low");
+    expect(f?.evidence).toContain("HIBP");
+  });
+
+  test("HIBP-off is NOT double-reported when the advisor's lint already fired", () => {
+    const a = withSec({
+      ...emptySec,
+      auth: { password_min_length: 8, password_hibp_enabled: false },
+    });
+    a.advisors.security = [
+      {
+        name: "auth_leaked_password_protection",
+        title: "Leaked Password Protection Disabled",
+        level: "WARN",
+      },
+    ];
+    // advisor owns HIBP; min length is fine -> our finding suppressed entirely.
+    expect(deriveFindings(a).some((x) => x.heuristicId === "auth_weak_password_policy")).toBe(
+      false,
+    );
+  });
+
+  test("short min length still fires ours even when the advisor flagged HIBP (distinct signal)", () => {
+    const a = withSec({
+      ...emptySec,
+      auth: { password_min_length: 6, password_hibp_enabled: false },
+    });
+    a.advisors.security = [{ name: "auth_leaked_password_protection", title: "x", level: "WARN" }];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "auth_weak_password_policy");
+    expect(f?.severity).toBe("med");
+    expect(f?.evidence).toContain("min length 6");
+    expect(f?.evidence).not.toContain("HIBP");
+  });
+
+  test("no-MFA is NOT double-reported when the advisor's insufficient-MFA lint fired", () => {
+    const a = withSec({
+      ...emptySec,
+      auth: { mfa_totp_verify_enabled: false, mfa_phone_verify_enabled: false },
+    });
+    a.advisors.security = [
+      { name: "auth_insufficient_mfa_options", title: "Insufficient MFA Options", level: "WARN" },
+    ];
+    expect(deriveFindings(a).some((x) => x.heuristicId === "auth_mfa_disabled")).toBe(false);
+  });
+
   test("anonymous users + long jwt -> low findings", () => {
     const a = withSec({
       ...emptySec,

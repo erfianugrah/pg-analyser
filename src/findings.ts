@@ -338,6 +338,12 @@ export function securityConfigFindings(a: Analysis): Finding[] {
     });
   }
 
+  // The hosted security advisor (PAT mode) already reports leaked-password and
+  // insufficient-MFA as catalogued lints; our GoTrue-config findings are the
+  // FALLBACK for no-PAT mode (where those lints aren't fetched). Suppress the
+  // overlapping ones when the advisor already fired them, so a PAT run doesn't
+  // double-report (advisor MED + our LOW for the same setting).
+  const secLints = new Set(a.advisors.security.map((l) => String(l.name)));
   const auth = s.auth;
   if (auth) {
     if (auth.mailer_autoconfirm === true) {
@@ -356,7 +362,11 @@ export function securityConfigFindings(a: Analysis): Finding[] {
       auth.mfa_phone_verify_enabled,
       auth.mfa_web_authn_verify_enabled,
     ];
-    if (mfaFields.some((v) => v !== undefined) && !mfaFields.some((v) => v === true)) {
+    if (
+      mfaFields.some((v) => v !== undefined) &&
+      !mfaFields.some((v) => v === true) &&
+      !secLints.has("auth_insufficient_mfa_options")
+    ) {
       out.push({
         severity: "low",
         category: "Security",
@@ -368,7 +378,10 @@ export function securityConfigFindings(a: Analysis): Finding[] {
     }
     const weakLen =
       auth.password_min_length != null && auth.password_min_length < THRESHOLDS.passwordMinLength;
-    const noHibp = auth.password_hibp_enabled === false;
+    // HIBP/leaked-password is the advisor's auth_leaked_password_protection lint
+    // in PAT mode; only flag it ourselves when the advisor didn't (no-PAT).
+    const noHibp =
+      auth.password_hibp_enabled === false && !secLints.has("auth_leaked_password_protection");
     if (weakLen || noHibp) {
       const bits: string[] = [];
       if (weakLen)
