@@ -101,6 +101,19 @@ Audit every project in the account (writes an `index.html` linking them all):
 bun run src/index.ts full --all [--org <slug>]
 ```
 
+**Maximal coverage in one command:** if you also have superuser connstrings for
+some projects, `full --all` auto-upgrades any project whose ref matches a
+connstring (`--db-config` / `--db-url` / `SBPERF_DB_URL` / an auto-loaded
+`./sbperf.databases.json`) to the **superuser SQL tier** - unlocking WAL-dir
+size, `pg_hba` weak-auth, exact bloat, and `--amcheck` - while the PAT still
+enumerates projects and serves the API planes + metrics. Projects without a
+connstring stay on the PAT read-only tier. The run header reports the split.
+
+```bash
+sbperf full --all --db-config sbperf.databases.json            # PAT + superuser fleet audit
+sbperf full --all --db-config sbperf.databases.json --amcheck  # + index integrity checks
+```
+
 Audit a **specific subset** of projects into the same combined index (PAT-only,
 no `--db-url`). `--ref` is repeatable and also accepts comma/space-delimited
 lists; `--ref-file` reads refs from a `.txt` (one per line) or `.csv`:
@@ -141,9 +154,29 @@ bun run src/index.ts report <dir>            # draws trends from accumulated sna
   IO-saturation trap the global ratio hides), biggest tables (with TOAST size
   isolated), unused indexes, duplicate indexes,
   sequential-scan-heavy tables, estimated bloat, traffic profile (read/write
-  ratio), threshold-aware autovacuum lag, txid wraparound, replication-slot lag,
-  connection state + per-role usage, and **point-in-time contention** (locks,
-  blocking, long-running + idle-in-transaction backends, captioned as snapshots)
+  ratio), threshold-aware autovacuum lag, txid **and multixact** wraparound,
+  **tables never (auto)vacuumed**, **unindexed foreign keys** (slow cascades),
+  **invalid indexes** (failed CONCURRENTLY builds), **top WAL-generating
+  statements** (write-amplification attribution), **visibility-map readiness**
+  (index-only-scan efficiency), replication-slot lag, connection state + per-role
+  usage, and **point-in-time contention** (locks, blocking, long-running +
+  idle-in-transaction backends, captioned as snapshots)
+- **Data integrity** - page-checksum failures (`pg_stat_database`, any mode) and
+  opt-in **amcheck** (`--amcheck`): `bt_index_check` on app B-tree indexes, plus
+  `verify_heapam` under `--amcheck heap`. Superuser + amcheck-installed only;
+  sbperf never installs the extension
+- **Disk / capacity** - provisioned volume vs used vs reclaimable (bloat + unused
+  indexes + slot-pinned WAL) -> an **over-provisioned downsize candidate** with a
+  true-footprint estimate; the grow-only **autoscale** policy and the org
+  **`disk_modifications`** entitlement (whether the plan can resize disk without a
+  compute upgrade); `pg_wal` directory size (superuser)
+- **Config tuning** - static GUC sanity from `pg_settings`: work_mem worst-case
+  blast radius vs RAM, unbounded `statement_timeout` / `idle_in_transaction`,
+  `checkpoint_completion_target`, `track_io_timing` off, and a RAM-relative
+  `maintenance_work_mem` check (Supabase tier-scales it, so small-tier defaults
+  are not flagged)
+- **Public-schema privilege** - flags `PUBLIC` retaining `CREATE` on schema
+  `public` (a privilege-escalation surface; modern Postgres revokes it)
 - **RLS policy audit** - flags policies re-evaluating `auth.*()` per row (should
   be wrapped in `(select ...)`; 94-99% latency win per Supabase's guide) and RLS
   policy columns without a covering index (seq scan per row check)
@@ -240,6 +273,21 @@ protocol and fills in the performance findings the API dropped. The PAT is
 still used for the API planes (advisors, config, health) and the metrics
 endpoint. The connstring is a secret - it's read from the flag/env and never
 written to `analysis.json` (only which tier was used).
+
+The superuser tier also enables checks the read-only user is denied: `pg_wal`
+directory size (`pg_ls_waldir`), `pg_hba` weak-auth rules, exact reclaimable
+bloat (`pgstattuple`), and opt-in **data-integrity** via `--amcheck`:
+
+```bash
+sbperf analyze --ref <ref> --db-url "$C" --amcheck        # bt_index_check (light, AccessShareLock)
+sbperf analyze --ref <ref> --db-url "$C" --amcheck heap   # + verify_heapam (heavy - reads every page)
+```
+
+`--amcheck` runs only when the `amcheck` extension is already installed - sbperf
+never `CREATE`s it. `bt_index_check` raises on a corrupt B-tree (surfaced as
+`index_corruption`); `verify_heapam` reports heap corruption row-by-row
+(`heap_corruption`). Both are opt-in because `verify_heapam` is I/O-heavy on a
+live database.
 
 #### Multiple databases
 

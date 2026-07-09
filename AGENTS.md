@@ -1,8 +1,12 @@
 # sbperf
 
-PAT-only Supabase performance analysis tool. Fetches advisors, read-only SQL
-diagnostics, config, and metrics for a project and renders a self-contained
-HTML + PDF report. No superuser `--db-url`, no manual Grafana screenshots.
+Supabase performance + health analysis tool. Fetches advisors, SQL diagnostics,
+config, and metrics for a project and renders a self-contained HTML + PDF report.
+Three source tiers: PAT-only (Management API + read-only SQL - zero DB
+credentials), superuser `--db-url` (deep SQL: WAL-dir size, pg_hba, exact bloat,
+amcheck integrity - AUGMENTS the PAT), and no-PAT (`--db-url` + Grafana alone).
+The maximal-coverage fleet command is `full --all --db-config <json>` (PAT
+enumerates + serves API/metrics; matched projects upgrade to superuser SQL).
 
 ## Stack
 
@@ -27,9 +31,10 @@ HTML + PDF report. No superuser `--db-url`, no manual Grafana screenshots.
 | `bun run src/index.ts check <dir> --fail-on <sev>` | CI gate: exit nonzero if findings breach the threshold (`--category`, `--new-since`) |
 | `bun run src/index.ts full --ref <ref>` | analyze + report + pdf |
 | `bun run src/index.ts full --ref <r1>,<r2> ...` / `--ref-file <f>` | audit a subset of projects -> combined org/project index (PAT-only). `--ref` repeatable + comma/space lists; `--ref-file` reads a .txt/.csv (ref-shaped tokens only) |
-| `bun run src/index.ts full --all [--org <slug>]` | audit every project -> `index.html` |
+| `bun run src/index.ts full --all [--org <slug>]` | audit every project -> `index.html`. Projects whose ref matches a connstring (`--db-config` / `--db-url` / `SBPERF_DB_URL` / auto-loaded `sbperf.databases.json`) are AUTO-UPGRADED to the superuser SQL tier (PAT still serves API planes + metrics) - the maximal-coverage fleet command: `full --all --db-config <json> [--amcheck]` |
 | `bun run src/index.ts full --profile <file.json>` | no-PAT sweep: force-no-PAT + per-region Grafana + target DBs, all in one gitignored JSON -> per-DB reports + index |
 | `bun run src/index.ts full --db-url <connstr>` | superuser SQL tier (augments the PAT, or SOLE source in no-PAT mode); repeatable / `--db-config <file>` for a multi-DB sweep |
+| `bun run src/index.ts analyze --ref <ref> --db-url <c> --amcheck[ heap]` | opt-in data-integrity: `bt_index_check` on app B-tree indexes (light); `heap` adds `verify_heapam` (heavy). Superuser + amcheck-installed only; never CREATEs the extension |
 | `bun run src/index.ts snapshot --ref <ref>` | collect + append to the SQLite history store (cron this) |
 | `bun run src/index.ts export-prometheus <dir> [--ref <ref>]` | history store -> OpenMetrics for promtool backfill |
 | `bun run src/index.ts scrape-init --ref <ref>` | write the (alternate) Prometheus+Grafana stack |
@@ -70,6 +75,25 @@ of planes, so a superuser `--db-url` reaches that data directly):
 - **pgConfig** <- `pg_settings` (the GUC superset we already collect;
   `/config/database/postgres` is a subset). analysis.json only - the report's
   "PG tuning params" section already renders `pgSettings`, so no separate UI.
+  The `pgSettings` allowlist also feeds the static GUC-tuning findings
+  (`configTuningFindings`): work_mem blast radius, unbounded timeouts,
+  checkpoint_completion_target, track_io_timing off. maintenance_work_mem is
+  RAM-RELATIVE (Supabase tier-scales it, so a small value on a small instance
+  is correct - only flagged when <3% of est RAM on a >=8GB box); lock_timeout=0
+  is intentionally NOT flagged (a cluster-wide lock_timeout cancels legit waits).
+- **WAL directory size** <- `pg_ls_waldir()` (`walDirSize` query, SUPERUSER-
+  gated like hbaRules - the PAT read-only user is denied it). WAL lives on the
+  data volume, so this is provisioned disk not in pg_database_size; shown in the
+  infra section and feeds the disk over-provisioning true-footprint context.
+- **checksum failures** <- `pg_stat_database.checksum_failures` (`checksumFailures`
+  query, BOTH modes, no extension). Nonzero = on-disk corruption caught by the
+  checksum layer -> high finding `checksum_failure`. Rendered as a status row.
+- **amcheck integrity** <- `bt_index_check` / `verify_heapam` (opt-in `--amcheck`;
+  SUPERUSER + amcheck-installed only; never CREATEs it). Index check calls
+  bt_index_check per app B-tree index (it RAISES on corruption, so a thrown
+  error is the hit); the heavier heap check (verify_heapam, reads every page)
+  is row-returning and gated behind `--amcheck heap`. -> high findings
+  `index_corruption` / `heap_corruption`.
 - **PITR proxy** <- `pg_stat_archiver` + `archive_mode` (`walArchiving` query).
   Positive when archive_mode on/always + archived_count>0 ("Continuous WAL
   archiving is active"); low finding `pitr_absent` when not. INFERENCE, not the
@@ -178,7 +202,8 @@ src/
                  debug "plane absent", not a warn - the collection note is still
                  recorded (folded into the sweep's per-project done() tail).
   transport.ts   Transport interface + DirectTransport (auth + retry)
-  management.ts  typed, zod-parsed Management API wrapper
+  management.ts  typed, zod-parsed Management API wrapper (incl. diskAutoscale +
+                 orgEntitlements for the disk over-provisioning context)
   sqlrunner.ts   SQL execution tiers behind one interface: ManagementSqlRunner
                  (PAT read-only runner, default) + DirectSqlRunner (superuser
                  --db-url via Bun.SQL - full access, any/multiple PG). collect
@@ -200,7 +225,18 @@ src/
                  txid wraparound, replication slots, role-stats, point-in-time
                  locks/blocking/long-running/idle-in-txn, cache-hit (volume-
                  gated) + stats-reset age, RLS audit, auth adoption (authAudit +
-                 separate authMfa), pg_cron job-run health (cronJobs). The auth/
+                 separate authMfa), pg_cron job-run health (cronJobs). Health-
+                 check expansion (2026-07) added: checksumFailures
+                 (pg_stat_database checksum corruption), walDirSize
+                 (pg_ls_waldir, superuser), fkUnindexed (FK columns with no
+                 covering index - leading-prefix check), invalidIndexes (failed
+                 CONCURRENTLY builds), multixactWraparound (relminmxid's own 2B
+                 ceiling, companion to txid), neverVacuumed (tables autovacuum
+                 never touched), topByWal (pg_stat_statements.wal_bytes write-
+                 amplification attribution), visibilityMap (relallvisible/relpages
+                 index-only-scan readiness), publicSchemaCreate (PUBLIC CREATE on
+                 schema public via aclexplode), and amcheck targets
+                 (btreeIndexTargets + amcheckHeap, opt-in). The auth/
                  cron/queryIoStats queries run in BOTH modes (pure SQL) - part of
                  keeping no-PAT at feature parity with PAT. bloat carries a 10MB
                  table-size floor (the pg_stats estimator throws absurd bloat_x
@@ -247,7 +283,13 @@ src/
                  platform-metadata planes (disk/pgConfig/pooler/backups/
                  authConfig/network-restrictions/functions/advisors/apiCounts)
                  still run - they work on a paused project. No-PAT superuser mode
-                 keeps dbServing true (the --db-url points at a live DB).
+                 keeps dbServing true (the --db-url points at a live DB). Also
+                 fetches diskAutoscale (grow-only policy) + resolves the org
+                 `instances.disk_modifications` entitlement (organizations() ->
+                 slug -> orgEntitlements(); PAT-only, -> disk.modifiable), and
+                 runs the opt-in amcheck integrity block (superuser + amcheck
+                 installed): per-index bt_index_check (thrown error = corruption
+                 hit) + optional verify_heapam under --amcheck heap.
   check.ts       CI gate: evaluateGate turns deriveFindings into a pass/fail by
                  severity (--fail-on), optional --category scope + --new-since
                  baseline (gate only on NEWLY-appeared findings). CLI exits 1 on
@@ -309,7 +351,22 @@ src/
                  own `unused_index`/`duplicate_index` lint already fired (the
                  advisor's richer catalogued card wins), so the same objects are
                  never reported twice. The "No unused indexes" positive is
-                 likewise gated on the advisor not having reported any.
+                 likewise gated on the advisor not having reported any. The
+                 fk_unindexed finding is likewise suppressed when the advisor's
+                 unindexed_foreign_keys lint fired. Health-check expansion
+                 findings (2026-07): disk_oversized (over-provisioned volume
+                 downsize candidate - the disk analogue of cpu_oversized, with
+                 true-footprint = used minus reclaimable, gated on a min-waste
+                 floor so tiny volumes never trip it; enriched with the
+                 disk_modifications entitlement + grow-only autoscale note),
+                 checksum_failure, index_corruption/heap_corruption (amcheck),
+                 fk_unindexed, invalid_index, multixact_wraparound,
+                 never_autovacuumed, wal_heavy_statement, visibility_map_low,
+                 public_schema_create, plus configTuningFindings (a separate
+                 exported fn) for the static GUC sanity set (work_mem blast,
+                 timeouts, maintenance_work_mem RAM-relative, checkpoint
+                 completion, track_io_timing). gucBytes() converts a pg_settings
+                 value+unit to bytes for the memory-relative checks.
   trendstats.ts  trend-analysis primitives (slope/growth, sustained-fraction,
                  peak, linear projection) behind sufficient() gating; the shapes
                  the capacity findings + trend-health positives reason over.

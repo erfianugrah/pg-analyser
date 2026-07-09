@@ -60,6 +60,10 @@ date tracks when we last confirmed them against upstream.
 | `functional_predicate` | WHERE wraps an indexed col in a function (e.g. `left(id::text,n)`) defeats the index -> seq scan | any on large table | med | NEW (best-effort; narrate diagnoses root cause) |
 | `query_temp_spill` | a single query's `pg_stat_statements.temp_blks_written` (sorts/hashes spilling to disk) | >= `tempSpillBlocks` 12500 blks (~100MB) | med | HAVE |
 | `query_high_variance` | a query's coefficient of variation (stddev/mean exec time), floored on mean | cv >= `queryCvWarn` 2 AND mean >= `queryCvMinMeanMs` 10ms | low | HAVE |
+| `fk_unindexed` | a foreign key whose referencing columns are not a leading prefix of any valid index (`pg_constraint` + `pg_index`, app-scoped); suppressed when the advisor's `unindexed_foreign_keys` lint fired | any | med | HAVE |
+| `invalid_index` | `pg_index.indisvalid=false` / `indisready=false` (failed CONCURRENTLY build) - planner-ignored but still write overhead | any | med | HAVE |
+| `visibility_map_low` | large app table with a low all-visible page fraction (`relallvisible / relpages`) - index-only scans still hit the heap; vacuum behind | < 80% on a >10MB table | low | HAVE |
+| `wal_heavy_statement` | one statement's share of `pg_stat_statements.wal_bytes` (write-amplification -> replication lag, backup size, pg_wal growth) | >= `walHeavyPct` 40% | low | HAVE |
 
 Notes:
 - Duplicate indexes: each copy is maintained on every write for zero read
@@ -85,6 +89,7 @@ Sources: Supabase Query Optimization docs; `supabase/cli` inspect queries.
 | `multiple_permissive_policies` | 2+ permissive policies for the same role + action on a table | any table | med | HAVE (via advisor) |
 | `policy_exists_rls_disabled` | policy defined but RLS not enabled on the table | any | high | HAVE (via advisor) |
 | `rls_no_role_target` | policy uses no `TO authenticated` (anon pays the RLS cost) | any | low | NEW |
+| `public_schema_create` | `PUBLIC` retains `CREATE` on schema `public` (`aclexplode` grantee 0) - any role can create objects there (privilege-escalation surface); modern Postgres revokes it | any | med | HAVE |
 
 Concrete numbers (Supabase RLS docs, official 100K-row test table):
 - **Wrap `auth.uid()` in `(select auth.uid())`**: promotes the call to an
@@ -174,6 +179,8 @@ supabase/supabase#39227, supavisor#595 (connection leak).
 | `table_bloat` | reclaimable waste bytes (estimate) | >= 50MB (med >= 500MB) | low/med | HAVE |
 | `txid_wraparound` | `age(relfrozenxid)` toward the 2B ceiling | >= 20% (high >= 40%) | med/high | HAVE |
 | `xmin_horizon_pin` | a long-running / idle-in-txn session pins the xmin horizon, blocking vacuum | any + rising dead tuples | high | NEW |
+| `multixact_wraparound` | `mxid_age(relminmxid)` toward multixact's OWN 2B ceiling (heavy row locking; separate from txid) | >= 20% (high >= 40%) | med/high | HAVE |
+| `never_autovacuumed` | app table (>= 10k rows) with `last_autovacuum` AND `last_vacuum` both null - no visibility map / stale planner stats | any | low | HAVE |
 
 Concrete facts:
 - Supabase's own heuristic: if live vs dead differ by **more than 2x**, autovacuum
@@ -237,6 +244,10 @@ Sources: Supabase Compute & Disk docs; Supabase High Disk I/O docs.
 | id | signal | threshold | sev | status |
 |---|---|---|---|---|
 | `disk_full` | used / (used+avail) | >= 80% | med | HAVE |
+| `disk_oversized` | provisioned volume far above the true footprint (used minus reclaimable = bloat + unused indexes + slot-pinned WAL) - a downsize candidate, the disk analogue of `cpu_oversized`; enriched with the grow-only autoscale policy + the org `disk_modifications` entitlement | used <= 40% AND >= 20GB unused | low | HAVE |
+| `checksum_failure` | `pg_stat_database.checksum_failures` > 0 - on-disk corruption caught by the checksum layer (any mode, no extension) | any nonzero | high | HAVE |
+| `index_corruption` | amcheck `bt_index_check` raised on an app B-tree index (opt-in `--amcheck`; superuser + amcheck installed) | any | high | HAVE |
+| `heap_corruption` | amcheck `verify_heapam` returned corruption rows for a table (opt-in `--amcheck heap`) | any | high | HAVE |
 | `disk_iops_high` | derived read+write IOPS / provisioned | >= 80% | med | HAVE (trend) |
 | `disk_throughput_high` | derived MB/s / provisioned | >= 80% | med | NEW (trend) |
 | `disk_io_budget_depleted` | small instance bursting then throttled to baseline | sustained at baseline under load | med | NEW |
@@ -281,8 +292,11 @@ High Disk I/O troubleshooting.
 | id | signal | threshold | sev | status |
 |---|---|---|---|---|
 | `cache_hit_low` | `blks_hit / (blks_hit + blks_read)` | < 99% | med | HAVE |
-| `idle_in_txn_timeout_off` | `idle_in_transaction_session_timeout = 0` | =0 | low | HAVE |
-| `statement_timeout_off` | `statement_timeout = 0` | =0 | low | HAVE |
+| `timeout_unbounded` | `statement_timeout` OR `idle_in_transaction_session_timeout` = 0 (title lists which). `lock_timeout` is intentionally EXCLUDED - a cluster-wide lock_timeout cancels legit waits, so 0 is the sane global default | any =0 | low | HAVE |
+| `work_mem_blast` | worst-case `work_mem x max_connections x parallel` vs RAM estimated from `shared_buffers` (~25%) - a broad OOM risk from a high global work_mem | worst case >= est RAM (`workMemBlastFrac` 1.0) | med | HAVE |
+| `maintenance_work_mem_low` | RAM-RELATIVE (Supabase tier-scales it, so a small value on a small instance is correct): flagged only when < `maintWorkMemMinFrac` 3% of est RAM AND est RAM >= `maintWorkMemMinRamGb` 8GB | see thresholds | low | HAVE |
+| `checkpoint_completion_low` | `checkpoint_completion_target` below 0.9 spreads checkpoint I/O too tightly (spiky flushes) | < `checkpointCompletionMin` 0.7 | low | HAVE |
+| `track_io_timing_off` | `track_io_timing = off` - no per-query I/O timing (blinds pg_stat_statements + sbperf's own I/O analysis); negligible overhead on tsc-clocksource hosts | =off | low | HAVE |
 | `work_mem_spill` | `pg_stat_database_temp_bytes_total` rising (sorts/hashes spill to disk) | rate >= 1MB/s (trend) | med | HAVE |
 | `checkpoint_pressure` | `pg_stat_bgwriter_checkpoints_req_total` vs `_timed_total` rate (trend) | requested >= 30% of checkpoints -> raise max_wal_size | med | HAVE (trend) |
 | `shared_buffers_ratio` | `shared_buffers` vs RAM | not ~25% (warn > 40%) | low | NEW |
