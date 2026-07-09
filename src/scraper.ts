@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { Config } from "./config.ts";
 import { Management } from "./management.ts";
+import { buildPanels } from "./prometheus.ts";
 import { makeTransport } from "./transport.ts";
 
 /**
@@ -70,6 +71,7 @@ volumes:
 datasources:
   - name: Prometheus
     type: prometheus
+    uid: prometheus
     access: proxy
     url: http://prometheus:9090
     isDefault: true
@@ -119,18 +121,29 @@ async function buildScrapeJob(ref: string, config: Config): Promise<ScrapeJob> {
   };
 }
 
-function panel(id: number, title: string, expr: string, x: number, y: number): unknown {
-  return {
-    id,
-    title,
-    type: "timeseries",
-    datasource: { type: "prometheus", uid: "prometheus" },
-    gridPos: { h: 8, w: 12, x, y },
-    targets: [{ expr, refId: "A" }],
-  };
+// Map a TrendPanel unit to a Grafana field unit id.
+function gfUnit(unit: string): string {
+  if (unit === "%") return "percent";
+  if (unit === "bytes") return "bytes";
+  return "short";
 }
 
+// Dashboard: one timeseries panel per buildPanels() spec, scoped to a `project`
+// template var over the `supabase_project_ref` label the metrics endpoint emits
+// itself - so it renders against ANY Prometheus scraping the endpoint, no
+// relabelling required. Built from the same panel list as the sbperf report
+// trends, so the two stay in lockstep.
 function dashboard(ref: string): unknown {
+  const ds = { type: "prometheus", uid: "prometheus" };
+  const panels = buildPanels('supabase_project_ref="$project"').map((p, i) => ({
+    id: i + 1,
+    title: p.title,
+    type: "timeseries",
+    datasource: ds,
+    fieldConfig: { defaults: { unit: gfUnit(p.unit) }, overrides: [] },
+    gridPos: { h: 8, w: 12, x: (i % 2) * 12, y: Math.floor(i / 2) * 8 },
+    targets: [{ expr: p.query, refId: "A", datasource: ds }],
+  }));
   return {
     title: `Supabase - ${ref}`,
     uid: `sbperf-${ref}`.slice(0, 40),
@@ -138,14 +151,23 @@ function dashboard(ref: string): unknown {
     time: { from: "now-30d", to: "now" },
     refresh: "5m",
     schemaVersion: 39,
-    panels: [
-      panel(1, "CPU load (1m)", "node_load1", 0, 0),
-      panel(2, "Memory available", "node_memory_MemAvailable_bytes", 12, 0),
-      panel(3, "DB connections", "pg_stat_database_num_backends", 0, 8),
-      panel(4, "Pooler client conns (active/waiting)", "pgbouncer_pools_cl_active", 12, 8),
-      panel(5, "Disk free bytes", 'node_filesystem_avail_bytes{mountpoint="/data"}', 0, 16),
-      panel(6, "Deadlocks", "pg_stat_database_deadlocks", 12, 16),
-    ],
+    templating: {
+      list: [
+        {
+          name: "project",
+          type: "query",
+          label: "Project",
+          datasource: ds,
+          query: { query: "label_values(node_load1, supabase_project_ref)", refId: "q" },
+          definition: "label_values(node_load1, supabase_project_ref)",
+          current: { text: ref, value: ref },
+          refresh: 1,
+          includeAll: false,
+          multi: false,
+        },
+      ],
+    },
+    panels,
   };
 }
 
