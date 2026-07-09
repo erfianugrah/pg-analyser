@@ -301,6 +301,12 @@ async function doAllDbs(
   const progress = makeProgress(targets.length);
   const sweepLog = sweepLogger();
   const rows: IndexRow[] = [];
+  // Report dirs are named by the friendly project name + date (matching --all),
+  // not the raw ref - the PAT resolves meta.name, so a PAT+profile run gets
+  // readable folders (<name>-YYYY-MM-DD) instead of refs. Falls back to the ref
+  // in no-PAT mode (meta.name is the ref there).
+  const date = new Date().toISOString().slice(0, 10);
+  const usedDirs = new Set<string>();
   for (const t of targets) {
     const label = t.name ?? t.ref;
     const runner = new DirectSqlRunner(t.dbUrl);
@@ -338,13 +344,18 @@ async function doAllDbs(
         logger: sweepLog,
       }).finally(() => runner.close());
       if (grafanaGap) analysis.errors.push({ source: "trends", message: grafanaGap });
-      const counts = await emitReport(analysis, join(outBase, t.ref));
+      const projName = t.name || analysis.meta.name || t.ref;
+      let projDir = `${slugify(projName) || t.ref}-${date}`;
+      while (usedDirs.has(projDir))
+        projDir = `${slugify(projName) || t.ref}-${t.ref.slice(0, 8)}-${date}`;
+      usedDirs.add(projDir);
+      const counts = await emitReport(analysis, join(outBase, projDir));
       rows.push({
         name: t.name ?? analysis.meta.name,
         ref: t.ref,
         status: analysis.meta.status,
         ...counts,
-        dir: t.ref,
+        dir: projDir,
       });
       const n = counts.high + counts.med + counts.low;
       progress.done(
