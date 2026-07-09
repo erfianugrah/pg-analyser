@@ -409,6 +409,12 @@ metadata from the PAT, graphs from Grafana, deep SQL from the connstring. With
 and those API planes are skipped - which is why a default profile "loses" the
 Management-API findings.
 
+`--amcheck` works with the profile sweep too (it runs on each profile database,
+which are superuser connstrings): `full --profile sbperf.profile.json --amcheck`
+is the single command for PAT planes + Grafana graphs + deep SQL + integrity
+checks (with `"noPat": false` in the profile). amcheck still needs the extension
+installed as `supabase_admin` per project (see the `--amcheck` note above).
+
 ## 30-day trends
 
 No Supabase API returns 30 days of infra history - the metrics endpoint is a
