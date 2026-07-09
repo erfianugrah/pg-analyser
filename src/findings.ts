@@ -237,8 +237,13 @@ export function configTuningFindings(a: Analysis): Finding[] {
     }
   }
 
-  // Unbounded stability guardrails (a value of 0 = unlimited).
-  const unbounded = ["statement_timeout", "idle_in_transaction_session_timeout", "lock_timeout"]
+  // Unbounded stability guardrails (a value of 0 = unlimited). lock_timeout is
+  // intentionally excluded: a global lock_timeout risks cancelling legitimate
+  // waits app-wide, so 0 is the sensible default (it is set per-operation). We
+  // flag statement_timeout (Supabase sets 120s, so 0 is unusual) and
+  // idle_in_transaction_session_timeout (0 lets an abandoned txn pin the xmin
+  // horizon + locks - the guardrail with real bloat consequences).
+  const unbounded = ["statement_timeout", "idle_in_transaction_session_timeout"]
     .filter((k) => set.get(k) === "0")
     .map((k) => k.replace(/_/g, " "));
   if (unbounded.length > 0) {
@@ -251,13 +256,25 @@ export function configTuningFindings(a: Analysis): Finding[] {
     });
   }
 
-  // maintenance_work_mem too low (slows autovacuum + index builds).
+  // maintenance_work_mem too low - RAM-RELATIVE. Supabase auto-scales this with
+  // the compute tier (verified: 32MB on a Nano, 64MB on a Micro), so a small
+  // absolute value on a small instance is correct, not low. Only flag when it
+  // is a tiny fraction of estimated RAM AND the instance is large enough that a
+  // bigger value would genuinely help - i.e. the platform tuning is lagging or
+  // a custom override set it too low. RAM estimated from shared_buffers (~25%).
   const maintMem = gucBytes(rows, "maintenance_work_mem");
-  if (maintMem != null && maintMem < THRESHOLDS.maintWorkMemMinMb * 1024 * 1024) {
+  const sbForMaint = gucBytes(rows, "shared_buffers");
+  const estRamForMaint = sbForMaint != null ? sbForMaint * 4 : null;
+  if (
+    maintMem != null &&
+    estRamForMaint != null &&
+    estRamForMaint >= THRESHOLDS.maintWorkMemMinRamGb * 1024 * 1024 * 1024 &&
+    maintMem / estRamForMaint < THRESHOLDS.maintWorkMemMinFrac
+  ) {
     out.push({
       severity: "low",
       category: "Capacity",
-      title: `maintenance_work_mem is low (${set.get("maintenance_work_mem")}kB)`,
+      title: `maintenance_work_mem is low for this instance (${Math.round(maintMem / 1024 / 1024)}MB on ~${Math.round(estRamForMaint / 1024 / 1024 / 1024)}GB RAM)`,
       anchor,
       ...meta("maintenance_work_mem_low"),
     });

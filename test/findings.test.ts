@@ -1239,7 +1239,7 @@ describe("config tuning (static GUC findings)", () => {
     expect(f?.severity).toBe("med");
   });
 
-  test("unbounded timeouts (0) -> timeout_unbounded", () => {
+  test("unbounded timeouts (0) -> timeout_unbounded (lock_timeout excluded)", () => {
     const a = base();
     a.sql.pgSettings = [
       guc("statement_timeout", "0"),
@@ -1247,7 +1247,9 @@ describe("config tuning (static GUC findings)", () => {
       guc("lock_timeout", "0"),
     ];
     const f = deriveFindings(a).find((x) => x.heuristicId === "timeout_unbounded");
-    expect(f?.title).toContain("3 unbounded");
+    // lock_timeout is intentionally not flagged (sane global default).
+    expect(f?.title).toContain("2 unbounded");
+    expect(f?.title).not.toContain("lock timeout");
   });
 
   test("track_io_timing off -> finding", () => {
@@ -1256,10 +1258,28 @@ describe("config tuning (static GUC findings)", () => {
     expect(deriveFindings(a).some((x) => x.heuristicId === "track_io_timing_off")).toBe(true);
   });
 
-  test("low maintenance_work_mem -> finding", () => {
-    const a = base();
-    a.sql.pgSettings = [guc("maintenance_work_mem", String(32 * 1024), "kB")]; // 32MB
-    expect(deriveFindings(a).some((x) => x.heuristicId === "maintenance_work_mem_low")).toBe(true);
+  test("maintenance_work_mem is RAM-relative: low on a big instance -> finding", () => {
+    const big = base();
+    // shared_buffers 2GB -> est RAM ~8GB; maintenance_work_mem 64MB is <3% -> fire.
+    big.sql.pgSettings = [
+      guc("shared_buffers", String((2 * 1024 * 1024 * 1024) / (8 * 1024)), "8kB"),
+      guc("maintenance_work_mem", String(64 * 1024), "kB"),
+    ];
+    expect(deriveFindings(big).some((x) => x.heuristicId === "maintenance_work_mem_low")).toBe(
+      true,
+    );
+  });
+
+  test("maintenance_work_mem correct-for-tier on a small instance -> NO finding", () => {
+    const small = base();
+    // shared_buffers 256MB -> est RAM ~1GB (Micro); 64MB maint is correct, not low.
+    small.sql.pgSettings = [
+      guc("shared_buffers", String((256 * 1024 * 1024) / (8 * 1024)), "8kB"),
+      guc("maintenance_work_mem", String(64 * 1024), "kB"),
+    ];
+    expect(deriveFindings(small).some((x) => x.heuristicId === "maintenance_work_mem_low")).toBe(
+      false,
+    );
   });
 
   test("low checkpoint_completion_target -> finding", () => {
