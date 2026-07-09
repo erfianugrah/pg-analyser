@@ -836,6 +836,107 @@ export const QUERIES = {
           and a.attnum = any (i.indkey)
       )
     order by n.nspname, c.relname, a.attname`,
+
+  // Foreign keys whose referencing columns have NO covering index. An unindexed
+  // FK forces a sequential scan of the child table on every parent UPDATE/DELETE
+  // (to find referencing rows) and escalates locks - slow cascades + contention.
+  // A covering index = the FK columns are a leading prefix of some valid index.
+  // App-scoped. Standard check (Postgres wiki "unindexed foreign keys").
+  fkUnindexed: /* sql */ `
+    select
+      n.nspname as schema,
+      n.nspname || '.' || c.relname as "table",
+      con.conname as constraint,
+      pg_get_constraintdef(con.oid) as definition
+    from pg_constraint con
+    join pg_class c on c.oid = con.conrelid
+    join pg_namespace n on n.oid = c.relnamespace
+    where con.contype = 'f'
+      and n.nspname not in (${NON_APP_SCHEMAS_SQL})
+      and not exists (
+        select 1 from pg_index i
+        where i.indrelid = con.conrelid
+          and i.indisvalid
+          and (i.indkey::smallint[])[1:cardinality(con.conkey)] @> con.conkey
+      )
+    order by 1, 2
+    limit 30`,
+
+  // Invalid / not-ready indexes: a CREATE INDEX CONCURRENTLY that failed leaves
+  // an index that is not used by the planner but still costs writes + disk. It
+  // must be dropped and rebuilt. App-scoped.
+  invalidIndexes: /* sql */ `
+    select
+      n.nspname as schema,
+      n.nspname || '.' || c.relname as index,
+      tn.nspname || '.' || tc.relname as "table",
+      not i.indisvalid as invalid,
+      not i.indisready as not_ready
+    from pg_index i
+    join pg_class c on c.oid = i.indexrelid
+    join pg_namespace n on n.oid = c.relnamespace
+    join pg_class tc on tc.oid = i.indrelid
+    join pg_namespace tn on tn.oid = tc.relnamespace
+    where (not i.indisvalid or not i.indisready)
+      and n.nspname not in (${NON_APP_SCHEMAS_SQL})
+    order by 1
+    limit 30`,
+
+  // Multixact-ID wraparound: a SEPARATE 2B ceiling from txid (relminmxid), hit
+  // by heavy row-locking (SELECT FOR SHARE/UPDATE, FK checks). The companion to
+  // txidWraparound; a table can be safe on xid age yet aging on mxid.
+  multixactWraparound: /* sql */ `
+    select
+      n.nspname as schema,
+      n.nspname || '.' || c.relname as "table",
+      mxid_age(c.relminmxid) as mxid_age,
+      round(100 * mxid_age(c.relminmxid)::numeric / 2000000000, 1) as pct_wraparound
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    where c.relkind in ('r', 'm')
+      and n.nspname not in ('pg_catalog', 'information_schema', 'pg_toast')
+      and c.relminmxid <> '0'::xid
+      and mxid_age(c.relminmxid) > 0
+    order by mxid_age(c.relminmxid) desc
+    limit 20`,
+
+  // Tables never autovacuumed AND never manually vacuumed, with meaningful row
+  // counts. A table autovacuum has never touched has never had its visibility
+  // map / statistics maintained - index-only scans can't kick in and the planner
+  // works off stale estimates. App-scoped; 10k-row floor keeps noise out.
+  neverVacuumed: /* sql */ `
+    select
+      schemaname as schema,
+      schemaname || '.' || relname as "table",
+      n_live_tup as live_rows,
+      n_dead_tup as dead_rows,
+      n_mod_since_analyze as mods_since_analyze
+    from pg_stat_user_tables
+    where last_autovacuum is null
+      and last_vacuum is null
+      and n_live_tup >= 10000
+      and schemaname not in (${NON_APP_SCHEMAS_SQL})
+    order by n_live_tup desc
+    limit 20`,
+
+  // Top WAL-generating statements (pg_stat_statements.wal_bytes) - write-
+  // amplification attribution the by-time/by-calls views miss. A single
+  // statement dominating WAL drives replication lag, backup size, and pg_wal
+  // growth on the data volume. App workload only (same noise filters).
+  topByWal: /* sql */ `
+    select
+      queryid::text as queryid,
+      round(wal_bytes) as wal_bytes,
+      pg_size_pretty(wal_bytes::bigint) as wal,
+      calls,
+      round((100 * wal_bytes / nullif(sum(wal_bytes) over (), 0))::numeric, 1) as pct_wal,
+      left(regexp_replace(query, '\\s+', ' ', 'g'), 160) as query
+    from extensions.pg_stat_statements
+    where query not ilike all (array[${PLATFORM_NOISE}])
+      and query !~* '${NOT_APP_STATEMENT}'
+      and wal_bytes > 0
+    order by wal_bytes desc
+    limit 20`,
 } as const;
 
 export type QueryKey = keyof typeof QUERIES;

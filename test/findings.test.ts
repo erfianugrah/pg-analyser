@@ -47,6 +47,11 @@ function base(): Analysis {
       tableIoStats: [],
       deadTuples: [],
       txidWraparound: [],
+      multixactWraparound: [],
+      neverVacuumed: [],
+      fkUnindexed: [],
+      invalidIndexes: [],
+      topByWal: [],
       replicationSlots: [],
       rlsPolicies: [],
       connections: [],
@@ -1280,5 +1285,97 @@ describe("config tuning (static GUC findings)", () => {
     ];
     const ids = deriveFindings(a).map((f) => f.heuristicId);
     for (const id of tuningIds) expect(ids).not.toContain(id);
+  });
+});
+
+describe("index & vacuum depth (Tier B)", () => {
+  test("unindexed foreign keys -> med finding (suppressed when advisor covers it)", () => {
+    const a = base();
+    a.sql.fkUnindexed = [
+      {
+        schema: "public",
+        table: "public.orders",
+        constraint: "orders_user_fk",
+        definition: "FOREIGN KEY (user_id) REFERENCES users(id)",
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "fk_unindexed");
+    expect(f?.severity).toBe("med");
+
+    a.advisors.performance = [
+      { name: "unindexed_foreign_keys", level: "INFO", title: "x" } as never,
+    ];
+    expect(deriveFindings(a).some((x) => x.heuristicId === "fk_unindexed")).toBe(false);
+  });
+
+  test("invalid indexes -> med finding", () => {
+    const a = base();
+    a.sql.invalidIndexes = [
+      {
+        schema: "public",
+        index: "public.idx_bad",
+        table: "public.t",
+        invalid: true,
+        not_ready: false,
+      },
+    ];
+    expect(deriveFindings(a).some((x) => x.heuristicId === "invalid_index")).toBe(true);
+  });
+
+  test("multixact wraparound crosses warn then high", () => {
+    const warn = base();
+    warn.sql.multixactWraparound = [{ table: "public.t", pct_wraparound: 20 }];
+    expect(
+      deriveFindings(warn).find((f) => f.heuristicId === "multixact_wraparound")?.severity,
+    ).toBe("med");
+    const high = base();
+    high.sql.multixactWraparound = [{ table: "public.t", pct_wraparound: 40 }];
+    expect(
+      deriveFindings(high).find((f) => f.heuristicId === "multixact_wraparound")?.severity,
+    ).toBe("high");
+  });
+
+  test("never-vacuumed tables -> low finding", () => {
+    const a = base();
+    a.sql.neverVacuumed = [
+      {
+        schema: "public",
+        table: "public.events",
+        live_rows: 500000,
+        dead_rows: 0,
+        mods_since_analyze: 500000,
+      },
+    ];
+    expect(deriveFindings(a).some((x) => x.heuristicId === "never_autovacuumed")).toBe(true);
+  });
+
+  test("WAL-dominant statement -> low finding above threshold only", () => {
+    const below = base();
+    below.sql.topByWal = [
+      {
+        queryid: "1",
+        wal_bytes: 100,
+        wal: "100 bytes",
+        calls: 10,
+        pct_wal: 30,
+        query: "update t set x=1",
+      },
+    ];
+    expect(below.sql.topByWal[0]).toBeDefined();
+    expect(deriveFindings(below).some((x) => x.heuristicId === "wal_heavy_statement")).toBe(false);
+
+    const above = base();
+    above.sql.topByWal = [
+      {
+        queryid: "1",
+        wal_bytes: 999,
+        wal: "5 GB",
+        calls: 1000,
+        pct_wal: 55,
+        query: "update t set x=1",
+      },
+    ];
+    const f = deriveFindings(above).find((x) => x.heuristicId === "wal_heavy_statement");
+    expect(f?.title).toContain("55% of WAL");
   });
 });

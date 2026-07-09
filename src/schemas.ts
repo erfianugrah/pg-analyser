@@ -348,6 +348,16 @@ export const Analysis = z.object({
     tableIoStats: SqlRows.default([]),
     deadTuples: SqlRows,
     txidWraparound: SqlRows,
+    // Multixact-ID wraparound (separate 2B ceiling from txid). Back-compat default.
+    multixactWraparound: SqlRows.default([]),
+    // Tables never (auto)vacuumed with meaningful rows. Back-compat default.
+    neverVacuumed: SqlRows.default([]),
+    // Foreign keys with no covering index (slow cascades / lock escalation).
+    fkUnindexed: SqlRows.default([]),
+    // Invalid / not-ready indexes (failed CONCURRENTLY builds). Back-compat.
+    invalidIndexes: SqlRows.default([]),
+    // Top WAL-generating statements (pg_stat_statements.wal_bytes). Back-compat.
+    topByWal: SqlRows.default([]),
     replicationSlots: SqlRows,
     rlsPolicies: SqlRows,
     connections: SqlRows,
