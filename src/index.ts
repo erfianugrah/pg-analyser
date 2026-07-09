@@ -66,6 +66,7 @@ Usage:
   sbperf full     --ref <r1>,<r2> ...          audit several projects + combined index
   sbperf full     --ref-file <refs.txt|.csv>   ...refs from a file (one per line / CSV)
   sbperf full     --all [--org <slug>]         audit every project + index.html
+  sbperf full     --all --db-config <json>     ...and upgrade each matched project to superuser SQL (PAT + connstrings = full coverage)
   sbperf snapshot --ref <ref> [--store <db>]   collect + append to the history store
   sbperf diff     <oldDir> <newDir>            compare two analysis.json runs (findings delta + query regressions)
   sbperf diff     --ref <ref> [--store <db>]   compare the two most recent store snapshots
@@ -453,6 +454,12 @@ async function doAll(
   interval?: string,
   syncCheck?: boolean,
   refFilter?: Set<string>,
+  // ref -> superuser connstring. When a project's ref is present, its SQL runs
+  // as superuser (deep SQL: WAL dir, pg_hba, exact bloat, amcheck) while the PAT
+  // still serves the API planes + metrics. Projects absent from the map stay on
+  // the PAT read-only SQL tier. This is the PAT + json maximal-coverage sweep.
+  dbUrlByRef?: Map<string, string>,
+  amcheck?: boolean | "heap",
 ): Promise<void> {
   const cfg = noPatForced() ? null : loadConfigOptional();
   if (!cfg)
@@ -491,8 +498,13 @@ async function doAll(
     else groups.set(key, [p]);
   }
   const date = new Date().toISOString().slice(0, 10);
+  const superuserHits = dbUrlByRef ? projects.filter((p) => dbUrlByRef.has(p.id)).length : 0;
   console.error(
-    `> auditing ${projects.length} project${projects.length === 1 ? "" : "s"} across ${groups.size} org${groups.size === 1 ? "" : "s"}`,
+    `> auditing ${projects.length} project${projects.length === 1 ? "" : "s"} across ${groups.size} org${groups.size === 1 ? "" : "s"}${
+      dbUrlByRef
+        ? ` (${superuserHits}/${projects.length} with a superuser connstring -> deep SQL; rest PAT read-only)`
+        : ""
+    }`,
   );
   const progress = makeProgress(projects.length);
   const sweepLog = sweepLogger();
@@ -520,13 +532,20 @@ async function doAll(
         projDir = `${slugify(p.name) || p.id}-${p.id.slice(0, 6)}-${date}`;
       usedProjDirs.add(projDir);
       progress.step(`[${orgName}] ${p.name}`);
+      // Upgrade this project to the superuser SQL tier if the json supplied a
+      // matching connstring; otherwise the PAT read-only runner is used.
+      const dbUrl = dbUrlByRef?.get(p.id);
+      const runner = dbUrl ? new DirectSqlRunner(dbUrl) : undefined;
       try {
         const analysis = await collect(p.id, transport, VERSION, {
           prometheusUrl,
           interval,
           syncCheck,
           logger: sweepLog,
-        });
+          sqlRunner: runner,
+          amcheck: runner ? amcheck : undefined,
+          region: dbUrl ? (regionFromConnstring(dbUrl) ?? undefined) : undefined,
+        }).finally(() => runner?.close());
         const counts = await emitReport(analysis, join(outBase, orgDir, projDir));
         rows.push({ name: p.name, ref: p.id, status: p.status, ...counts, dir: projDir });
         high += counts.high;
@@ -1262,12 +1281,19 @@ async function main(): Promise<void> {
       case "full": {
         if (flags.all) {
           const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+          // Maximal coverage: PAT enumerates + serves API planes/metrics, and any
+          // project whose ref has a connstring (--db-config / --db-url / env /
+          // auto-loaded sbperf.databases.json) is upgraded to superuser SQL.
+          const dbUrlByRef = new Map(targets.map((t) => [t.ref, t.dbUrl]));
           await doAll(
             flags.org,
             flags.out ?? join("reports", `all-${ts}`),
             flags.prometheus,
             flags.interval,
             !flags.noSyncCheck,
+            undefined,
+            dbUrlByRef.size ? dbUrlByRef : undefined,
+            flags.amcheck,
           );
           break;
         }
