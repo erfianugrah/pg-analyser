@@ -289,6 +289,12 @@ never `CREATE`s it. `bt_index_check` raises on a corrupt B-tree (surfaced as
 (`heap_corruption`). Both are opt-in because `verify_heapam` is I/O-heavy on a
 live database.
 
+> **On Supabase**, amcheck is bundled but `supautils`-gated as "unsafe", so the
+> regular `postgres` role cannot install it. Connect as the true superuser
+> (`supabase_admin`) and run `CREATE EXTENSION amcheck;` once, then re-run with
+> `--amcheck`. If the extension is absent, sbperf records a clear collection
+> note (naming the `supabase_admin` requirement) rather than failing.
+
 #### Multiple databases
 
 `--db-url` is repeatable, and there's a gitignored config file. `full` sweeps
