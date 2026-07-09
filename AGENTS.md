@@ -93,7 +93,13 @@ of planes, so a superuser `--db-url` reaches that data directly):
   bt_index_check per app B-tree index (it RAISES on corruption, so a thrown
   error is the hit); the heavier heap check (verify_heapam, reads every page)
   is row-returning and gated behind `--amcheck heap`. -> high findings
-  `index_corruption` / `heap_corruption`.
+  `index_corruption` / `heap_corruption`. NOTE (verified vs supabase/postgres
+  supautils.conf): amcheck is BUNDLED on Supabase but in the "unsafe" set and
+  NOT in `supautils.privileged_extensions`, so the regular `postgres` role
+  cannot `CREATE EXTENSION amcheck` - only the true superuser (`supabase_admin`)
+  can. The collect note names this so a user does not try it as `postgres` and
+  get stuck. (pg_visibility is on the same blocklist, which is why
+  `visibility_map_low` uses pg_class.relallvisible, not the extension.)
 - **PITR proxy** <- `pg_stat_archiver` + `archive_mode` (`walArchiving` query).
   Positive when archive_mode on/always + archived_count>0 ("Continuous WAL
   archiving is active"); low finding `pitr_absent` when not. INFERENCE, not the
