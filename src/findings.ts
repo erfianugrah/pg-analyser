@@ -509,6 +509,41 @@ export function deriveFindings(a: Analysis): Finding[] {
       ...meta("duplicate_index"),
     });
   }
+  // Foreign keys with no covering index (slow cascades + lock escalation).
+  // Suppress when the advisor's unindexed_foreign_keys lint already covers it.
+  const fkUnindexed = appRows(a.sql.fkUnindexed).length;
+  if (fkUnindexed > 0 && !advisorLints.has("unindexed_foreign_keys")) {
+    out.push({
+      severity: "med",
+      category: "Performance",
+      title: `${countCapped(a.sql.fkUnindexed.length, fkUnindexed, 30)} foreign ${fkUnindexed === 1 ? "key lacks" : "keys lack"} a covering index`,
+      anchor: "#fkunindexed",
+      ...meta("fk_unindexed"),
+    });
+  }
+  // Invalid / not-ready indexes (failed CONCURRENTLY builds).
+  const invalidIdx = appRows(a.sql.invalidIndexes).length;
+  if (invalidIdx > 0) {
+    out.push({
+      severity: "med",
+      category: "Performance",
+      title: `${invalidIdx} invalid ${invalidIdx === 1 ? "index" : "indexes"} (failed build - drop + rebuild)`,
+      anchor: "#invalididx",
+      ...meta("invalid_index"),
+    });
+  }
+  // Top WAL-generating statement (write-amplification hotspot).
+  const walTop = a.sql.topByWal[0];
+  if (walTop && num(walTop.pct_wal) >= THRESHOLDS.walHeavyPct) {
+    out.push({
+      severity: "low",
+      category: "Capacity",
+      title: `One statement generates ${num(walTop.pct_wal)}% of WAL (${String(walTop.wal ?? "")})`,
+      anchor: "#walbystatement",
+      evidence: `${walTop.calls ? `${Number(walTop.calls).toLocaleString()} calls. ` : ""}WAL drives replication lag, backup size, and pg_wal growth.`,
+      ...meta("wal_heavy_statement"),
+    });
+  }
   const rlsUnindexed = appRows(a.sql.rlsUnindexed).length;
   if (rlsUnindexed > 0) {
     out.push({
@@ -620,6 +655,17 @@ export function deriveFindings(a: Analysis): Finding[] {
       ...meta("autovacuum_overdue"),
     });
   }
+  // Tables never (auto)vacuumed - no visibility map / stats maintenance.
+  const neverVac = appRows(a.sql.neverVacuumed).length;
+  if (neverVac > 0) {
+    out.push({
+      severity: "low",
+      category: "Capacity",
+      title: `${countCapped(a.sql.neverVacuumed.length, neverVac)} ${neverVac === 1 ? "table has" : "tables have"} never been vacuumed (stale stats / no visibility map)`,
+      anchor: "#nevervacuumed",
+      ...meta("never_autovacuumed"),
+    });
+  }
   // Per-role connection exhaustion (a single role burning its own budget).
   for (const r of a.sql.roleStats) {
     const conns = num(r.connections);
@@ -643,6 +689,20 @@ export function deriveFindings(a: Analysis): Finding[] {
       title: `Transaction-ID wraparound at ${maxXidPct}% on the oldest table (freeze autovacuum falling behind)`,
       anchor: "#txid",
       ...meta("txid_wraparound"),
+    });
+  }
+  // Multixact-ID wraparound headroom (relminmxid toward its own 2B ceiling).
+  const maxMxidPct = a.sql.multixactWraparound.reduce(
+    (mx, r) => Math.max(mx, num(r.pct_wraparound)),
+    0,
+  );
+  if (maxMxidPct >= THRESHOLDS.txidWarnPct) {
+    out.push({
+      severity: maxMxidPct >= THRESHOLDS.txidHighPct ? "high" : "med",
+      category: "Capacity",
+      title: `Multixact-ID wraparound at ${maxMxidPct}% on the oldest table (heavy row locking; freeze falling behind)`,
+      anchor: "#multixact",
+      ...meta("multixact_wraparound"),
     });
   }
   // Replication slots: inactive slots pin WAL (disk-fill risk); large active lag

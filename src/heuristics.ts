@@ -69,9 +69,13 @@ export const THRESHOLDS = {
   diskIopsFrac: 0.8,
   /** Derived disk throughput / provisioned warning fraction. */
   diskThroughputFrac: 0.8,
-  /** age(relfrozenxid) toward the 2B ceiling: warn / high percent. */
+  /** age(relfrozenxid) toward the 2B ceiling: warn / high percent. Reused for
+   * the multixact-ID ceiling (relminmxid), which shares the same 2B limit. */
   txidWarnPct: 20,
   txidHighPct: 40,
+  /** A single statement generating at/above this % of total WAL bytes is a
+   * write-amplification hotspot worth attributing. */
+  walHeavyPct: 40,
   /** Estimated reclaimable bloat: minimum to report / bump to med. */
   bloatMinBytes: 50 * 1024 * 1024,
   bloatMedBytes: 500 * 1024 * 1024,
@@ -430,6 +434,72 @@ export const HEURISTICS: Record<string, Heuristic> = {
     remediation:
       "Review this table's indexes against the unused-index list and query patterns; drop the ones no query uses (each is disk + write overhead), and de-duplicate overlapping ones.",
     docUrl: "https://supabase.com/docs/guides/database/query-optimization",
+    reviewed: R,
+  },
+  multixact_wraparound: {
+    id: "multixact_wraparound",
+    plane: "Vacuum",
+    sql: "-- find the oldest table by multixact age, then freeze it:\nSELECT relname, mxid_age(relminmxid) FROM pg_class WHERE relkind='r' ORDER BY mxid_age(relminmxid) DESC LIMIT 5;\nVACUUM (FREEZE, VERBOSE) <schema>.<table>;",
+    howToVerify:
+      "Check mxid_age(relminmxid) on the oldest table - it should fall well below the 2B ceiling after a freeze vacuum.",
+    whyItMatters:
+      "Multixact IDs have their OWN ~2B ceiling, separate from transaction IDs, consumed by heavy row-level locking (SELECT FOR SHARE/UPDATE, FK checks). At the limit Postgres halts writes exactly like xid wraparound - and a table can be healthy on xid age yet aging fast on mxid, so it is a distinct thing to watch.",
+    remediation:
+      "Freeze the oldest tables by mxid_age(relminmxid) with VACUUM (FREEZE). If mxid age climbs fast, reduce row-lock contention (long-held SELECT FOR UPDATE, unindexed FKs forcing wide locks) and tune autovacuum_multixact_freeze_max_age.",
+    docUrl:
+      "https://www.postgresql.org/docs/current/routine-vacuuming.html#VACUUM-FOR-MULTIXACT-WRAPAROUND",
+    reviewed: R,
+  },
+  never_autovacuumed: {
+    id: "never_autovacuumed",
+    plane: "Vacuum",
+    sql: "VACUUM (ANALYZE, VERBOSE) <schema>.<table>;",
+    howToVerify:
+      "After a manual VACUUM ANALYZE, confirm pg_stat_user_tables.last_vacuum / last_analyze are set and the planner has fresh row estimates.",
+    whyItMatters:
+      "A table autovacuum has never touched has never had its visibility map or statistics maintained: index-only scans cannot skip heap fetches, and the planner costs queries off stale/absent estimates - both silently slow. It usually means the table only ever grows (insert-only) so the dead-tuple trigger never fires, while analyze still matters.",
+    remediation:
+      "Run VACUUM (ANALYZE) once to seed the visibility map + stats. For insert-only tables, set autovacuum_vacuum_insert_scale_factor / _threshold so autovacuum maintains them going forward.",
+    docUrl: "https://www.postgresql.org/docs/current/routine-vacuuming.html",
+    reviewed: R,
+  },
+  fk_unindexed: {
+    id: "fk_unindexed",
+    plane: "Query",
+    sql: "CREATE INDEX CONCURRENTLY ON <schema>.<child_table> (<fk_columns>);",
+    howToVerify:
+      "After indexing, a parent DELETE/UPDATE should use an index scan on the child (EXPLAIN ANALYZE) instead of a seq scan, and lock contention drops.",
+    whyItMatters:
+      "A foreign key with no index on its referencing columns forces a full sequential scan of the child table on every parent UPDATE/DELETE (to find referencing rows), and takes wider locks - so cascades are slow and contention spikes as the child grows. Postgres does NOT auto-create this index (unlike the one for a PRIMARY KEY).",
+    remediation:
+      "Add a btree index on the FK's referencing columns (leading columns matching the constraint) with CREATE INDEX CONCURRENTLY. This is the single most common missing-index class.",
+    docUrl: "https://www.postgresql.org/docs/current/ddl-constraints.html#DDL-CONSTRAINTS-FK",
+    reviewed: R,
+  },
+  invalid_index: {
+    id: "invalid_index",
+    plane: "Query",
+    sql: "-- rebuild it (drop the failed one, recreate concurrently):\nDROP INDEX CONCURRENTLY IF EXISTS <schema>.<index>;\nCREATE INDEX CONCURRENTLY ...;",
+    howToVerify:
+      "Confirm pg_index.indisvalid is true for the rebuilt index (\\d+ on the table, or query pg_index) - the planner will then use it.",
+    whyItMatters:
+      "An invalid or not-ready index is the debris of a CREATE INDEX CONCURRENTLY that failed midway. The planner ignores it, so it gives zero read benefit - yet it is still maintained on every write and occupies disk. It also blocks a clean re-create under the same name.",
+    remediation:
+      "Drop the invalid index (DROP INDEX CONCURRENTLY) and re-create it. Check why the concurrent build failed (a deadlock, a conflicting long transaction) before retrying.",
+    docUrl:
+      "https://www.postgresql.org/docs/current/sql-createindex.html#SQL-CREATEINDEX-CONCURRENTLY",
+    reviewed: R,
+  },
+  wal_heavy_statement: {
+    id: "wal_heavy_statement",
+    plane: "Query",
+    howToVerify:
+      "After batching / reducing the write, confirm the statement's share of pg_stat_statements.wal_bytes drops on the next window.",
+    whyItMatters:
+      "A single statement generating a large share of all WAL drives replication lag, backup/PITR size, and pg_wal growth on the data volume - a capacity and durability cost, not just a latency one. Full-page writes after a checkpoint and wide UPDATEs are common causes.",
+    remediation:
+      "Reduce write volume for the hot statement: batch or debounce high-frequency updates, avoid rewriting unchanged columns, and consider HOT-update-friendly fill factor. For bulk loads, group into fewer larger transactions.",
+    docUrl: "https://www.postgresql.org/docs/current/wal-configuration.html",
     reviewed: R,
   },
   txid_wraparound: {
