@@ -317,3 +317,98 @@ describe("collect", () => {
     });
   });
 });
+
+describe("amcheck integrity gating (opt-in, superuser + extension only)", () => {
+  // A superuser runner that: reports amcheck installed/absent via the extensions
+  // query, lists one btree target, and THROWS on bt_index_check for a corrupt
+  // index (amcheck raises rather than returning rows).
+  function amcheckRunner(opts: { installed: boolean; corruptOids?: string[] }) {
+    return {
+      source: "superuser" as const,
+      run: async (q: string) => {
+        if (/from pg_extension\b/.test(q))
+          return opts.installed ? [{ name: "amcheck", installed: "1.3", latest: "1.3" }] : [];
+        if (q.includes("amname = 'btree'")) return [{ oid: "16385", index: "public.idx_a" }];
+        if (q.includes("bt_index_check")) {
+          const oid = q.match(/bt_index_check\((\d+)/)?.[1];
+          if (opts.corruptOids?.includes(oid ?? "")) throw new Error("index tuple out of order");
+          return [];
+        }
+        if (q.includes("verify_heapam")) return [{ table: "public.t", blkno: 3, msg: "bad tuple" }];
+        return [];
+      },
+    };
+  }
+  const t = () => fakeTransport({ onMgmt: fullRoutes(), onMetrics: okMetrics });
+
+  test("not requested -> amcheck never runs (no note, empty results)", async () => {
+    const a = await collect("ref", t(), "0.0.0-test", {
+      syncCheck: false,
+      sqlRunner: amcheckRunner({ installed: true }),
+    });
+    expect(a.errors.some((e) => e.source === "amcheck")).toBe(false);
+    expect(a.sql.amcheckIndex).toHaveLength(0);
+  });
+
+  test("requested but extension not installed -> clean note, no crash", async () => {
+    const a = await collect("ref", t(), "0.0.0-test", {
+      syncCheck: false,
+      amcheck: true,
+      sqlRunner: amcheckRunner({ installed: false }),
+    });
+    const note = a.errors.find((e) => e.source === "amcheck");
+    expect(note?.message).toContain("supabase_admin");
+    expect(a.sql.amcheckIndex).toHaveLength(0);
+  });
+
+  test("requested + installed + clean index -> runs, no corruption findings", async () => {
+    const a = await collect("ref", t(), "0.0.0-test", {
+      syncCheck: false,
+      amcheck: true,
+      sqlRunner: amcheckRunner({ installed: true }),
+    });
+    expect(a.errors.some((e) => e.source === "amcheck")).toBe(false);
+    expect(a.sql.amcheckIndex).toHaveLength(0);
+  });
+
+  test("requested + installed + corrupt index -> corruption hit captured", async () => {
+    const a = await collect("ref", t(), "0.0.0-test", {
+      syncCheck: false,
+      amcheck: true,
+      sqlRunner: amcheckRunner({ installed: true, corruptOids: ["16385"] }),
+    });
+    expect(a.sql.amcheckIndex).toHaveLength(1);
+    expect(String(a.sql.amcheckIndex[0]?.index)).toBe("public.idx_a");
+    expect(String(a.sql.amcheckIndex[0]?.message)).toContain("out of order");
+  });
+
+  test("heap check only runs under --amcheck=heap", async () => {
+    const idxOnly = await collect("ref", t(), "0.0.0-test", {
+      syncCheck: false,
+      amcheck: true,
+      sqlRunner: amcheckRunner({ installed: true }),
+    });
+    expect(idxOnly.sql.amcheckHeap).toHaveLength(0);
+    const withHeap = await collect("ref", t(), "0.0.0-test", {
+      syncCheck: false,
+      amcheck: "heap",
+      sqlRunner: amcheckRunner({ installed: true }),
+    });
+    expect(withHeap.sql.amcheckHeap.length).toBeGreaterThan(0);
+  });
+
+  test("read-only tier ignores --amcheck entirely (superuser-only)", async () => {
+    const readonly = {
+      source: "read-only" as const,
+      run: async (q: string) =>
+        /from pg_extension\b/.test(q) ? [{ name: "amcheck", installed: "1.3" }] : [],
+    };
+    const a = await collect("ref", t(), "0.0.0-test", {
+      syncCheck: false,
+      amcheck: true,
+      sqlRunner: readonly,
+    });
+    expect(a.errors.some((e) => e.source === "amcheck")).toBe(false);
+    expect(a.sql.amcheckIndex).toHaveLength(0);
+  });
+});
