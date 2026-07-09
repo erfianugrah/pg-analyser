@@ -237,24 +237,11 @@ export function configTuningFindings(a: Analysis): Finding[] {
     }
   }
 
-  // Unbounded stability guardrails (a value of 0 = unlimited). lock_timeout is
-  // intentionally excluded: a global lock_timeout risks cancelling legitimate
-  // waits app-wide, so 0 is the sensible default (it is set per-operation). We
-  // flag statement_timeout (Supabase sets 120s, so 0 is unusual) and
-  // idle_in_transaction_session_timeout (0 lets an abandoned txn pin the xmin
-  // horizon + locks - the guardrail with real bloat consequences).
-  const unbounded = ["statement_timeout", "idle_in_transaction_session_timeout"]
-    .filter((k) => set.get(k) === "0")
-    .map((k) => k.replace(/_/g, " "));
-  if (unbounded.length > 0) {
-    out.push({
-      severity: "low",
-      category: "Capacity",
-      title: `${unbounded.length} unbounded timeout${unbounded.length === 1 ? "" : "s"} (${unbounded.join(", ")} = 0)`,
-      anchor,
-      ...meta("timeout_unbounded"),
-    });
-  }
+  // NOTE: statement_timeout=0 and idle_in_transaction_session_timeout=0 are
+  // already handled by dedicated findings (statement_timeout_off /
+  // idle_in_txn_timeout_off) elsewhere in deriveFindings - not re-checked here.
+  // lock_timeout=0 is intentionally never flagged (a cluster-wide lock_timeout
+  // cancels legitimate waits; 0 is the sane global default).
 
   // maintenance_work_mem too low - RAM-RELATIVE. Supabase auto-scales this with
   // the compute tier (verified: 32MB on a Nano, 64MB on a Micro), so a small
