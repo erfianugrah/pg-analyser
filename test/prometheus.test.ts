@@ -9,8 +9,18 @@ afterEach(() => {
 /** Capture the query= param from each range request the fetch would make. */
 function captureQueries(): { urls: string[] } {
   const urls: string[] = [];
+  const now = Math.floor(Date.now() / 1000);
   globalThis.fetch = (async (url: string | URL | Request) => {
-    urls.push(String(url));
+    const u = String(url);
+    // The dataStart probe (instant /api/v1/query): report data began at ~now so
+    // these scoping tests never trigger the re-scope pass. Not a panel query, so
+    // keep it out of the captured range-URL list.
+    if (u.includes("/api/v1/query?"))
+      return new Response(
+        JSON.stringify({ status: "success", data: { result: [{ value: [now, String(now)] }] } }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    urls.push(u);
     // one data point per panel so the happy path completes (all-empty throws)
     return new Response(
       JSON.stringify({ status: "success", data: { result: [{ values: [[1, "1"]] }] } }),
@@ -204,8 +214,11 @@ describe("fetchTrends ref scoping", () => {
 
 describe("fetchTrends adaptive window (auto-scope to real data span)", () => {
   const now = Math.floor(Date.now() / 1000);
-  // Mock every panel to return 3 points spanning `spanDays`, capturing URLs.
-  function mockSpanningDays(spanDays: number): string[] {
+  // Mock the range panels to return 3 points spanning `spanDays`, and the
+  // dataStart probe (instant /api/v1/query) to report data began `spanDays` ago.
+  // `probeStart` overrides what the probe reports (to simulate a coarse first
+  // pass that hides the true start). Captures range-query URLs only.
+  function mockSpanningDays(spanDays: number, probeStart = spanDays): string[] {
     const urls: string[] = [];
     const pts = [
       [now - spanDays * 86400, "1"],
@@ -213,7 +226,18 @@ describe("fetchTrends adaptive window (auto-scope to real data span)", () => {
       [now, "3"],
     ];
     globalThis.fetch = (async (url: string | URL | Request) => {
-      urls.push(String(url));
+      const u = String(url);
+      // Instant probe: min(min_over_time(timestamp(...))) -> the earliest sample.
+      if (u.includes("/api/v1/query?")) {
+        return new Response(
+          JSON.stringify({
+            status: "success",
+            data: { result: [{ value: [now, String(now - probeStart * 86400)] }] },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      urls.push(u);
       return new Response(
         JSON.stringify({ status: "success", data: { result: [{ values: pts }] } }),
         {
@@ -242,5 +266,60 @@ describe("fetchTrends adaptive window (auto-scope to real data span)", () => {
     const urls = mockSpanningDays(30); // data spans the full 30d
     await fetchTrends("http://vm", 30, "r1");
     expect(distinctStarts(urls).length).toBe(1); // single pass
+  });
+
+  test("fresh scraper: coarse pass 1 hides the start, the probe re-scopes anyway", async () => {
+    // The coarse 30d step returns a single tail point at ~now (pass 1 infers a
+    // ~0 span, so the OLD logic never re-queried). The probe reports data began
+    // ~1h ago, so the fix re-scopes to that actual span.
+    const urls: string[] = [];
+    const oneHourAgo = now - 3600;
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      const u = String(url);
+      if (u.includes("/api/v1/query?"))
+        return new Response(
+          JSON.stringify({
+            status: "success",
+            data: { result: [{ value: [now, String(oneHourAgo)] }] },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      urls.push(u);
+      return new Response(
+        JSON.stringify({ status: "success", data: { result: [{ values: [[now, "1"]] }] } }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+    await fetchTrends("http://vm", 30, "r1");
+    const starts = distinctStarts(urls);
+    expect(starts.length).toBe(2); // pass 1 (~30d) + re-query (~1h)
+    expect(now - starts[1]!).toBeLessThan(2 * 3600); // re-query window ~1h
+  });
+
+  test("probe failure falls back to the pass-1 inference", async () => {
+    // Probe returns an empty result (metric/matcher mismatch) -> null -> the
+    // old first-point inference still drives the re-scope.
+    const urls: string[] = [];
+    const pts = [
+      [now - 7 * 86400, "1"],
+      [now, "2"],
+    ];
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      const u = String(url);
+      if (u.includes("/api/v1/query?"))
+        return new Response(JSON.stringify({ status: "success", data: { result: [] } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      urls.push(u);
+      return new Response(
+        JSON.stringify({ status: "success", data: { result: [{ values: pts }] } }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+    await fetchTrends("http://vm", 30, "r1");
+    const starts = distinctStarts(urls);
+    expect(starts.length).toBe(2); // fallback inference still re-queries at ~7d
+    expect(now - starts[1]!).toBeLessThan(9 * 86400);
   });
 });
