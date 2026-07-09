@@ -441,7 +441,7 @@ export async function collect(
       errors.push({
         source: "amcheck",
         message:
-          "amcheck requested but the extension is not installed. Enable it (CREATE EXTENSION amcheck) to run integrity checks - sbperf never installs extensions itself.",
+          "amcheck requested but the extension is not installed. On Supabase, amcheck is bundled but supautils-gated as 'unsafe', so the regular postgres role cannot create it - connect as the true superuser (supabase_admin) and run CREATE EXTENSION amcheck once, then re-run with --amcheck. sbperf never installs extensions itself.",
       });
     } else {
       const targets = await safe(
