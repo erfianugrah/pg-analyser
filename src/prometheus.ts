@@ -5,17 +5,24 @@ import type { TrendSeries } from "./schemas.ts";
  * Optional 30-day trend panels, pulled from a Prometheus that scrapes the
  * project metrics endpoint (see `sbperf scrape-init`). The metrics endpoint
  * itself is point-in-time; real history only exists in a scraper's TSDB.
+ *
+ * A scraper Prometheus can hold MANY projects and every series carries a
+ * `supabase_project_ref` label, so an unscoped `avg(node_load1)` would blend
+ * every scraped project together. `refMatcher` scopes each selector to one
+ * project; empty = unscoped (single-project scraper, backward compatible).
  */
+/** A single trend panel: display title, Grafana-style unit, and its PromQL. The
+ * one source of truth shared by the report trends (fetchTrends) and the
+ * clean-room Grafana dashboard scrape-init ships - so both render the same set.
+ */
+export type TrendPanel = { title: string; unit: string; query: string };
+
 /**
- * Build the trend panel queries, each scoped to a single project when a ref is
- * given. A scraper Prometheus can hold MANY projects (see supabase-grafana's
- * multi-project mode), and every series carries a `supabase_project_ref` label,
- * so an unscoped `avg(node_load1)` would blend every scraped project together.
- * With `refMatcher` set, each metric selector is filtered to the one project;
- * with it empty, the queries are the original unscoped form (single-project
- * scraper, backward compatible).
+ * Build the trend panel specs, each scoped to a project via `refMatcher`
+ * (`supabase_project_ref="<ref>"` for the report, `supabase_project_ref="$project"`
+ * for the Grafana dashboard's template var). Empty matcher = unscoped.
  */
-function buildPanels(refMatcher: string): Array<{ title: string; unit: string; query: string }> {
+export function buildPanels(refMatcher: string): TrendPanel[] {
   const sel = (metric: string, ...extra: string[]): string => {
     const inner = [...extra, refMatcher].filter(Boolean).join(", ");
     return inner ? `${metric}{${inner}}` : metric;
@@ -181,15 +188,22 @@ export async function fetchTrends(
 
   // Pass 1: the requested window.
   let series = await queryWindow(base, panels, end - days * 86400, end, reqInit, refMatcher);
-  // Auto-scope to the real data span: a young project (created days ago) has no
-  // data across most of a 30/90-day window, so a fixed step smears a handful of
-  // points across mostly-empty time. Detect where data actually starts and, if
-  // it fills well under the requested window, re-query [dataStart, now] so the
-  // step gives full resolution over the span that exists. No created_at needed
-  // (no-PAT has none) - inferred from the returned series.
-  const starts = series.flatMap((s) => (s.points.length ? [s.points[0]!.t] : []));
-  if (starts.length) {
-    const dataStart = Math.min(...starts);
+  // Auto-scope to the real data span: a young project (created days ago) or a
+  // freshly-started scraper has no data across most of a 30/90-day window, so a
+  // fixed step smears a handful of points across mostly-empty time. Re-query
+  // [dataStart, now] so the step gives full resolution over the span that
+  // actually exists. No created_at needed (no-PAT has none).
+  //
+  // dataStart comes from an explicit probe (min_over_time(timestamp(...))) NOT
+  // from pass 1's first points: over a 30d window pass 1's step is ~13000s, so
+  // for an hour-old scrape it returns a single tail point at ~now, making the
+  // inferred span ~0 - the re-scope would never fire and every panel collapses
+  // to one flat point. The probe finds the true earliest sample regardless of
+  // the outer step. Falls back to the pass-1 inference if the probe fails.
+  const inferred = series.flatMap((s) => (s.points.length ? [s.points[0]!.t] : []));
+  const probed = await probeDataStart(base, refMatcher, end, days, reqInit).catch(() => null);
+  const dataStart = probed ?? (inferred.length ? Math.min(...inferred) : null);
+  if (dataStart != null) {
     const spanDays = (end - dataStart) / 86400;
     if (spanDays > 0 && spanDays < days * 0.6)
       series = await queryWindow(base, panels, Math.floor(dataStart), end, reqInit, refMatcher);
@@ -197,12 +211,46 @@ export async function fetchTrends(
   return series;
 }
 
+const InstantResponse = z.object({
+  status: z.string(),
+  data: z.object({ result: z.array(z.object({ value: z.tuple([z.number(), z.string()]) })) }),
+});
+
+/**
+ * Find the real earliest-sample timestamp (unix seconds) for this project via an
+ * instant `min(min_over_time(timestamp(<probe>)[<days>d:<res>]))` query. This is
+ * robust to a coarse outer step (a 30d range step of ~13000s misses that data
+ * only started an hour ago), so the caller can re-scope to the span that exists.
+ * Uses node_load1 - a metric every node_exporter target emits. Returns null when
+ * the probe yields no series (metric/matcher mismatch) so the caller falls back.
+ */
+async function probeDataStart(
+  base: string,
+  refMatcher: string,
+  end: number,
+  days: number,
+  reqInit: RequestInit,
+): Promise<number | null> {
+  const sel = refMatcher ? `node_load1{${refMatcher}}` : "node_load1";
+  const res = days <= 2 ? "5m" : "1h";
+  const query = `min(min_over_time(timestamp(${sel})[${Math.ceil(days)}d:${res}]))`;
+  const url = `${base}/api/v1/query?query=${encodeURIComponent(query)}&time=${end}`;
+  const r = await fetch(url, reqInit);
+  if (!r.ok) return null;
+  const parsed = InstantResponse.parse(await r.json());
+  if (parsed.status !== "success") return null;
+  const v = parsed.data.result[0]?.value[1];
+  if (v === undefined) return null;
+  const t = Number(v);
+  return Number.isFinite(t) && t > 0 ? t : null;
+}
+
 /** Fetch every panel over [start, end] at a ~200-point step. Throws (for the
  * caller's safe() to record) on auth redirect, non-JSON, a query error, or when
  * every panel returns 0 series (matcher/ref mismatch). */
 async function queryWindow(
   base: string,
-  panels: Array<{ title: string; unit: string; query: string }>,
+  panels: TrendPanel[],
   start: number,
   end: number,
   reqInit: RequestInit,
