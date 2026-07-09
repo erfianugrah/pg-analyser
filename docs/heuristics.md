@@ -292,7 +292,8 @@ High Disk I/O troubleshooting.
 | id | signal | threshold | sev | status |
 |---|---|---|---|---|
 | `cache_hit_low` | `blks_hit / (blks_hit + blks_read)` | < 99% | med | HAVE |
-| `timeout_unbounded` | `statement_timeout` OR `idle_in_transaction_session_timeout` = 0 (title lists which). `lock_timeout` is intentionally EXCLUDED - a cluster-wide lock_timeout cancels legit waits, so 0 is the sane global default | any =0 | low | HAVE |
+| `statement_timeout_off` | `statement_timeout = 0` (unlimited - a runaway query runs forever). Supabase sets 120s global + per-role, so 0 is unusual; a real guardrail on self-hosted PG | =0 | low | HAVE |
+| `idle_in_txn_timeout_off` | `idle_in_transaction_session_timeout = 0` - an abandoned open txn pins locks + the xmin horizon (blocks autovacuum). Owns the idle case (kept separate from statement_timeout_off); `lock_timeout=0` is NOT flagged (sane global default) | =0 | low | HAVE |
 | `work_mem_blast` | worst-case `work_mem x max_connections x parallel` vs RAM estimated from `shared_buffers` (~25%) - a broad OOM risk from a high global work_mem | worst case >= est RAM (`workMemBlastFrac` 1.0) | med | HAVE |
 | `maintenance_work_mem_low` | RAM-RELATIVE (Supabase tier-scales it, so a small value on a small instance is correct): flagged only when < `maintWorkMemMinFrac` 3% of est RAM AND est RAM >= `maintWorkMemMinRamGb` 8GB | see thresholds | low | HAVE |
 | `checkpoint_completion_low` | `checkpoint_completion_target` below 0.9 spreads checkpoint I/O too tightly (spiky flushes) | < `checkpointCompletionMin` 0.7 | low | HAVE |

@@ -1239,17 +1239,26 @@ describe("config tuning (static GUC findings)", () => {
     expect(f?.severity).toBe("med");
   });
 
-  test("unbounded timeouts (0) -> timeout_unbounded (lock_timeout excluded)", () => {
+  test("statement_timeout=0 -> statement_timeout_off; idle owned by its own finding; lock ignored", () => {
     const a = base();
     a.sql.pgSettings = [
       guc("statement_timeout", "0"),
       guc("idle_in_transaction_session_timeout", "0"),
       guc("lock_timeout", "0"),
     ];
-    const f = deriveFindings(a).find((x) => x.heuristicId === "timeout_unbounded");
-    // lock_timeout is intentionally not flagged (sane global default).
-    expect(f?.title).toContain("2 unbounded");
-    expect(f?.title).not.toContain("lock timeout");
+    const ids = deriveFindings(a).map((f) => f.heuristicId);
+    expect(ids).toContain("statement_timeout_off");
+    // idle_in_transaction is owned by the dedicated finding, not double-reported.
+    expect(ids).toContain("idle_in_txn_timeout_off");
+    expect(ids).not.toContain("timeout_unbounded");
+    // lock_timeout=0 is the sane global default - never flagged.
+    expect(ids.filter((i) => i === "statement_timeout_off")).toHaveLength(1);
+  });
+
+  test("statement_timeout set (Supabase 120s) -> no statement_timeout_off", () => {
+    const a = base();
+    a.sql.pgSettings = [guc("statement_timeout", "120000", "ms")];
+    expect(deriveFindings(a).some((x) => x.heuristicId === "statement_timeout_off")).toBe(false);
   });
 
   test("track_io_timing off -> finding", () => {
@@ -1303,7 +1312,7 @@ describe("config tuning (static GUC findings)", () => {
     ];
     const tuningIds = [
       "work_mem_blast",
-      "timeout_unbounded",
+      "statement_timeout_off",
       "track_io_timing_off",
       "maintenance_work_mem_low",
       "checkpoint_completion_low",

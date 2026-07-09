@@ -663,19 +663,6 @@ export const HEURISTICS: Record<string, Heuristic> = {
       "https://www.postgresql.org/docs/current/runtime-config-statistics.html#GUC-TRACK-IO-TIMING",
     reviewed: R,
   },
-  timeout_unbounded: {
-    id: "timeout_unbounded",
-    plane: "Config",
-    sql: "-- bound runaway work (per database or role):\nALTER DATABASE postgres SET statement_timeout = '120s';\nALTER DATABASE postgres SET idle_in_transaction_session_timeout = '60s';\nALTER DATABASE postgres SET lock_timeout = '30s';",
-    howToVerify:
-      "Confirm SHOW for each timeout returns a non-zero value, and that a deliberately long test statement is cancelled.",
-    whyItMatters:
-      "A timeout of 0 is unlimited. Without statement_timeout a runaway query runs forever; without idle_in_transaction_session_timeout an abandoned open transaction pins locks and the xmin horizon (blocking autovacuum, driving bloat). Each is a stability guardrail. (lock_timeout is intentionally left at 0 globally - a cluster-wide lock_timeout cancels legitimate waits; scope it per-operation instead.)",
-    remediation:
-      "Set sane non-zero bounds for statement_timeout and idle_in_transaction_session_timeout at the database or role level - scope longer values to the roles that need them (batch/migration). Supabase sets statement_timeout per-role for API traffic; this checks the global value.",
-    docUrl: "https://www.postgresql.org/docs/current/runtime-config-client.html",
-    reviewed: R,
-  },
   mem_pressure_paging: {
     id: "mem_pressure_paging",
     plane: "Compute",
