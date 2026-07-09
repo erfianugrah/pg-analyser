@@ -292,6 +292,7 @@ async function doAllDbs(
   prometheusUrl?: string,
   interval?: string,
   syncCheck?: boolean,
+  amcheck?: boolean | "heap",
 ): Promise<void> {
   const transport = resolveTransport();
   console.error(
@@ -331,6 +332,7 @@ async function doAllDbs(
         interval,
         sqlRunner: runner,
         syncCheck,
+        amcheck,
         name: t.name,
         region: t.region ?? regionFromConnstring(t.dbUrl) ?? undefined,
         logger: sweepLog,
@@ -1316,6 +1318,7 @@ async function main(): Promise<void> {
             flags.prometheus,
             flags.interval,
             !flags.noSyncCheck,
+            flags.amcheck,
           );
           break;
         }
