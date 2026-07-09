@@ -1,7 +1,16 @@
 # Capacity + health-check expansion
 
-Status: proposed
+Status: implemented (Tiers A/B/C landed 2026-07-09)
 Date: 2026-07-09
+
+Deferred (documented, not built): bgwriter / pg_stat_io read-latency (version-
+fragile across PG15/16/17 and low signal on managed Supabase); the elevated-
+login-role audit (too noisy against Supabase's managed role set without a
+fragile maintained denylist - the anti-pattern the Conventions section warns
+against); and full read-replica multi-volume attribution in the `--all` fleet
+index (the org disk_modifications entitlement IS wired, but per-replica volume
+rollup needs an --all rendering rework). W3B WAL generation-rate trend was
+scoped to per-statement wal_bytes attribution rather than a derived rate.
 
 Three workstreams that extend sbperf's diagnostic coverage, each grounded in a
 verified capability gap between what sbperf collects today and what its data

@@ -49,6 +49,14 @@ function fullRoutes(overrides: Record<string, () => Response> = {}) {
       return jsonResponse([]);
     }
     if (clean === "/v1/projects/ref") return jsonResponse(project);
+    if (clean === "/v1/organizations")
+      return jsonResponse([
+        { id: "exampleorgbbbbbbbbbb", name: "Example Org", slug: "example-org" },
+      ]);
+    if (clean.endsWith("/entitlements"))
+      return jsonResponse({
+        entitlements: [{ feature: { key: "instances.disk_modifications" }, hasAccess: true }],
+      });
     return textResponse("not found", 404);
   };
 }

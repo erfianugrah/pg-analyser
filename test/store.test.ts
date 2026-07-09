@@ -58,6 +58,8 @@ function makeAnalysis(opts: {
       fkUnindexed: [],
       invalidIndexes: [],
       topByWal: [],
+      visibilityMap: [],
+      publicSchemaCreate: [],
       replicationSlots: [],
       rlsPolicies: [],
       connections: [],

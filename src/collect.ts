@@ -188,6 +188,8 @@ export async function collect(
     fkUnindexed,
     invalidIndexes,
     topByWal,
+    visibilityMap,
+    publicSchemaCreate,
     replicationSlots,
     rlsPolicies,
     connections,
@@ -247,6 +249,8 @@ export async function collect(
     sql("fkUnindexed"),
     sql("invalidIndexes"),
     sql("topByWal"),
+    sql("visibilityMap"),
+    sql("publicSchemaCreate"),
     sql("replicationSlots"),
     sql("rlsPolicies"),
     sql("connections"),
@@ -397,6 +401,28 @@ export async function collect(
   // "relation cron.job does not exist" note on every DB without pg_cron), gate
   // on the extension inventory we already collected - the proper way to detect
   // an optional feature. Most DBs don't run pg_cron; absence is normal.
+  // Org entitlement: can this plan modify disk without a compute upgrade? (The
+  // grow-only-autoscale counterpart - answers whether an over-provisioned
+  // volume can even be resized down on this org's plan.) PAT-only; two calls
+  // (org slug lookup + entitlements), so gated on having a project + org id.
+  const diskModifiable =
+    m && project?.organization_id
+      ? await safe(
+          "entitlements",
+          async () => {
+            const orgs = await m.organizations();
+            const slug = orgs.find((o) => o.id === project.organization_id)?.slug;
+            if (!slug) return null;
+            const ent = await m.orgEntitlements(slug);
+            const dm = ent.entitlements.find(
+              (e) => e.feature.key === "instances.disk_modifications",
+            );
+            return dm ? dm.hasAccess : null;
+          },
+          null as boolean | null,
+        )
+      : null;
+
   const hasPgCron = extensions.some((r) => String(r.name) === "pg_cron");
   const cronJobs = hasPgCron
     ? await safe("sql:cronJobs", () => runner.run(QUERIES.cronJobs), [])
@@ -510,6 +536,7 @@ export async function collect(
           usedBytes: diskUtil?.metrics.fs_used_bytes ?? null,
           availBytes: diskUtil?.metrics.fs_avail_bytes ?? null,
           lastModifiedAt: disk.last_modified_at ?? null,
+          modifiable: diskModifiable,
           autoscale: diskAutoscale
             ? {
                 growthPercent: diskAutoscale.growth_percent,
@@ -559,6 +586,8 @@ export async function collect(
       fkUnindexed,
       invalidIndexes,
       topByWal,
+      visibilityMap,
+      publicSchemaCreate,
       replicationSlots,
       rlsPolicies: rlsClassified,
       connections,

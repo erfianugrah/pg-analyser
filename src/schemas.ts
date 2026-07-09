@@ -27,6 +27,19 @@ export const Organization = z.object({
 });
 export type Organization = z.infer<typeof Organization>;
 
+// GET /v1/organizations/{slug}/entitlements. We only read feature.key +
+// hasAccess; config/type vary by feature and are not needed. Non-strict so
+// upstream adding feature keys never breaks the parse.
+export const Entitlements = z.object({
+  entitlements: z.array(
+    z.object({
+      feature: z.object({ key: z.string() }),
+      hasAccess: z.boolean(),
+    }),
+  ),
+});
+export type Entitlements = z.infer<typeof Entitlements>;
+
 export const ServiceHealth = z.object({
   name: z.string(),
   healthy: z.boolean(),
@@ -288,6 +301,9 @@ export const Analysis = z.object({
         })
         .nullable()
         .default(null),
+      // Org entitlement: can this plan modify disk without a compute upgrade?
+      // null = unknown (no PAT, or entitlement lookup skipped/failed).
+      modifiable: z.boolean().nullable().default(null),
     })
     .nullable(),
   pgConfig: z.record(z.string(), z.unknown()).nullable(),
@@ -358,6 +374,11 @@ export const Analysis = z.object({
     invalidIndexes: SqlRows.default([]),
     // Top WAL-generating statements (pg_stat_statements.wal_bytes). Back-compat.
     topByWal: SqlRows.default([]),
+    // Large app tables with a low all-visible page fraction (index-only-scan
+    // readiness / vacuum lag). Back-compat default.
+    visibilityMap: SqlRows.default([]),
+    // Whether the PUBLIC role can CREATE in schema public. Back-compat default.
+    publicSchemaCreate: SqlRows.default([]),
     replicationSlots: SqlRows,
     rlsPolicies: SqlRows,
     connections: SqlRows,

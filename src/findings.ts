@@ -532,6 +532,27 @@ export function deriveFindings(a: Analysis): Finding[] {
       ...meta("invalid_index"),
     });
   }
+  // Large tables with a low all-visible page fraction (index-only-scan limited).
+  const lowVis = appRows(a.sql.visibilityMap).length;
+  if (lowVis > 0) {
+    out.push({
+      severity: "low",
+      category: "Performance",
+      title: `${countCapped(a.sql.visibilityMap.length, lowVis)} large ${lowVis === 1 ? "table has" : "tables have"} a low all-visible ratio (index-only scans limited; vacuum behind)`,
+      anchor: "#visibilitymap",
+      ...meta("visibility_map_low"),
+    });
+  }
+  // PUBLIC can CREATE in schema public (privilege-escalation surface).
+  if (a.sql.publicSchemaCreate.some((r) => r.public_create === true)) {
+    out.push({
+      severity: "med",
+      category: "Security",
+      title: "PUBLIC can CREATE objects in schema public",
+      anchor: "#seccfg",
+      ...meta("public_schema_create"),
+    });
+  }
   // Top WAL-generating statement (write-amplification hotspot).
   const walTop = a.sql.topByWal[0];
   if (walTop && num(walTop.pct_wal) >= THRESHOLDS.walHeavyPct) {
@@ -639,7 +660,7 @@ export function deriveFindings(a: Analysis): Finding[] {
           category: "Capacity",
           title: `Disk over-provisioned: ${a.disk.sizeGb} GB volume, ${Math.round(usedFrac * 100)}% used (${bytesGb(a.disk.usedBytes)})`,
           anchor: "#infra",
-          evidence: `~${wasteGb.toFixed(0)} GB unused.${reclaimNote}${a.disk.autoscale ? " Autoscale is grow-only - it will not shrink this back." : ""}`,
+          evidence: `~${wasteGb.toFixed(0)} GB unused.${reclaimNote}${a.disk.autoscale ? " Autoscale is grow-only - it will not shrink this back." : ""}${a.disk.modifiable === false ? " NOTE: this org's plan cannot modify disk without a compute upgrade." : ""}`,
           ...meta("disk_oversized"),
         });
       }
