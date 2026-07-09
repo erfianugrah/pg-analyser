@@ -45,3 +45,6 @@ sbperf.grafana.*.json
 sbperf.profile.json
 sbperf.*.profile.json
 sbperf.work.env
+
+# local scrape-init scratch stack (embeds a service_role credential)
+/scraper/

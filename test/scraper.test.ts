@@ -44,6 +44,18 @@ describe("writeScraper", () => {
     expect(existsSync(join(dir, "grafana/provisioning/datasources/prometheus.yml"))).toBe(true);
     const dash = JSON.parse(await readFile(join(dir, "grafana/dashboards/supabase.json"), "utf8"));
     expect(dash.panels.length).toBeGreaterThan(0);
+    // Clean-room dashboard: scoped to a `project` template var over the NATIVE
+    // supabase_project_ref label the metrics endpoint emits itself, so it renders
+    // against any Prometheus scraping the endpoint with no relabelling.
+    const projectVar = dash.templating.list.find((v: { name: string }) => v.name === "project");
+    expect(projectVar.definition).toBe("label_values(node_load1, supabase_project_ref)");
+    expect(JSON.stringify(dash.panels)).toContain('supabase_project_ref=\\"$project\\"');
+    // datasource uid pinned so provisioned panels resolve deterministically
+    const dsYml = await readFile(
+      join(dir, "grafana/provisioning/datasources/prometheus.yml"),
+      "utf8",
+    );
+    expect(dsYml).toContain("uid: prometheus");
 
     // named volumes, not host bind mounts (the uid-mismatch crash fix)
     expect(await readFile(join(dir, "compose.yml"), "utf8")).toContain("prometheus-data:");
