@@ -504,6 +504,12 @@ cd scraper-live && docker compose up -d
 bun run src/index.ts full --ref <ref> --prometheus http://localhost:9090
 ```
 
+The generated stack (compose layout, scrape config, the clean-room Grafana
+dashboard scoped on the native `supabase_project_ref` label, the auto-scoped
+query window, multi-project scrapes, retroactive backfill, and verification
+commands) is documented in detail in
+[`docs/grafana-prometheus.md`](docs/grafana-prometheus.md).
+
 `--prometheus` trends take precedence over the history store when both exist.
 For an **auth'd** datasource - e.g. a Grafana datasource-proxy path
 (`.../api/datasources/proxy/uid/<uid>`) - add auth: `--prometheus-token <t>` (a
