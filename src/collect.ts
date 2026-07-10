@@ -91,6 +91,16 @@ export async function collect(
       const message = err instanceof Error ? err.message : String(err);
       done({ ok: false });
       const expectedAbsence = /(relation|schema) "[^"]+" does not exist/i.test(message);
+      // A Grafana/Prometheus trends datasource that redirects to an SSO login
+      // (expired/missing session cookie) or hands back an HTML login page is
+      // simply UNAVAILABLE for this project - the direct analogue of the sweep's
+      // grafanaGap ("no Grafana config for region") skip, not a real failure.
+      // Still record it as a collection note (so the report shows trends were
+      // skipped) but demote the log from WARN "plane failed" to a quiet INFO -
+      // an expired cookie mid-sweep shouldn't read like something broke.
+      const trendsUnavailable =
+        source === "trends" &&
+        /session cookie\/token is missing or expired|an HTML login page/i.test(message);
       if (expectedAbsence) {
         // Optional feature simply not present on this DB (pg_cron, storage, the
         // vector type, ... on a non-Supabase / extension-less database). The
@@ -98,6 +108,9 @@ export async function collect(
         // debug log and NOT a collection note - surfacing "relation X does not
         // exist" in the report reads like a failure when nothing went wrong.
         clog.debug("plane absent", { source, error: message });
+      } else if (trendsUnavailable) {
+        errors.push({ source, message: `${message} - trends skipped` });
+        clog.info("trends skipped", { source, error: message });
       } else {
         errors.push({ source, message });
         clog.warn("plane failed", { source, error: message });
