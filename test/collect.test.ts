@@ -203,6 +203,40 @@ describe("collect", () => {
     expect(notes.find((o) => o.msg === "plane absent")?.level).toBe("debug");
   });
 
+  test("an expired/missing Grafana session is a soft 'trends skipped', NOT a warn 'plane failed'", async () => {
+    const realFetch = globalThis.fetch;
+    // A datasource behind SSO 302-redirects an unauthenticated range query to
+    // the IdP; fetchTrends surfaces it as "session cookie/token is missing or
+    // expired". This must degrade like the region-has-no-Grafana skip.
+    globalThis.fetch = (async () =>
+      new Response(null, {
+        status: 302,
+        headers: { location: "https://accounts.google.com/o/oauth2/v2/auth" },
+      })) as unknown as typeof fetch;
+    try {
+      const lines: string[] = [];
+      const logger = makeLogger({ level: "debug", json: true, sink: (l) => lines.push(l) });
+      const t = fakeTransport({ onMgmt: fullRoutes(), onMetrics: okMetrics });
+      const a = await collect("ref", t, "0.0.0-test", {
+        syncCheck: false,
+        logger,
+        prometheusUrl: "https://grafana.example/api/datasources/proxy/uid/x",
+        prometheusCookie: "grafana_session=stale",
+      });
+      // The run still completes with empty trends, not a thrown error.
+      expect(a.trends).toEqual([]);
+      // Recorded as a collection note worded as a skip (so the report shows it)...
+      const note = a.errors.find((e) => e.source === "trends");
+      expect(note?.message).toContain("trends skipped");
+      // ...but logged at INFO "trends skipped", never WARN "plane failed".
+      const events = lines.map((l) => JSON.parse(l)).filter((o) => o.source === "trends");
+      expect(events.find((o) => o.msg === "plane failed")).toBeUndefined();
+      expect(events.find((o) => o.msg === "trends skipped")?.level).toBe("info");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
   test("cronJobs is gated on the pg_cron extension - never fired (nor noted) when absent", async () => {
     let cronQueried = false;
     const runner = {
