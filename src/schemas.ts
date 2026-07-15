@@ -280,6 +280,22 @@ export const Analysis = z.object({
     // Grafana TSDB, "store" = the sbperf SQLite history store, "import" = an
     // imported CSV/JSON series. Absent = no trends (single run).
     trendSource: z.enum(["prometheus", "store", "import"]).optional(),
+    // Result of the superuser log-directory probe (Check 1 of the lock-
+    // contention plan). Three facts gate whether retrospective log parsing is
+    // meaningful: readable at all, retention span of the newest files, and
+    // which node pg_read_file routed to (a pooler may route off the node that
+    // logged an incident). Null when not attempted (read-only tier / paused DB).
+    logProbe: z
+      .object({
+        readable: z.boolean(),
+        nodeAddr: z.string().nullable(),
+        newestFile: z.string().nullable(),
+        oldestFile: z.string().nullable(),
+        spanHours: z.number().nullable(),
+        files: z.number(),
+      })
+      .nullable()
+      .default(null),
   }),
   health: HealthList,
   disk: z

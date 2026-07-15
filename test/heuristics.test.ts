@@ -38,6 +38,7 @@ function base(): Analysis {
       collectedAt: "x",
       sbperfVersion: "t",
       sqlSource: "read-only",
+      logProbe: null,
     },
     health: [],
     disk: null,

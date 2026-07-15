@@ -21,6 +21,7 @@ function makeAnalysis(opts: {
       collectedAt: opts.collectedAt,
       sbperfVersion: "0.0.0-test",
       sqlSource: "read-only",
+      logProbe: null,
     },
     health: [],
     disk: null,
