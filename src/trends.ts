@@ -122,6 +122,10 @@ type ScalarDef = { title: string; unit: string; key: string };
 const SCALARS: ScalarDef[] = [
   { title: "Cache hit (%)", unit: "%", key: "cache_hit_pct" },
   { title: "Index hit (%)", unit: "%", key: "index_hit_pct" },
+  // SQL-derived (no metric equivalent), so store-path only - the Grafana path
+  // has no per-slot lag family. In no-PAT+Grafana slot growth degrades to the
+  // point-in-time slot findings; here it becomes a trendable growth signal.
+  { title: "Slot WAL retained (max, bytes)", unit: "bytes", key: "slot_wal_retained_max_bytes" },
 ];
 
 function scalarSeries(snaps: SnapshotForTrends[], def: ScalarDef): TrendSeries | null {
@@ -260,6 +264,26 @@ function fsUsedPctSeries(
 }
 
 /**
+ * Provisioned filesystem size (bytes) on a mountpoint, per snapshot. The
+ * absolute size the fsUsedPct ratio hides - needed to detect a volume RESIZE (a
+ * step-change in the denominator) and to project fill against real bytes rather
+ * than the % (which resets on every expansion).
+ */
+function fsSizeSeries(
+  snaps: SnapshotForTrends[],
+  mountpoint: string,
+  title: string,
+): TrendSeries | null {
+  const f = { mountpoint };
+  const points: TrendPoint[] = [];
+  for (const snap of snaps) {
+    if (!has(snap.samples, "node_filesystem_size_bytes", f)) continue;
+    points.push({ t: snap.ts, v: sumOf(snap.samples, "node_filesystem_size_bytes", f) });
+  }
+  return points.length ? { title, unit: "bytes", points } : null;
+}
+
+/**
  * Swap used = SwapTotal - SwapFree, per snapshot. A computed gauge (two
  * metrics), so it doesn't fit the single-name GaugeDef path. Swap in use is a
  * memory-pressure signal - each project has ~1GB swap and swapping is disk I/O.
@@ -298,6 +322,7 @@ export function computeTrends(
   push(memUsedPctSeries(snaps));
   push(fsUsedPctSeries(snaps, "/data", "Disk used (%)"));
   push(fsUsedPctSeries(snaps, "/", "Root FS used (%)"));
+  push(fsSizeSeries(snaps, "/data", "Disk size (bytes)"));
   push(swapUsedSeries(snaps));
   for (const g of GAUGES) push(gaugeSeries(snaps, g));
   for (const r of RATES) push(rateSeries(snaps, r));

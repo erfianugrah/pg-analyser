@@ -8,6 +8,7 @@ function makeAnalysis(opts: {
   samples?: MetricSample[];
   cacheHit?: number | null;
   indexHit?: number | null;
+  slots?: Array<Record<string, unknown>>;
 }): Analysis {
   return {
     meta: {
@@ -61,7 +62,7 @@ function makeAnalysis(opts: {
       topByWal: [],
       visibilityMap: [],
       publicSchemaCreate: [],
-      replicationSlots: [],
+      replicationSlots: opts.slots ?? [],
       rlsPolicies: [],
       connections: [],
       roleStats: [],
@@ -131,6 +132,33 @@ describe("HistoryStore", () => {
     expect(store.snapshotCount("b")).toBe(1);
     expect(store.snapshotCount("missing")).toBe(0);
     expect(store.refs().sort()).toEqual(["a", "b"]);
+    store.close();
+  });
+
+  test("slot_wal_retained_max_bytes = max over ACTIVE slots, null when none active", () => {
+    const store = HistoryStore.open(":memory:");
+    store.record(
+      makeAnalysis({
+        ref: "a",
+        collectedAt: "2026-07-01T00:00:00Z",
+        slots: [
+          { slot_name: "s1", active: true, retained_wal_bytes: 100 },
+          { slot_name: "s2", active: true, retained_wal_bytes: 400 },
+          { slot_name: "dead", active: false, retained_wal_bytes: 9999 },
+        ],
+      }),
+    );
+    store.record(
+      makeAnalysis({
+        ref: "b",
+        collectedAt: "2026-07-01T00:00:00Z",
+        slots: [{ slot_name: "dead", active: false, retained_wal_bytes: 500 }],
+      }),
+    );
+    // active max is 400 (the inactive slot's 9999 is excluded)
+    expect(store.loadForTrends("a")[0]?.scalars.slot_wal_retained_max_bytes).toBe(400);
+    // no active slots -> scalar not stored
+    expect(store.loadForTrends("b")[0]?.scalars.slot_wal_retained_max_bytes).toBeUndefined();
     store.close();
   });
 
