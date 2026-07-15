@@ -38,6 +38,7 @@ function base(): Analysis {
       cacheHitPct: null,
       indexHitPct: null,
       cacheBlocksAccessed: null,
+      statementsDealloc: null,
       tableStatsResetAge: null,
       statsResetAge: null,
       pgSettings: [],
@@ -71,6 +72,7 @@ function base(): Analysis {
       storageUsage: [],
       extensions: [],
       unindexedVectors: [],
+      sequenceExhaustion: [],
       walArchiving: [],
       hbaRules: [],
       authAudit: [],
@@ -204,6 +206,58 @@ describe("countDepletionEpisodes + episodic EBS framing", () => {
     expect(f?.title).toContain("currently 99%");
     // recovered + recurred -> still high (>=2 episodes)
     expect(f?.severity).toBe("high");
+  });
+});
+
+describe("archiver failure / sequence exhaustion / statement eviction", () => {
+  test("a currently-failing archiver fires HIGH and suppresses the WAL-active positive", () => {
+    const a = base();
+    a.backups = null; // no-PAT: PITR proxy path
+    a.sql.walArchiving = [
+      {
+        archive_mode: "on",
+        archived_count: 100,
+        failed_count: 3,
+        last_failed_time: "2026-07-15 09:00:00+00",
+        archiver_failing: true,
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "archiver_failing");
+    expect(f?.severity).toBe("high");
+    expect(f?.title).toContain("failing");
+    // the "active" positive must NOT appear while failing
+    expect(derivePositives(a).some((p) => p.title.includes("WAL archiving is active"))).toBe(false);
+  });
+  test("a recovered archiver (archiver_failing false) does NOT fire, positive returns", () => {
+    const a = base();
+    a.backups = null;
+    a.sql.walArchiving = [
+      { archive_mode: "on", archived_count: 100, failed_count: 2, archiver_failing: false },
+    ];
+    expect(deriveFindings(a).some((x) => x.heuristicId === "archiver_failing")).toBe(false);
+    expect(derivePositives(a).some((p) => p.title.includes("WAL archiving is active"))).toBe(true);
+  });
+  test("sequence exhaustion: HIGH past the escalation line, MED below", () => {
+    const a = base();
+    a.sql.sequenceExhaustion = [
+      { schema: "public", sequence: "public.orders_id_seq", pct_used: 93.2 },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "sequence_exhaustion");
+    expect(f?.severity).toBe("high");
+    expect(f?.title).toContain("public.orders_id_seq");
+    a.sql.sequenceExhaustion = [{ schema: "public", sequence: "public.s", pct_used: 74 }];
+    expect(deriveFindings(a).find((x) => x.heuristicId === "sequence_exhaustion")?.severity).toBe(
+      "med",
+    );
+  });
+  test("nonzero dealloc fires the statements-evicted finding", () => {
+    const a = base();
+    a.sql.statementsDealloc = 1200;
+    const f = deriveFindings(a).find((x) => x.heuristicId === "statements_evicted");
+    expect(f?.severity).toBe("low");
+    expect(f?.title).toContain("1200");
+    a.sql.statementsDealloc = 0;
+    expect(deriveFindings(a).some((x) => x.heuristicId === "statements_evicted")).toBe(false);
   });
 });
 
@@ -865,7 +919,7 @@ describe("deriveFindings", () => {
     const p = derivePositives(a).map((x) => x.title);
     expect(p.some((t) => t.includes("Cache hit ratio 99.6%"))).toBe(true);
     expect(p.some((t) => t.includes("All 1 RLS policy wraps auth"))).toBe(true);
-    expect(p.some((t) => t.includes("All RLS policy columns are indexed"))).toBe(true);
+    expect(p.some((t) => t.includes("All application RLS policy columns are indexed"))).toBe(true);
     expect(p.some((t) => t.includes("No unused indexes"))).toBe(true);
     expect(p.some((t) => t.includes("PITR"))).toBe(true);
   });

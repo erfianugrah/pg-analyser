@@ -1,4 +1,3 @@
-import { appRows } from "../appschema.ts";
 import { type Brand, brandVars, DEFAULT_BRAND, faviconTag } from "../brand.ts";
 import {
   deriveFindings,
@@ -970,7 +969,7 @@ ${drill("tables", "Biggest tables", "by total relation size (heap + indexes + TO
 ${drill("extensions", "Extensions", "installed extensions + versions; pgvector ANN-index health", errored.has("sql:extensions") ? '<p class="empty warn-text">not collected</p>' : extensionsSection(a))}
 ${drill("unused", "Index usage", "all indexes by size; unused = never scanned, non-constraint", sec(a.sql.indexStats, "sql:indexStats", { mono: ["index", "table"], hide: ["schema"] }))}
 ${drill("dupidx", "Duplicate indexes", "identical index definitions on one table - keep one, drop the rest", errored.has("sql:duplicateIndexes") ? '<p class="empty warn-text">not collected</p>' : a.sql.duplicateIndexes.length ? sqlTable(a.sql.duplicateIndexes, { mono: ["indexes"], hide: ["schema"] }) : "<p class=empty>none found</p>")}
-${drill("rlsunindexed", "RLS columns without an index", "policy-compared column with no covering index -> seq scan per row check", errored.has("sql:rlsUnindexed") ? '<p class="empty warn-text">not collected</p>' : appRows(a.sql.rlsUnindexed).length ? sqlTable(appRows(a.sql.rlsUnindexed), { mono: ["table", "column"], hide: ["schema"] }) : "<p class=empty>none found</p>")}
+${drill("rlsunindexed", "RLS columns without an index", "policy-compared column with no covering index -> seq scan per row check", errored.has("sql:rlsUnindexed") ? '<p class="empty warn-text">not collected</p>' : a.sql.rlsUnindexed.length ? sqlTable(a.sql.rlsUnindexed, { mono: ["table", "column"], hide: ["schema"] }) : "<p class=empty>none found</p>")}
 ${drill("seqscan", "Sequential-scan heavy", "seq_scan > idx_scan, >1k rows", sec(a.sql.seqScanHeavy, "sql:seqScanHeavy", { mono: ["table"], hide: ["schema"] }))}
 ${a.sql.fkUnindexed.length ? drill("fkunindexed", "Unindexed foreign keys", "FK referencing columns with no covering index - seq scan of the child on every parent UPDATE/DELETE", sqlTable(a.sql.fkUnindexed, { mono: ["table", "constraint", "definition"], hide: ["schema"] })) : ""}
 ${a.sql.invalidIndexes.length ? drill("invalididx", "Invalid indexes", "failed CONCURRENTLY builds - ignored by the planner but still write overhead; drop + rebuild", sqlTable(a.sql.invalidIndexes, { mono: ["index", "table"], hide: ["schema"] })) : ""}
@@ -984,6 +983,7 @@ ${a.sql.neverVacuumed.length ? drill("nevervacuumed", "Never vacuumed", "tables 
 ${show.roles ? drill("roles", "Role connection usage", "active connections vs each role's limit (shown when a role nears its limit)", sec(a.sql.roleStats, "sql:roleStats", { mono: ["role"] })) : ""}
 ${show.txid ? drill("txid", "Transaction-ID wraparound", "age(relfrozenxid) vs 2B ceiling; shown when a table approaches the wraparound threshold", sec(a.sql.txidWraparound, "sql:txidWraparound", { mono: ["table"], hide: ["schema"] })) : ""}
 ${a.sql.multixactWraparound.length ? drill("multixact", "Multixact-ID wraparound", "mxid_age(relminmxid) vs its own 2B ceiling - consumed by heavy row locking, separate from txid", sqlTable(a.sql.multixactWraparound, { mono: ["table"], hide: ["schema"] })) : ""}
+${a.sql.sequenceExhaustion.length ? drill("sequences", "Sequence exhaustion", "int4/serial sequences approaching their 2^31 ceiling - a hard INSERT failure when full", sqlTable(a.sql.sequenceExhaustion, { mono: ["sequence"], hide: ["schema"] })) : ""}
 ${show.slots ? drill("slots", "Replication slots", "retained WAL; inactive slots pin disk", sqlTable(a.sql.replicationSlots, { mono: ["slot_name"], hide: ["retained_wal_bytes"] })) : ""}
 ${show.walarchiving ? drill("walarchiving", "WAL archiving", "pg_stat_archiver + archive_mode (superuser SQL); continuous WAL shipping is the mechanism PITR relies on - inferred here, not the platform add-on flag", sqlTable(a.sql.walArchiving, { mono: ["last_archived_wal"] })) : ""}
 ${a.sql.queryIoStats.length ? drill("queryio", "Query I/O + latency stability", "per-query temp-file spill (work_mem), disk-read miss %, and latency variation (stddev/mean) - the depth top-by-time misses", sqlTable(a.sql.queryIoStats, { mono: ["query"], hide: ["queryid", "temp_blks_written", "shared_blks_read"] })) : ""}

@@ -967,6 +967,31 @@ export function deriveFindings(a: Analysis): Finding[] {
       ...meta("multixact_wraparound"),
     });
   }
+  // Sequence exhaustion: an int4/serial sequence nearing 2^31 - a hard INSERT
+  // failure when it fills, the third "counter hits a ceiling" class alongside
+  // txid/multixact. The SQL surfaces sequences >=70% used (app schemas only).
+  if (a.sql.sequenceExhaustion.length > 0) {
+    const worst = a.sql.sequenceExhaustion[0] as SqlRow;
+    const worstPct = num(worst.pct_used);
+    out.push({
+      severity: worstPct >= THRESHOLDS.sequenceExhaustionHighPct ? "high" : "med",
+      category: "Capacity",
+      title: `${a.sql.sequenceExhaustion.length} sequence${a.sql.sequenceExhaustion.length === 1 ? "" : "s"} approaching exhaustion (worst ${String(worst.sequence)} at ${worstPct}% of int max)`,
+      anchor: "#sequences",
+      ...meta("sequence_exhaustion"),
+    });
+  }
+  // pg_stat_statements is evicting entries (table full) - the top-N / outlier
+  // sample is lossy, which also weakens the stats-window confidence gating.
+  if (num(a.sql.statementsDealloc) > 0) {
+    out.push({
+      severity: "low",
+      category: "Performance",
+      title: `pg_stat_statements is evicting entries (dealloc ${num(a.sql.statementsDealloc)}) - query stats are a partial sample`,
+      anchor: "#outliers",
+      ...meta("statements_evicted"),
+    });
+  }
   // Replication slots: inactive slots pin WAL (disk-fill risk); large active lag
   // signals a slow downstream consumer.
   const inactiveSlots = a.sql.replicationSlots.filter(
@@ -1621,6 +1646,26 @@ export function deriveFindings(a: Analysis): Finding[] {
     }
   }
 
+  // WAL archiving is currently FAILING (both modes). Distinct from pitr_absent
+  // ("not running"): here archiving IS configured but the most recent attempt
+  // errored (archiver_failing, computed in SQL from last_failed > last_archived).
+  // High - a stuck archiver is a live backup gap and blocks WAL recycling, so
+  // the data volume grows until it recovers. A failure that already recovered
+  // (last success newer) is not flagged.
+  if (
+    a.sql.walArchiving.length > 0 &&
+    (a.sql.walArchiving[0] as SqlRow).archiver_failing === true
+  ) {
+    const w = a.sql.walArchiving[0] as SqlRow;
+    out.push({
+      severity: "high",
+      category: "Capacity",
+      title: `WAL archiving is failing (${num(w.failed_count)} failures, last ${String(w.last_failed_time ?? "?")})`,
+      anchor: "#walarchiving",
+      ...meta("archiver_failing"),
+    });
+  }
+
   // No-PAT PITR negative: the authoritative backups plane is absent, and a
   // superuser sees WAL archiving is NOT running (archive_mode off, or on with
   // nothing archived). HEDGED: archive_mode semantics on Supabase aren't a
@@ -1789,7 +1834,7 @@ export function derivePositives(a: Analysis): Positive[] {
     !errored.has("sql:rlsUnindexed") &&
     appRows(a.sql.rlsUnindexed).length === 0
   ) {
-    out.push({ category: "Performance", title: "All RLS policy columns are indexed" });
+    out.push({ category: "Performance", title: "All application RLS policy columns are indexed" });
   }
   // Mirror the finding's mutual exclusivity: don't claim "no unused indexes" when
   // the advisor reported some (its scope is authoritative), nor when our own
@@ -1860,7 +1905,12 @@ export function derivePositives(a: Analysis): Positive[] {
   if (!a.backups && a.sql.walArchiving.length > 0) {
     const w = a.sql.walArchiving[0] as SqlRow;
     const mode = String(w.archive_mode ?? "").toLowerCase();
-    if ((mode === "on" || mode === "always") && num(w.archived_count) > 0) {
+    // Not while it is actively failing - a stuck archiver must not read as green.
+    if (
+      (mode === "on" || mode === "always") &&
+      num(w.archived_count) > 0 &&
+      w.archiver_failing !== true
+    ) {
       out.push({
         category: "Capacity",
         title: "Continuous WAL archiving is active (archive_mode=on) - PITR-style recoverability",

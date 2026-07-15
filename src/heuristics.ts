@@ -184,6 +184,9 @@ export const THRESHOLDS = {
    * points that counts as a RESIZE (not organic growth). Used to segment the
    * disk series so a manual/auto expansion isn't trended as a fill/empty. */
   diskResizeStepFrac: 0.2,
+  /** pct-used of a sequence's max at/above which exhaustion is HIGH (else MED).
+   * The SQL surfaces sequences >=70% used; this is the escalation line. */
+  sequenceExhaustionHighPct: 90,
 } as const;
 
 export type Plane =
@@ -238,6 +241,42 @@ const R = HEURISTICS_REVIEWED;
 
 /** Registry keyed by heuristic id. See docs/heuristics.md for the full grounding. */
 export const HEURISTICS: Record<string, Heuristic> = {
+  sequence_exhaustion: {
+    id: "sequence_exhaustion",
+    plane: "Storage",
+    howToVerify:
+      "Compare pg_sequences.last_value against max_value; after migrating the column to bigint the sequence's max_value jumps to ~9.2e18 and pct_used falls to ~0.",
+    whyItMatters:
+      "An int4/serial sequence caps at 2,147,483,647. When it runs out, every INSERT that needs a new id fails with 'nextval: reached maximum value' - a hard outage on a growing table, not a slowdown. High-insert workloads (bulk imports, append-heavy logs) burn through int4 space fastest.",
+    remediation:
+      "Migrate the owning column (and the sequence) from int4 to bigint before it fills: ALTER the column to bigint, which widens the sequence's ceiling. Plan it as a maintenance change - rewriting a large table's PK type is not instant.",
+    docUrl: "https://www.postgresql.org/docs/current/datatype-numeric.html",
+    reviewed: R,
+  },
+  statements_evicted: {
+    id: "statements_evicted",
+    plane: "Query",
+    howToVerify:
+      "pg_stat_statements_info.dealloc should stop rising after raising pg_stat_statements.max; a stable dealloc means the table now holds the working set.",
+    whyItMatters:
+      "pg_stat_statements hit its entry cap and is evicting statements (dealloc > 0). The top-N query list and the outlier/latency signals - and the stats-window confidence gating built on them - are then a lossy sample: a heavy query can be evicted between scrapes and never appear. Raising the cap restores a complete picture.",
+    remediation:
+      "Raise pg_stat_statements.max (default 5000) if query-level accuracy matters; it costs a little shared memory. On Supabase this is a platform GUC - request the change if needed.",
+    docUrl: "https://www.postgresql.org/docs/current/pgstatstatements.html",
+    reviewed: R,
+  },
+  archiver_failing: {
+    id: "archiver_failing",
+    plane: "Backups",
+    howToVerify:
+      "pg_stat_archiver.last_failed_time should stop advancing past last_archived_time; check the failing command in the Postgres logs and confirm archived_count resumes rising.",
+    whyItMatters:
+      "WAL archiving is failing right now (the most recent archive attempt errored). Continuous archiving is the mechanism PITR and WAL-based backups rely on - while it is stuck, pg_wal also cannot recycle failed segments, so the data volume grows until either archiving recovers or the disk fills.",
+    remediation:
+      "Inspect the archive_command failure in the Postgres logs (permissions, destination full/unreachable). On Supabase this is platform-managed - open a support ticket if it does not self-recover; on self-hosted, fix the archive destination.",
+    docUrl: "https://www.postgresql.org/docs/current/continuous-archiving.html",
+    reviewed: R,
+  },
   wal_slot_growing: {
     id: "wal_slot_growing",
     plane: "Storage",

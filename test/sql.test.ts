@@ -60,4 +60,19 @@ describe("perf query set is read-only", () => {
     expect(QUERIES.seqScanHeavy).toContain("coalesce(idx_scan, 0) as idx_scan");
     expect(QUERIES.seqScanHeavy).toContain("seq_scan + coalesce(idx_scan, 0)");
   });
+
+  test("walArchiving computes archiver_failing (last failure newer than last success)", () => {
+    expect(QUERIES.walArchiving).toContain("archiver_failing");
+    expect(QUERIES.walArchiving).toContain("last_failed_time > last_archived_time");
+  });
+
+  test("statsResetAge also captures dealloc (eviction count)", () => {
+    expect(QUERIES.statsResetAge).toContain("dealloc");
+  });
+
+  test("sequenceExhaustion reads pg_sequences, app-scoped, above a usage floor", () => {
+    expect(QUERIES.sequenceExhaustion).toContain("from pg_sequences");
+    expect(QUERIES.sequenceExhaustion).toContain("pct_used");
+    expect(QUERIES.sequenceExhaustion).toContain("0.70");
+  });
 });

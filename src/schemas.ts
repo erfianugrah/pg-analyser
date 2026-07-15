@@ -345,6 +345,10 @@ export const Analysis = z.object({
     // pg_stat_statements reset above. Unused-index / dead-tuple / cache-hit
     // signals are relative to this. Defaulted null for back-compat.
     tableStatsResetAge: z.string().nullable().default(null),
+    // pg_stat_statements_info.dealloc: cumulative count of entries evicted since
+    // reset. > 0 means the pg_stat_statements table hit its max and the top-N /
+    // outliers are a lossy sample. Defaulted for back-compat.
+    statementsDealloc: z.number().nullable().default(null),
     pgSettings: SqlRows,
     topStatements: SqlRows,
     topByCalls: SqlRows,
@@ -401,6 +405,9 @@ export const Analysis = z.object({
     // PITR when the Management API backups plane is absent. Defaulted for
     // back-compat with analysis.json written before the query existed.
     walArchiving: SqlRows.default([]),
+    // Sequences (esp. int4/serial) approaching their max value - a live
+    // exhaustion risk on high-insert tables. Defaulted for back-compat.
+    sequenceExhaustion: SqlRows.default([]),
     // Cluster-wide page-checksum failure counters (pg_stat_database). Both
     // modes; nonzero = on-disk corruption. Defaulted for back-compat.
     checksumFailures: SqlRows.default([]),
