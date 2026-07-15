@@ -941,7 +941,7 @@ ${capabilitiesSection(a)}
   <tr><td>Cache hit (table)</td><td class=mono>${a.sql.cacheHitPct == null ? "-" : `${a.sql.cacheHitPct}%`}</td><td>${a.sql.cacheHitPct != null && a.sql.cacheHitPct < 99 ? '<span class="badge warn">below 99%</span>' : ""}</td></tr>
   <tr><td>Cache hit (index)</td><td class=mono>${a.sql.indexHitPct == null ? "-" : `${a.sql.indexHitPct}%`}</td><td>${a.sql.indexHitPct != null && a.sql.indexHitPct < 99 ? '<span class="badge warn">below 99%</span>' : ""}</td></tr>
   <tr><td>Stats window</td><td class=mono>${esc(a.sql.statsResetAge ? a.sql.statsResetAge.split(".")[0] : "-")}</td><td class=note>pg_stat_statements age; cache-hit/outliers are relative to this</td></tr>
-  <tr><td>Table stats window</td><td class=mono>${esc(a.sql.tableStatsResetAge ? a.sql.tableStatsResetAge.split(".")[0] : "-")}</td><td class=note>pg_stat_database reset; unused-index / dead-tuple / cache-hit signals are relative to this</td></tr>
+  <tr><td>Table stats window</td><td class=mono>${esc(a.sql.tableStatsResetAge ? a.sql.tableStatsResetAge.split(".")[0] : "not recorded (never reset)")}</td><td class=note>pg_stat_database reset; unused-index / dead-tuple / cache-hit signals are relative to this. Null = counters never explicitly reset (accumulating since stats init)</td></tr>
 </table>
 
 <h2 id="config">PG tuning params</h2>${errored.has("sql:pgSettings") ? '<p class="empty warn-text">not collected</p>' : pgSettingsTable(a.sql.pgSettings)}

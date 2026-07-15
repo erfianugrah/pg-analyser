@@ -140,11 +140,21 @@ function writeTargets(a: Analysis): Map<string, { calls: number; kind: string }>
   return map;
 }
 
+/**
+ * Advisor lints whose signal is COUNTER-derived (pg_stat_user_indexes.idx_scan
+ * etc.) and therefore only trustworthy over a full stats window - the same
+ * short-window caveat the native SQL findings carry must reach these
+ * authoritative advisor cards too (the SQL fallback is suppressed when the
+ * advisor fires, so without this the caveat would vanish on the card that wins).
+ */
+const COUNTER_DERIVED_ADVISOR_LINTS = new Set(["unused_index"]);
+
 function groupAdvisors(
   list: Analysis["advisors"]["performance"],
   category: Category,
   anchor: string,
   ref: string | undefined,
+  winCaveat: string | null = null,
 ): Finding[] {
   const byTitle = new Map<
     string,
@@ -176,7 +186,8 @@ function groupAdvisors(
     // it doesn't render as literal \'role\'.
     const desc = g.description?.replace(/\\(['"`])/g, "$1");
     const scale = g.count > 1 ? `Affects ${g.count} objects.` : "";
-    const evidence = [desc, scale].filter(Boolean).join(" ") || undefined;
+    const caveat = winCaveat && COUNTER_DERIVED_ADVISOR_LINTS.has(g.name) ? winCaveat : "";
+    const evidence = [desc, scale, caveat].filter(Boolean).join(" ") || undefined;
     return {
       severity: sevFromLevel(g.level),
       category,
@@ -510,7 +521,9 @@ export function deriveFindings(a: Analysis): Finding[] {
   const winCaveat = shortStatsWindowCaveat(a);
 
   // Advisors (grouped by title)
-  out.push(...groupAdvisors(a.advisors.performance, "Performance", "#adv-perf", a.meta.ref));
+  out.push(
+    ...groupAdvisors(a.advisors.performance, "Performance", "#adv-perf", a.meta.ref, winCaveat),
+  );
   out.push(...groupAdvisors(a.advisors.security, "Security", "#adv-sec", a.meta.ref));
 
   // Performance - SQL-derived. The cache-hit ratio is only trustworthy once the
