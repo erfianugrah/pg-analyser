@@ -207,6 +207,52 @@ describe("countDepletionEpisodes + episodic EBS framing", () => {
   });
 });
 
+describe("replication-slot WAL growth (trend)", () => {
+  const DAY = 86400;
+  // 12 points over ~11 days, +300 MB/day (clears the 256 MB/day floor).
+  const risingSlot = Array.from({ length: 12 }, (_, i) => ({
+    t: i * DAY,
+    v: 100e6 + i * 300e6,
+  }));
+  test("a rising active-slot retention series fires wal_slot_growing", () => {
+    const a = base();
+    a.trends = [{ title: "Slot WAL retained (max, bytes)", unit: "bytes", points: risingSlot }];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "wal_slot_growing");
+    expect(f?.title).toContain("climbing");
+    expect(f?.title).toContain("MB/day");
+  });
+  test("a flat-but-high series does NOT fire the growth finding", () => {
+    const a = base();
+    a.trends = [
+      {
+        title: "Slot WAL retained (max, bytes)",
+        unit: "bytes",
+        points: Array.from({ length: 12 }, (_, i) => ({ t: i * DAY, v: 800e6 })),
+      },
+    ];
+    expect(deriveFindings(a).some((x) => x.heuristicId === "wal_slot_growing")).toBe(false);
+  });
+  test("suppressed when the point-in-time >1GiB lag finding already fired", () => {
+    const a = base();
+    a.trends = [{ title: "Slot WAL retained (max, bytes)", unit: "bytes", points: risingSlot }];
+    a.sql.replicationSlots = [{ slot_name: "s", active: true, retained_wal_bytes: 2 * 1024 ** 3 }];
+    const found = deriveFindings(a);
+    expect(found.some((x) => x.heuristicId === "wal_slot_growing")).toBe(false);
+    expect(found.some((x) => x.anchor === "#slots" && x.title.includes("lagging"))).toBe(true);
+  });
+  test("too few points (thin store) -> no finding", () => {
+    const a = base();
+    a.trends = [
+      {
+        title: "Slot WAL retained (max, bytes)",
+        unit: "bytes",
+        points: risingSlot.slice(0, 3),
+      },
+    ];
+    expect(deriveFindings(a).some((x) => x.heuristicId === "wal_slot_growing")).toBe(false);
+  });
+});
+
 describe("meaningful-negative positives", () => {
   test("empty-but-collected replication slots and topByWal render as positives", () => {
     const a = base(); // both [] and no errors

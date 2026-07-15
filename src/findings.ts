@@ -1228,6 +1228,33 @@ export function deriveFindings(a: Analysis): Finding[] {
   // provisioning planes are gone, so the trend IS the capacity signal.
   const pointsOf = (title: string) => a.trends.find((t) => t.title === title)?.points ?? [];
 
+  // Replication-slot WAL retention CLIMBING (trend; store path only). An active
+  // slot whose retained WAL keeps rising = the consumer is falling behind, a
+  // disk-fill risk the point-in-time 1 GiB threshold misses while it is still
+  // under a gig (the "396 MB and growing" case). Suppressed when the absolute
+  // point-in-time lag finding already fired (that stronger signal wins), and
+  // gated by sufficient() so a thin store never fires it.
+  const slotWalPts = pointsOf("Slot WAL retained (max, bytes)");
+  const slotLagFired = a.sql.replicationSlots.some(
+    (r) => r.active === true && num(r.retained_wal_bytes) >= THRESHOLDS.slotLagBytes,
+  );
+  if (!slotLagFired && sufficient(slotWalPts)) {
+    const s = trendStat(slotWalPts)!;
+    if (s.direction === "rising" && s.slopePerDay >= THRESHOLDS.slotWalGrowthMinBytesPerDay) {
+      const perDay =
+        s.slopePerDay >= 1024 ** 3
+          ? `${(s.slopePerDay / 1024 ** 3).toFixed(1)} GB/day`
+          : `${Math.round(s.slopePerDay / (1024 * 1024))} MB/day`;
+      out.push({
+        severity: "med",
+        category: "Capacity",
+        title: `Replication slot WAL retention climbing (~${perDay}, now ${bytesGb(s.fittedLast)})`,
+        anchor: "#slots",
+        ...meta("wal_slot_growing"),
+      });
+    }
+  }
+
   // CPU sizing, both directions.
   const cpuPts = pointsOf("CPU utilization (%)");
   if (sufficient(cpuPts)) {
