@@ -67,6 +67,7 @@ function makeAnalysis(opts: {
       rlsPolicies: [],
       connections: [],
       roleStats: [],
+      roleConfig: [],
       longRunning: [],
       locks: [],
       blocking: [],

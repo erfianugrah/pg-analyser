@@ -73,6 +73,7 @@ function base(): Analysis {
       rlsPolicies: [],
       connections: [{ state: "active", connections: 3 }],
       roleStats: [],
+      roleConfig: [],
       longRunning: [],
       locks: [],
       blocking: [],
