@@ -2003,3 +2003,53 @@ describe("contention_episode (correlation-gated severity)", () => {
     ).toBeUndefined();
   });
 });
+
+describe("cron DDL-collision annotation (Check 4)", () => {
+  function withCronTable(command: string): Analysis {
+    const a = base();
+    a.sql.extensions = [{ name: "pg_cron", installed: "1.6" }];
+    a.sql.cronJobs = [
+      {
+        jobname: "nightly-refresh",
+        schedule: "*/5 * * * *",
+        active: true,
+        command,
+        failed_runs: 0,
+        runs_7d: 100,
+        avg_duration_s: 200,
+        max_duration_s: 400,
+      },
+    ];
+    a.sql.biggestTables = [
+      {
+        table: "public.orders_mv",
+        total_bytes: 5_000_000_000,
+        index_bytes: 1_000_000_000,
+        live_rows: 1_000_000,
+      },
+    ];
+    return a;
+  }
+
+  test("long job touching a top-N table annotates the overrun finding", () => {
+    const f = deriveFindings(withCronTable("REFRESH MATERIALIZED VIEW public.orders_mv")).find(
+      (x) => x.heuristicId === "cron_job_overrun",
+    );
+    expect(f?.evidence).toMatch(/AccessShareLock on `public\.orders_mv`/);
+    expect(f?.evidence).toMatch(/queue all new readers/i);
+  });
+
+  test("REFRESH MATERIALIZED VIEW without CONCURRENTLY on a top-N table is called out", () => {
+    const f = deriveFindings(withCronTable("REFRESH MATERIALIZED VIEW public.orders_mv")).find(
+      (x) => x.heuristicId === "cron_job_overrun",
+    );
+    expect(f?.evidence).toMatch(/without CONCURRENTLY/i);
+  });
+
+  test("a job not touching any top-N table adds no collision note", () => {
+    const f = deriveFindings(withCronTable("SELECT cleanup_old_rows()")).find(
+      (x) => x.heuristicId === "cron_job_overrun",
+    );
+    expect(f?.evidence ?? "").not.toMatch(/AccessShareLock/);
+  });
+});

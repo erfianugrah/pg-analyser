@@ -1814,11 +1814,32 @@ export function deriveFindings(a: Analysis): Finding[] {
       .slice()
       .sort((a2, b2) => num(b2.max_duration_s) - num(a2.max_duration_s))[0] as SqlRow;
     const interval = parseCronIntervalSeconds(String(worst.schedule ?? ""));
+    // DDL-collision annotation (Check 4): a long-running active job holds
+    // AccessShareLock on the tables its command touches for its whole run, so
+    // any ALTER on those tables queues every new reader behind the waiting
+    // exclusive lock (Postgres grants locks in queue order). Match overrun jobs
+    // against the top-N biggest tables sbperf already collected.
+    const collisions: string[] = [];
+    const topTables = a.sql.biggestTables
+      .map((t) => String(t.table))
+      .filter((t) => t.includes("."));
+    for (const job of overrunJobs) {
+      const cmd = String(job.command ?? "");
+      if (!cmd || num(job.max_duration_s) <= 60) continue;
+      for (const tbl of topTables) {
+        if (!cmd.toLowerCase().includes(tbl.toLowerCase())) continue;
+        let note = `"${String(job.jobname)}" holds AccessShareLock on \`${tbl}\` for up to ${num(job.max_duration_s)}s per run - any ALTER TABLE on it will queue all new readers behind the waiting exclusive lock for that long (Postgres grants locks in queue order).`;
+        if (/refresh\s+materialized\s+view/i.test(cmd) && !/concurrently/i.test(cmd))
+          note += ` This REFRESH runs without CONCURRENTLY, taking AccessExclusiveLock on \`${tbl}\` for the whole refresh.`;
+        collisions.push(note);
+      }
+    }
     out.push({
       severity: "med",
       category: "Performance",
       title: `${overrunJobs.length} scheduled job${overrunJobs.length === 1 ? "" : "s"} overrun the schedule cadence (worst "${String(worst.jobname)}": ${num(worst.max_duration_s)}s run vs ${interval}s interval)`,
       anchor: "#cron",
+      ...(collisions.length ? { evidence: collisions.join(" ") } : {}),
       ...meta("cron_job_overrun"),
     });
   }
