@@ -81,6 +81,13 @@ describe("perf query set is read-only", () => {
     expect(QUERIES.cronJobs).toContain("avg_duration_s");
   });
 
+  test("cronJobs collects (truncated) command text for DDL-collision matching", () => {
+    expect(QUERIES.cronJobs).toContain("left(j.command, 200) as command");
+    expect(QUERIES.cronJobs).toContain(
+      "group by j.jobid, j.jobname, j.schedule, j.active, j.command",
+    );
+  });
+
   test("index evidence cap raised to substantiate large advisor lists", () => {
     expect(QUERIES.indexStats).toContain("limit 100");
   });

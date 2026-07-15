@@ -656,6 +656,9 @@ export const QUERIES = {
       j.jobname,
       j.schedule,
       j.active,
+      -- Command text (truncated for privacy): lets the DDL-collision annotation
+      -- match a long job against the top-N tables it holds AccessShareLock on.
+      left(j.command, 200) as command,
       count(r.*) filter (where r.status = 'failed') as failed_runs,
       count(r.*) as runs_7d,
       max(r.end_time)::text as last_run,
@@ -668,7 +671,7 @@ export const QUERIES = {
     from cron.job j
     left join cron.job_run_details r
       on r.jobid = j.jobid and r.start_time > now() - interval '7 days'
-    group by j.jobid, j.jobname, j.schedule, j.active
+    group by j.jobid, j.jobname, j.schedule, j.active, j.command
     order by failed_runs desc, j.jobname`,
 
   // Storage bucket inventory. The Supabase Storage API reads this same table;
