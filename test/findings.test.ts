@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { deriveFindings, derivePositives } from "../src/findings.ts";
+import {
+  countDepletionEpisodes,
+  deriveFindings,
+  derivePositives,
+  parseIntervalDays,
+  statsWindowDays,
+} from "../src/findings.ts";
 import type { Analysis } from "../src/schemas.ts";
 
 function base(): Analysis {
@@ -32,6 +38,7 @@ function base(): Analysis {
       cacheHitPct: null,
       indexHitPct: null,
       cacheBlocksAccessed: null,
+      tableStatsResetAge: null,
       statsResetAge: null,
       pgSettings: [],
       topStatements: [],
@@ -83,6 +90,121 @@ function base(): Analysis {
     errors: [],
   };
 }
+
+describe("stats-window confidence (parseIntervalDays / statsWindowDays)", () => {
+  test("parses Postgres interval text to fractional days", () => {
+    expect(parseIntervalDays("1 day")).toBeCloseTo(1, 5);
+    expect(parseIntervalDays("16:31:12")).toBeCloseTo((16 * 3600 + 31 * 60 + 12) / 86400, 5);
+    expect(parseIntervalDays("3 days 04:05:06")).toBeCloseTo(
+      3 + (4 * 3600 + 5 * 60 + 6) / 86400,
+      5,
+    );
+    expect(parseIntervalDays("2 mons 5 days")).toBeCloseTo(65, 5);
+  });
+  test("returns null for absent / unparseable input", () => {
+    expect(parseIntervalDays(null)).toBeNull();
+    expect(parseIntervalDays("")).toBeNull();
+    expect(parseIntervalDays("not an interval")).toBeNull();
+  });
+  test("statsWindowDays prefers the per-table reset, falls back to statements age", () => {
+    const a = base();
+    a.sql.tableStatsResetAge = "5 days";
+    a.sql.statsResetAge = "40 days";
+    expect(statsWindowDays(a)).toBeCloseTo(5, 5);
+    a.sql.tableStatsResetAge = null;
+    expect(statsWindowDays(a)).toBeCloseTo(40, 5);
+    a.sql.statsResetAge = null;
+    expect(statsWindowDays(a)).toBeNull();
+  });
+});
+
+describe("counter-finding low-confidence caveat", () => {
+  function withUnusedIndex(): Analysis {
+    const a = base();
+    a.sql.indexStats = [
+      { schema: "public", table: "public.x", index: "public.i2", unused: true, index_bytes: 4096 },
+    ];
+    return a;
+  }
+  test("short stats window attaches a low-confidence caveat to the unused-index finding", () => {
+    const a = withUnusedIndex();
+    a.sql.tableStatsResetAge = "16:00:00"; // 16h < 7d
+    const f = deriveFindings(a).find((x) => x.anchor === "#unused");
+    expect(f?.evidence).toContain("Low confidence");
+    expect(f?.evidence).toContain("16h");
+  });
+  test("a long stats window attaches no caveat", () => {
+    const a = withUnusedIndex();
+    a.sql.tableStatsResetAge = "30 days";
+    const f = deriveFindings(a).find((x) => x.anchor === "#unused");
+    expect(f).toBeDefined();
+    expect(f?.evidence ?? "").not.toContain("Low confidence");
+  });
+});
+
+describe("stale-stats contradiction finding", () => {
+  test("0 live rows on a multi-MB table flags stale statistics", () => {
+    const a = base();
+    a.sql.biggestTables = [
+      { table: "public.leads", total_size: "17 GB", total_bytes: 17 * 1024 ** 3, live_rows: 0 },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "stale_table_stats");
+    expect(f?.title).toContain("Table statistics look stale");
+    expect(f?.evidence).toContain("public.leads");
+  });
+  test("a tiny 0-row table does NOT trip it (below the byte floor)", () => {
+    const a = base();
+    a.sql.biggestTables = [
+      { table: "public.tiny", total_size: "8 kB", total_bytes: 8192, live_rows: 0 },
+    ];
+    expect(deriveFindings(a).some((x) => x.heuristicId === "stale_table_stats")).toBe(false);
+  });
+});
+
+describe("countDepletionEpisodes + episodic EBS framing", () => {
+  test("counts distinct dip episodes, not points below threshold", () => {
+    const pts = [{ v: 100 }, { v: 5 }, { v: 4 }, { v: 100 }, { v: 3 }, { v: 100 }];
+    expect(countDepletionEpisodes(pts, 20)).toBe(2);
+    expect(countDepletionEpisodes([{ v: 100 }, { v: 99 }], 20)).toBe(0);
+  });
+  test("EBS finding is episodic (when/how-often/current), not present-tense min", () => {
+    const a = base();
+    const DAY = 86400;
+    // dips below 20% twice, recovers to 99% at the end.
+    const vals = [100, 100, 5, 100, 100, 4, 99];
+    a.trends = [
+      {
+        title: "EBS IOPS balance (%)",
+        unit: "%",
+        points: vals.map((v, i) => ({ t: i * DAY, v })),
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.title.startsWith("EBS burst balance"));
+    expect(f?.title).toContain("depleted 2x");
+    expect(f?.title).toContain("currently 99%");
+    // recovered + recurred -> still high (>=2 episodes)
+    expect(f?.severity).toBe("high");
+  });
+});
+
+describe("meaningful-negative positives", () => {
+  test("empty-but-collected replication slots and topByWal render as positives", () => {
+    const a = base(); // both [] and no errors
+    const titles = derivePositives(a).map((p) => p.title);
+    expect(titles).toContain("No replication slots retaining WAL");
+    expect(titles).toContain("No WAL-heavy statements in the window");
+  });
+  test("a not-collected plane does NOT render as a false positive", () => {
+    const a = base();
+    a.errors = [
+      { source: "sql:replicationSlots", message: "boom" },
+      { source: "sql:topByWal", message: "boom" },
+    ];
+    const titles = derivePositives(a).map((p) => p.title);
+    expect(titles).not.toContain("No replication slots retaining WAL");
+    expect(titles).not.toContain("No WAL-heavy statements in the window");
+  });
+});
 
 describe("deriveFindings", () => {
   test("clean project -> no findings", () => {

@@ -93,6 +93,15 @@ export const QUERIES = {
     select (now() - stats_reset)::text as stats_age
     from extensions.pg_stat_statements_info`,
 
+  // How long the PER-TABLE / per-index counters (pg_stat_database) have been
+  // accumulating. This is a DIFFERENT reset from pg_stat_statements_info above:
+  // unused-index, dead-tuple, and cache-hit signals are all relative to THIS
+  // window, so a recent reset makes them low-confidence.
+  tableStatsResetAge: /* sql */ `
+    select (now() - stats_reset)::text as stats_age
+    from pg_stat_database
+    where datname = current_database()`,
+
   // Perf-relevant server settings - the API config endpoint returns {} on many
   // projects, so read them from pg_settings directly.
   pgSettings: /* sql */ `

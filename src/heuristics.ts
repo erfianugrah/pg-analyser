@@ -166,6 +166,15 @@ export const THRESHOLDS = {
   passwordMinLength: 8,
   /** Access-token (jwt_exp) TTL above which a long-lived token is flagged (sec). */
   jwtExpMaxSec: 3600,
+  /** Minimum stats-accumulation window (days) before a counter-derived finding
+   * (unused index, cache-hit ratio, dead-tuple / autovacuum-overdue) is treated
+   * as high-confidence. Below this the counters have not seen a full workload
+   * cycle, so the finding carries a low-confidence caveat rather than acting. */
+  minStatsWindowDays: 7,
+  /** Byte floor for the stale-table-stats contradiction check: a table that
+   * reports 0 live rows but occupies at least this much disk almost certainly
+   * had its counters reset (pg_statistic / size survive), not truly empty. */
+  staleStatsMinBytes: 10 * 1024 * 1024,
 } as const;
 
 export type Plane =
@@ -220,6 +229,19 @@ const R = HEURISTICS_REVIEWED;
 
 /** Registry keyed by heuristic id. See docs/heuristics.md for the full grounding. */
 export const HEURISTICS: Record<string, Heuristic> = {
+  stale_table_stats: {
+    id: "stale_table_stats",
+    plane: "Vacuum",
+    howToVerify:
+      "After ANALYZE, pg_stat_user_tables.n_live_tup for the affected tables should reflect the real row count (no longer 0), and per-table counter-based signals become trustworthy.",
+    whyItMatters:
+      "A table reporting 0 live rows while holding real data means its pg_stat counters were reset (or never populated) - the planner and every counter-derived signal (unused index, dead tuples, cache hit) are working off blank statistics, so their verdicts cannot be trusted until stats are rebuilt.",
+    remediation:
+      "Run ANALYZE (or VACUUM ANALYZE) on the affected tables so per-table counters and planner estimates are repopulated; the counters were reset recently.",
+    sql: "VACUUM (ANALYZE) <schema>.<table>;",
+    docUrl: "https://www.postgresql.org/docs/current/monitoring-stats.html",
+    reviewed: R,
+  },
   // --- Advisors (live, always current via the Management API) ---
   advisor_performance: {
     id: "advisor_performance",

@@ -40,6 +40,7 @@ function base(): Analysis {
       cacheHitPct: 92,
       indexHitPct: null,
       cacheBlocksAccessed: null,
+      tableStatsResetAge: null,
       statsResetAge: null,
       pgSettings: [],
       topStatements: Array.from({ length: 20 }, (_, i) => ({
