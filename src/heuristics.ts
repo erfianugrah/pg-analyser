@@ -841,6 +841,19 @@ export const HEURISTICS: Record<string, Heuristic> = {
     docUrl: "https://www.postgresql.org/docs/current/monitoring-stats.html",
     reviewed: R,
   },
+  live_lock_contention: {
+    id: "live_lock_contention",
+    plane: "Config",
+    whyItMatters:
+      "Multiple collection samples caught active backends waiting on a Lock - contention happening RIGHT NOW, during the audit. Unlike the retrospective log/metrics checks this is a live snapshot: it means sessions are blocked on a lock at collection time, so a blocking session is holding a lock others need.",
+    remediation:
+      "Identify the blocker with pg_blocking_pids() and its query; if it is a long transaction or an un-CONCURRENTLY DDL, end/reschedule it. This is point-in-time - for after-the-fact incidents use the lock_wave (logs) and contention_episode (metrics) findings.",
+    sql: `-- who is blocking whom, right now:\nselect pid, wait_event_type, wait_event, state, pg_blocking_pids(pid) as blocked_by,\n       left(query, 80) as query\nfrom pg_stat_activity\nwhere wait_event_type = 'Lock';`,
+    howToVerify:
+      "Re-run collection: if the blocking transaction is gone, no Lock waits should appear across the samples.",
+    docUrl: "https://www.postgresql.org/docs/current/monitoring-stats.html#WAIT-EVENT-LOCK-TABLE",
+    reviewed: R,
+  },
   mem_pressure_paging: {
     id: "mem_pressure_paging",
     plane: "Compute",
