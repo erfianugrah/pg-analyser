@@ -1,6 +1,7 @@
 import { appRows } from "./appschema.ts";
 import { meta, THRESHOLDS } from "./heuristics.ts";
 import { lintFix } from "./lints.ts";
+import { classifyLockWave } from "./locklog.ts";
 import { minorsBehind } from "./pgversions.ts";
 import type { Analysis, SqlRow } from "./schemas.ts";
 import {
@@ -310,6 +311,50 @@ export function configTuningFindings(a: Analysis): Finding[] {
     });
   }
 
+  return out;
+}
+
+/**
+ * Retrospective lock-wave findings (lock_wave) from the parsed server-log
+ * summary. classifyLockWave picks the worst 10-minute window; a deadlock line
+ * always earns at least a MED. The evidence header states the ACTUAL scanned
+ * coverage window (rotation may keep hours, not days) so a quiet result is
+ * honestly scoped.
+ */
+export function lockWaveFindings(a: Analysis): Finding[] {
+  const lw = a.sql.lockWave;
+  if (!lw) return [];
+  const out: Finding[] = [];
+  const cov =
+    lw.coverage.from && lw.coverage.to
+      ? `scanned ${lw.coverage.from} to ${lw.coverage.to}`
+      : `scanned ${lw.coverage.files} file(s), ${Math.round(lw.coverage.bytesScanned / 1e6)}MB`;
+  const verdict = classifyLockWave(lw);
+  if (verdict) {
+    const topRel = lw.topRelations[0];
+    const relText = topRel ? ` on ${topRel.name ?? `relid ${topRel.relid}`}` : "";
+    const secs = Math.round(verdict.maxWaitMs / 1000);
+    out.push({
+      severity: verdict.severity,
+      category: "Performance",
+      title: `Lock-wait cascade ${verdict.windowFrom}-${verdict.windowTo}: ${verdict.waiting} waits up to ${secs}s, ${verdict.cancels} timeout cancellations${relText}`,
+      anchor: "#locks",
+      evidence: `${cov}. ${verdict.deadlocks > 0 ? `${verdict.deadlocks} deadlock(s) in-window. ` : ""}Retrospective from server logs.`,
+      ...meta("lock_wave"),
+    });
+  } else if (lw.buckets.some((b) => b.deadlocks > 0)) {
+    // Deadlocks are logged even with log_lock_waits off; surface them even if the
+    // wait/cancel thresholds did not trip.
+    const dl = lw.buckets.reduce((n, b) => n + b.deadlocks, 0);
+    out.push({
+      severity: "med",
+      category: "Performance",
+      title: `${dl} deadlock(s) detected in the server log`,
+      anchor: "#locks",
+      evidence: `${cov}. Retrospective from server logs.`,
+      ...meta("lock_wave"),
+    });
+  }
   return out;
 }
 
@@ -2007,6 +2052,7 @@ export function deriveFindings(a: Analysis): Finding[] {
   out.push(...lockForensicsFindings(a));
   out.push(...contentionEpisodeFindings(a));
   out.push(...liveLockContentionFindings(a));
+  out.push(...lockWaveFindings(a));
 
   // Security config (auth / network / SSL) - sbperf-original Security findings.
   out.push(...securityConfigFindings(a));

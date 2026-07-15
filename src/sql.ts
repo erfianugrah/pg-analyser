@@ -150,6 +150,12 @@ export const QUERIES = {
     where state = 'active' and pid <> pg_backend_pid()
     group by 1`,
 
+  // NOTE: the bounded log-tail read and relation-name resolution are PARAMETERIZED
+  // by a filename / relid list, but SqlRunner.run() takes no bind params, so they
+  // are built by logTailQuery() / relationNamesQuery() below (values are strictly
+  // sanitized before inlining). They are superuser-only (pg_read_file) and each
+  // chunk is its own run() call so it inherits the 120s session guard.
+
   // logDirProbe: three facts before any log parse attempt -
   //  (a) is a log directory readable at all (pg_ls_logdir has EXECUTE revoked
   //      from PUBLIC on hosted Supabase, so this only ever runs as a true
@@ -1081,3 +1087,25 @@ export const QUERIES = {
 } as const;
 
 export type QueryKey = keyof typeof QUERIES;
+
+/**
+ * Bounded tail read of one server-log file. Superuser only (pg_read_file).
+ * `filename` comes from logDirProbe (pg_ls_logdir) and is STRICTLY allowlisted
+ * to [A-Za-z0-9._-] before inlining (log filenames only); offsets are integers.
+ * Reads the last `chunk` bytes via a size-based offset (no negative offsets).
+ * SqlRunner.run() takes no bind params, so the sanitized values are inlined.
+ * The caller caps chunk at <=4 MB and total bytes/run at <=20 MB, one run() per
+ * chunk (each inherits the 120s session guard).
+ */
+export function logTailQuery(filename: string, size: number, chunk: number): string {
+  const safe = filename.replace(/[^A-Za-z0-9._-]/g, "");
+  const off = Math.max(0, Math.floor(size - chunk));
+  const len = Math.max(0, Math.floor(chunk));
+  return `select pg_read_file((select setting from pg_settings where name='log_directory') || '/' || '${safe}', ${off}, ${len}) as chunk`;
+}
+
+/** Resolve relids (integer OIDs) to schema.table names in the same superuser session. */
+export function relationNamesQuery(relids: number[]): string {
+  const ids = relids.filter((n) => Number.isInteger(n)).join(",");
+  return `select oid::bigint as relid, relnamespace::regnamespace || '.' || relname as name from pg_class where oid = any(array[${ids || "0"}]::oid[])`;
+}

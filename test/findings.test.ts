@@ -82,6 +82,7 @@ function base(): Analysis {
       authMfa: [],
       cronJobs: [],
       waitSamples: [],
+      lockWave: null,
       dbSizeBytes: null,
       bloatExact: [],
       checksumFailures: [],
@@ -2116,5 +2117,81 @@ describe("live_lock_contention (wait-event sampling, Check 6)", () => {
     expect(
       deriveFindings(base()).find((x) => x.heuristicId === "live_lock_contention"),
     ).toBeUndefined();
+  });
+});
+
+describe("lock_wave (retrospective log cascade)", () => {
+  function withLockWave(
+    buckets: Partial<import("../src/locklog.ts").LockWaveBucket>[],
+    rel?: string,
+  ) {
+    const a = base();
+    a.sql.lockWave = {
+      coverage: {
+        from: "2026-07-15 18:15",
+        to: "2026-07-15 18:25",
+        files: 1,
+        bytesScanned: 4_000_000,
+      },
+      buckets: buckets.map((b) => ({
+        minute: "2026-07-15 18:20",
+        waiting: 0,
+        maxWaitMs: 0,
+        acquired: 0,
+        cancelsLock: 0,
+        cancelsStmt: 0,
+        cancelsUser: 0,
+        deadlocks: 0,
+        ...b,
+      })),
+      topRelations: rel ? [{ relid: 12345, name: rel, hits: 9 }] : [],
+      samples: [],
+    };
+    return a;
+  }
+
+  test("50+ cancels in a window -> HIGH with coverage + relation", () => {
+    const f = deriveFindings(
+      withLockWave(
+        [
+          {
+            minute: "2026-07-15 18:20",
+            cancelsLock: 30,
+            cancelsStmt: 25,
+            waiting: 9,
+            maxWaitMs: 90000,
+          },
+        ],
+        "public.orders",
+      ),
+    ).find((x) => x.heuristicId === "lock_wave");
+    expect(f?.severity).toBe("high");
+    expect(f?.title).toMatch(/public\.orders/);
+    expect(f?.evidence).toMatch(/scanned 2026-07-15 18:15 to 2026-07-15 18:25/);
+  });
+
+  test("10 waits -> MED", () => {
+    const f = deriveFindings(withLockWave([{ waiting: 10 }])).find(
+      (x) => x.heuristicId === "lock_wave",
+    );
+    expect(f?.severity).toBe("med");
+  });
+
+  test("a deadlock alone -> MED even below wait/cancel thresholds", () => {
+    const f = deriveFindings(withLockWave([{ deadlocks: 1 }])).find(
+      (x) => x.heuristicId === "lock_wave",
+    );
+    expect(f?.severity).toBe("med");
+  });
+
+  test("a quiet scanned window -> no finding (but coverage was honest)", () => {
+    const f = deriveFindings(withLockWave([{ waiting: 1, cancelsLock: 0 }])).find(
+      (x) => x.heuristicId === "lock_wave",
+    );
+    expect(f).toBeUndefined();
+  });
+
+  test("no lockWave collected -> no finding", () => {
+    expect(deriveFindings(base()).find((x) => x.heuristicId === "lock_wave")).toBeUndefined();
   });
 });
