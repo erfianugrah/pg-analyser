@@ -314,6 +314,43 @@ export function configTuningFindings(a: Analysis): Finding[] {
 }
 
 /**
+ * Contention episodes (contention_episode): the metrics-side retrospective
+ * channel. Severity is correlation-gated - a single-series burst can never
+ * reach HIGH (a chatty app's rollback rate alone is not an incident); HIGH
+ * requires >= 2 correlated signals AND a large rollback total.
+ */
+export function contentionEpisodeFindings(a: Analysis): Finding[] {
+  const eps = a.contentionEpisodes ?? [];
+  if (eps.length === 0) return [];
+  const hhmm = (unixSec: number) =>
+    new Date(unixSec * 1000).toISOString().slice(11, 16).replace("T", " ");
+  const label: Record<string, string> = {
+    rollbacks: "rollback burst",
+    activeBackends: "active-backend spike",
+    accessShare: "share-lock pileup",
+  };
+  return eps.map((e) => {
+    const correlated = e.series.length >= 2;
+    const severity: Severity =
+      correlated && e.rollbackTotal >= 100 ? "high" : correlated ? "med" : "low";
+    const signals = e.series.map((s) => label[s] ?? s).join(" + ");
+    const window = `${hhmm(e.from)}-${hhmm(e.to)}`;
+    const detail =
+      `${e.series.length} signal${e.series.length === 1 ? "" : "s"} correlated` +
+      (e.rollbackTotal > 0 ? `, ~${Math.round(e.rollbackTotal)} rollbacks` : "") +
+      (e.peakActive > 0 ? `, peak ${Math.round(e.peakActive)} active backends` : "");
+    return {
+      severity,
+      category: "Performance" as Category,
+      title: `Contention episode ${window}: ${signals}`,
+      anchor: "#trends",
+      evidence: `${detail}. Native-resolution scan (source: Prometheus/Grafana) - separate from the downsampled Resource snapshot.`,
+      ...meta("contention_episode"),
+    };
+  });
+}
+
+/**
  * Lock-observability posture (lock_forensics): a single card with up to two
  * axes - (1) log_lock_waits off, so lock waits leave no forensic trail, and
  * (2) no session/role-scoped lock_timeout, so a blocked migration waits
@@ -1914,6 +1951,7 @@ export function deriveFindings(a: Analysis): Finding[] {
   // Config tuning (static GUC sanity, from pgSettings - both modes).
   out.push(...configTuningFindings(a));
   out.push(...lockForensicsFindings(a));
+  out.push(...contentionEpisodeFindings(a));
 
   // Security config (auth / network / SSL) - sbperf-original Security findings.
   out.push(...securityConfigFindings(a));

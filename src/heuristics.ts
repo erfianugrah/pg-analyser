@@ -829,6 +829,18 @@ export const HEURISTICS: Record<string, Heuristic> = {
     docUrl: "https://www.postgresql.org/docs/current/runtime-config-locks.html",
     reviewed: R,
   },
+  contention_episode: {
+    id: "contention_episode",
+    plane: "Config",
+    whyItMatters:
+      "A synchronized burst of transaction rollbacks, active backends, and share-lock counts is the metrics-side signature of a mass-cancellation event: many sessions stall (active while waiting on a lock), then get killed by statement_timeout (each cancellation is a rollback). The event is minutes long; the 30-day resource panels average it into invisibility - this scan re-queries the same Prometheus at native resolution to surface it.",
+    remediation:
+      "Correlate the episode window with DDL and scheduled-job activity (cron.job_run_details start/end times bracket it). Enable log_lock_waits so the NEXT episode is attributable to a relation, and run migrations with a session-scoped lock_timeout + retry so a blocked ALTER cannot queue readers for minutes.",
+    howToVerify:
+      "Re-run the incident scan after the fix (--incident-scan-days): the window should contain no correlated bursts, and xact_rollback stays near its baseline.",
+    docUrl: "https://www.postgresql.org/docs/current/monitoring-stats.html",
+    reviewed: R,
+  },
   mem_pressure_paging: {
     id: "mem_pressure_paging",
     plane: "Compute",
