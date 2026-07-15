@@ -292,7 +292,7 @@ export const QUERIES = {
     -- managed indexes never crowd the user's own out of the row cap.
     where n.nspname not in (${NON_APP_SCHEMAS_SQL})
     order by pg_relation_size(i.indexrelid) desc
-    limit 50`,
+    limit 100`,
 
   // Duplicate indexes: two or more indexes with an identical definition on the
   // same table (normalized by stripping the index name from indexdef). Each
@@ -751,6 +751,7 @@ export const QUERIES = {
       array_to_string(database, ',') as database,
       array_to_string(user_name, ',') as user_name,
       address,
+      netmask,
       auth_method
     from pg_hba_file_rules
     where type in ('host', 'hostssl', 'hostnossl')

@@ -75,4 +75,17 @@ describe("perf query set is read-only", () => {
     expect(QUERIES.sequenceExhaustion).toContain("pct_used");
     expect(QUERIES.sequenceExhaustion).toContain("0.70");
   });
+
+  test("cronJobs collects run duration (overrun detection)", () => {
+    expect(QUERIES.cronJobs).toContain("max_duration_s");
+    expect(QUERIES.cronJobs).toContain("avg_duration_s");
+  });
+
+  test("index evidence cap raised to substantiate large advisor lists", () => {
+    expect(QUERIES.indexStats).toContain("limit 100");
+  });
+
+  test("hbaRules includes the netmask column (address is ambiguous alone)", () => {
+    expect(QUERIES.hbaRules).toContain("netmask");
+  });
 });
