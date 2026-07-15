@@ -90,6 +90,7 @@ function base(): Analysis {
     },
     metrics: { available: false, samples: [] },
     trends: [],
+    contentionEpisodes: [],
     sync: null,
     narrative: null,
     errors: [],
@@ -1961,5 +1962,44 @@ describe("lock_forensics (lock-observability posture)", () => {
         (x) => x.heuristicId === "lock_forensics",
       )?.evidence,
     ).toMatch(/deadlock_timeout/);
+  });
+});
+
+describe("contention_episode (correlation-gated severity)", () => {
+  function withEpisode(series: string[], rollbackTotal: number, peakActive = 0): Analysis {
+    const a = base();
+    a.contentionEpisodes = [
+      { from: 1_752_000_000, to: 1_752_000_600, series, rollbackTotal, peakActive },
+    ];
+    return a;
+  }
+
+  test("two correlated series + rollbackTotal>=100 -> HIGH", () => {
+    const f = deriveFindings(withEpisode(["rollbacks", "activeBackends"], 312, 40)).find(
+      (x) => x.heuristicId === "contention_episode",
+    );
+    expect(f?.severity).toBe("high");
+    expect(f?.title).toMatch(/Contention episode/);
+    expect(f?.evidence).toMatch(/Native-resolution scan/);
+  });
+
+  test("two correlated series but rollbackTotal<100 -> MED", () => {
+    const f = deriveFindings(withEpisode(["rollbacks", "accessShare"], 40)).find(
+      (x) => x.heuristicId === "contention_episode",
+    );
+    expect(f?.severity).toBe("med");
+  });
+
+  test("single-series burst never exceeds LOW (chatty-app guard)", () => {
+    const f = deriveFindings(withEpisode(["rollbacks"], 5000)).find(
+      (x) => x.heuristicId === "contention_episode",
+    );
+    expect(f?.severity).toBe("low");
+  });
+
+  test("no episodes -> no finding", () => {
+    expect(
+      deriveFindings(base()).find((x) => x.heuristicId === "contention_episode"),
+    ).toBeUndefined();
   });
 });

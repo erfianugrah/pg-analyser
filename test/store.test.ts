@@ -90,6 +90,7 @@ function makeAnalysis(opts: {
     },
     metrics: { available: (opts.samples?.length ?? 0) > 0, samples: opts.samples ?? [] },
     trends: [],
+    contentionEpisodes: [],
     sync: null,
     narrative: null,
     errors: [],

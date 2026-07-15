@@ -1,7 +1,8 @@
+import { detectEpisodes } from "./contention.ts";
 import { type Logger, log } from "./log.ts";
 import { Management } from "./management.ts";
 import { parsePrometheus } from "./metrics.ts";
-import { fetchTrends } from "./prometheus.ts";
+import { fetchIncidentSeries, fetchTrends } from "./prometheus.ts";
 import { isUnwrappedAuth } from "./rls.ts";
 import { type Analysis, MetricSample, type SqlRow } from "./schemas.ts";
 import { collectSplinterLints } from "./splinter.ts";
@@ -23,6 +24,7 @@ export async function collect(
     prometheusCookie?: string;
     prometheusMatcher?: string;
     trendDays?: number;
+    incidentScanDays?: number;
     interval?: string;
     sqlRunner?: SqlRunner;
     syncCheck?: boolean;
@@ -385,6 +387,32 @@ export async function collect(
             cookie: promCookie,
             matcher: promMatcher,
           }),
+        [],
+      )
+    : [];
+
+  // Contention-episode scan (Check 2): a SEPARATE native-resolution pass over a
+  // short window (default 7d) - the downsampled trends above cannot see a
+  // minutes-long mass-cancellation burst. Same Prometheus config; skipped when
+  // no Prometheus is configured.
+  const envIncidentDays = Number(process.env.SBPERF_INCIDENT_SCAN_DAYS);
+  const incidentDays =
+    opts.incidentScanDays && opts.incidentScanDays > 0
+      ? opts.incidentScanDays
+      : Number.isFinite(envIncidentDays) && envIncidentDays > 0
+        ? envIncidentDays
+        : 7;
+  const contentionEpisodes = promUrl
+    ? await safe(
+        "contention",
+        async () =>
+          detectEpisodes(
+            await fetchIncidentSeries(promUrl, incidentDays, ref, {
+              token: promToken,
+              cookie: promCookie,
+              matcher: promMatcher,
+            }),
+          ),
         [],
       )
     : [];
@@ -781,6 +809,7 @@ export async function collect(
     },
     metrics: { available: metricsText != null, samples },
     trends,
+    contentionEpisodes,
     sync: await syncP,
     narrative: null,
     errors,

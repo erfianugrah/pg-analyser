@@ -107,6 +107,7 @@ function base(): Analysis {
     },
     metrics: { available: false, samples: [] },
     trends: [],
+    contentionEpisodes: [],
     sync: null,
     narrative: null,
     errors: [],

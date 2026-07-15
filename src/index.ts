@@ -115,6 +115,8 @@ Flags:
   --trend-days <n>     trend query window in days (default 30; the store/Grafana
                        is a TSDB so 90 is fine). profile.trendDays wins for a
                        profile run. (env: SBPERF_TREND_DAYS)
+  --incident-scan-days <n>  native-resolution contention scan window (default 7,
+                       capped by retention). (env: SBPERF_INCIDENT_SCAN_DAYS)
   --fail-on <sev>      check: gate severity - high|med|low (default high); exit 1 if breached
   --category <cat>     check/diff: restrict the gate to Performance|Security|Capacity
   --new-since <dir>    check: gate only on findings NEW vs the baseline dir's analysis.json
@@ -170,6 +172,7 @@ type Flags = {
   noPat?: boolean;
   profile?: string;
   trendDays?: string;
+  incidentScanDays?: string;
   store?: string;
   retentionDays?: number;
   interval?: string;
@@ -231,6 +234,7 @@ function parseFlags(argv: string[]): Flags {
     else if (a === "--no-pat") out.noPat = true;
     else if (a === "--profile") out.profile = need("--profile");
     else if (a === "--trend-days") out.trendDays = need("--trend-days");
+    else if (a === "--incident-scan-days") out.incidentScanDays = need("--incident-scan-days");
     else if (a === "--store") out.store = need("--store");
     else if (a === "--retention-days") out.retentionDays = Number(need("--retention-days"));
     else if (a === "--interval") out.interval = need("--interval");
@@ -1134,6 +1138,7 @@ async function main(): Promise<void> {
   if (flags.prometheusMatcher) process.env.SBPERF_PROMETHEUS_MATCHER = flags.prometheusMatcher;
   if (flags.noPat) process.env.SBPERF_NO_PAT = "1";
   if (flags.trendDays) process.env.SBPERF_TREND_DAYS = flags.trendDays;
+  if (flags.incidentScanDays) process.env.SBPERF_INCIDENT_SCAN_DAYS = flags.incidentScanDays;
 
   // A --profile <file.json> is the whole no-PAT config in one gitignored JSON:
   // force-no-PAT + region-mapped Grafana creds + target databases. Loaded

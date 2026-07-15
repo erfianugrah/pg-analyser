@@ -96,6 +96,7 @@ function base(): Analysis {
     },
     metrics: { available: false, samples: [] },
     trends: [{ title: "CPU utilization (%)", unit: "%", points: [{ t: 1, v: 42 }] }],
+    contentionEpisodes: [],
     sync: null,
     narrative: null,
     errors: [],
