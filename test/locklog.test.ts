@@ -86,3 +86,59 @@ describe("parseLockLog", () => {
     expect(b?.cancelsStmt).toBe(0);
   });
 });
+
+import { classifyLockWave } from "../src/locklog.ts";
+
+function summaryOf(
+  buckets: Array<Partial<import("../src/locklog.ts").LockWaveBucket> & { minute: string }>,
+) {
+  return {
+    coverage: { from: null, to: null, files: 1, bytesScanned: 1 },
+    buckets: buckets.map((b) => ({
+      waiting: 0,
+      maxWaitMs: 0,
+      acquired: 0,
+      cancelsLock: 0,
+      cancelsStmt: 0,
+      cancelsUser: 0,
+      deadlocks: 0,
+      ...b,
+    })),
+    topRelations: [],
+    samples: [],
+  };
+}
+
+describe("classifyLockWave (wall-clock windowing)", () => {
+  test("sparse background noise (2 cancels every 15min for 2h) does NOT fire", () => {
+    // The real-world false-positive case: 8 buckets 15min apart, 2 stmt-cancels
+    // each. A 10-MINUTE wall-clock window contains at most one bucket (2 cancels),
+    // well under the MED threshold of 10 - so nothing should fire.
+    const buckets = Array.from({ length: 8 }, (_, i) => ({
+      minute: `2026-07-15 ${String(20 + Math.floor((i * 15) / 60)).padStart(2, "0")}:${String((i * 15) % 60).padStart(2, "0")}`,
+      cancelsStmt: 2,
+    }));
+    expect(classifyLockWave(summaryOf(buckets))).toBeNull();
+  });
+
+  test("a real cascade (50 cancels within 10 wall-clock minutes) fires HIGH", () => {
+    const buckets = Array.from({ length: 10 }, (_, i) => ({
+      minute: `2026-07-15 18:${String(15 + i).padStart(2, "0")}`,
+      cancelsStmt: 5, // 50 across a 10-minute span
+    }));
+    const v = classifyLockWave(summaryOf(buckets));
+    expect(v?.severity).toBe("high");
+    expect(v?.cancels).toBeGreaterThanOrEqual(50);
+  });
+
+  test("the window label reflects real minutes, not a 2h bucket span", () => {
+    const buckets = Array.from({ length: 10 }, (_, i) => ({
+      minute: `2026-07-15 18:${String(15 + i).padStart(2, "0")}`,
+      cancelsStmt: 5,
+    }));
+    const v = classifyLockWave(summaryOf(buckets))!;
+    // window spans 18:15..18:24 (<=10 min), never 2 hours
+    expect(v.windowFrom).toBe("2026-07-15 18:15");
+    expect(Number(v.windowTo.slice(-2))).toBeLessThanOrEqual(24);
+  });
+});
