@@ -224,6 +224,103 @@ const InstantResponse = z.object({
   data: z.object({ result: z.array(z.object({ value: z.tuple([z.number(), z.string()]) })) }),
 });
 
+// Instant response that keeps the series labels (for the family-availability
+// probe, which reads metric.__name__).
+const LabeledInstantResponse = z.object({
+  status: z.string(),
+  data: z.object({
+    result: z.array(z.object({ metric: z.record(z.string(), z.string()).default({}) })),
+  }),
+});
+
+/**
+ * A point-in-time series carrier for the contention-episode scan (Check 2 of
+ * the lock-contention plan). Separate from fetchTrends on purpose: the 30-day
+ * trend pass downsamples to ~200 points (a 10-minute event smears ~14x into the
+ * noise floor), whereas this pass pins step=300s over a short window so a
+ * mass-cancellation burst is still visible at native scrape resolution.
+ */
+export type IncidentSeries = {
+  available: string[];
+  windowFrom: number;
+  windowTo: number;
+  stepSec: number;
+  rollbacks?: Array<[number, number]>;
+  activeBackends?: Array<[number, number]>;
+  accessShare?: Array<[number, number]>;
+  accessExcl?: Array<[number, number]>;
+};
+
+/**
+ * Native-resolution incident scan over the last `days` (default 7, capped by
+ * retention). Probes which contention families the datasource actually has,
+ * then query_ranges each present family at a PINNED step=300s. Auth/matcher
+ * construction mirrors fetchTrends. Throws (for the caller's safe()) on an auth
+ * redirect; a family absent from the probe is skipped, not an error.
+ */
+export async function fetchIncidentSeries(
+  baseUrl: string,
+  days = 7,
+  ref?: string,
+  opts: { token?: string; cookie?: string; matcher?: string } = {},
+): Promise<IncidentSeries> {
+  const end = Math.floor(Date.now() / 1000);
+  const from = end - days * 86400;
+  const step = 300; // pinned - do NOT reuse queryWindow's (end-start)/200 downsample.
+  const base = baseUrl.replace(/\/+$/, "");
+  const template = opts.matcher ?? 'supabase_project_ref="{ref}"';
+  const refMatcher = ref ? template.replaceAll("{ref}", ref) : "";
+  const headers: Record<string, string> = {};
+  if (opts.token) headers.Authorization = `Bearer ${opts.token}`;
+  else if (opts.cookie) headers.Cookie = opts.cookie;
+  const reqInit: RequestInit = {
+    ...(Object.keys(headers).length ? { headers } : {}),
+    redirect: "manual",
+  };
+
+  // Build a selector combining the project matcher with an optional extra label,
+  // never leaving a leading/trailing comma (invalid PromQL).
+  const sel = (metric: string, extra?: string) => {
+    const labels = [refMatcher, extra].filter(Boolean).join(", ");
+    return `${metric}{${labels}}`;
+  };
+
+  // Availability probe (one instant query): which families exist here?
+  const probeQ = `count by (__name__)({__name__=~"pg_stat_database_xact_rollback|pg_stat_activity_count|pg_locks_count"})`;
+  const probeUrl = `${base}/api/v1/query?query=${encodeURIComponent(probeQ)}&time=${end}`;
+  const probeRes = await fetch(probeUrl, reqInit);
+  if (probeRes.status >= 300 && probeRes.status < 400)
+    throw new Error(
+      `datasource redirected (HTTP ${probeRes.status}) - the session cookie/token is missing or expired for this datasource`,
+    );
+  const available = LabeledInstantResponse.parse(await probeRes.json())
+    .data.result.map((r) => r.metric.__name__)
+    .filter((n): n is string => Boolean(n));
+
+  const range = async (query: string): Promise<Array<[number, number]> | undefined> => {
+    const url = `${base}/api/v1/query_range?query=${encodeURIComponent(query)}&start=${from}&end=${end}&step=${step}`;
+    const res = await fetch(url, reqInit);
+    if (res.status >= 300 && res.status < 400)
+      throw new Error(
+        `datasource redirected (HTTP ${res.status}) - the session cookie/token is missing or expired for this datasource`,
+      );
+    if (!res.ok) return undefined;
+    const parsed = RangeResponse.parse(await res.json());
+    return parsed.data?.result[0]?.values.map((v) => [v[0], Number(v[1])] as [number, number]);
+  };
+
+  const out: IncidentSeries = { available, windowFrom: from, windowTo: end, stepSec: step };
+  if (available.includes("pg_stat_database_xact_rollback"))
+    out.rollbacks = await range(`sum(increase(${sel("pg_stat_database_xact_rollback")}[5m]))`);
+  if (available.includes("pg_stat_activity_count"))
+    out.activeBackends = await range(`sum(${sel("pg_stat_activity_count", 'state="active"')})`);
+  if (available.includes("pg_locks_count")) {
+    out.accessShare = await range(`sum(${sel("pg_locks_count", 'mode="accesssharelock"')})`);
+    out.accessExcl = await range(`sum(${sel("pg_locks_count", 'mode="accessexclusivelock"')})`);
+  }
+  return out;
+}
+
 /**
  * Find the real earliest-sample timestamp (unix seconds) for this project via an
  * instant `min(min_over_time(timestamp(<probe>)[<days>d:<res>]))` query. This is
