@@ -1,6 +1,7 @@
 import { appRows } from "./appschema.ts";
 import { meta, THRESHOLDS } from "./heuristics.ts";
 import { lintFix } from "./lints.ts";
+import { minorsBehind } from "./pgversions.ts";
 import type { Analysis, SqlRow } from "./schemas.ts";
 import {
   detectResizes,
@@ -878,6 +879,23 @@ export function deriveFindings(a: Analysis): Finding[] {
       ...(ver ? { changelogUrl: `https://github.com/supabase/postgres/releases/tag/${ver}` } : {}),
     });
   }
+  // No-PAT minor-currency complement: the Management upgrade plane is absent,
+  // but server_version is in pgSettings. Flag being behind the latest minor for
+  // the major line (cumulative security/bugfix). Gated on !a.upgrade so the
+  // authoritative platform-version finding above wins whenever the PAT plane is
+  // present - never double-reported.
+  if (!a.upgrade) {
+    const lag = minorsBehind(String(set.get("server_version") ?? ""));
+    if (lag) {
+      out.push({
+        severity: lag.behind >= 10 ? "med" : "low",
+        category: "Security",
+        title: `Postgres ${lag.current} is ${lag.behind} minor release${lag.behind === 1 ? "" : "s"} behind ${lag.latest} (cumulative security + bugfix)`,
+        anchor: "#config",
+        ...meta("pg_minor_behind"),
+      });
+    }
+  }
   if (set.get("idle_in_transaction_session_timeout") === "0") {
     out.push({
       severity: "low",
@@ -1168,6 +1186,54 @@ export function deriveFindings(a: Analysis): Finding[] {
       anchor: "#tables",
       evidence: `Largest: ${String(worst.table)} at ${String(worst.total_size)} with 0 reported live rows - pg_stat counters were likely reset recently.`,
       ...meta("stale_table_stats"),
+    });
+  }
+  // pg_cron run history unpruned: cron.job_run_details grows forever (pg_cron
+  // does not purge it). Detected from biggestTables past a size floor - it also
+  // becomes a top-frequency writer and a large WAL share when left unchecked.
+  const cronHist = a.sql.biggestTables.find(
+    (r) =>
+      /(^|\.)job_run_details$/.test(String(r.table)) &&
+      num(r.total_bytes) >= THRESHOLDS.cronHistoryMaxBytes,
+  );
+  if (cronHist) {
+    out.push({
+      severity: "low",
+      category: "Capacity",
+      title: `pg_cron run history is unpruned (${String(cronHist.table)} is ${String(cronHist.total_size)}, ${num(cronHist.live_rows).toLocaleString()} rows)`,
+      anchor: "#tables",
+      ...meta("cron_history_unpruned"),
+    });
+  }
+  // Bloat-estimator blind spot: an app table whose bytes-per-row is far larger
+  // than column widths explain, yet the pg_stats estimator still calls it
+  // ~un-bloated - the estimate is structurally untrustworthy there. Cross-check
+  // and nudge to pgstattuple. Skipped when the estimator DID flag bloat (it
+  // caught it) so this only fires on the blind spot. Capped worst-first.
+  const bloatByName = new Map(a.sql.bloat.map((r) => [String(r.name), num(r.bloat_x)]));
+  const inconsistent = appRows(a.sql.biggestTables)
+    .filter((r) => {
+      const rows = num(r.live_rows);
+      const bytes = num(r.total_bytes);
+      if (rows < THRESHOLDS.spacePerRowMinRows || bytes < THRESHOLDS.spacePerRowMinBytes)
+        return false;
+      const est = bloatByName.get(String(r.table));
+      return (
+        bytes / rows >= THRESHOLDS.spacePerRowHighBytes &&
+        (est == null || est < THRESHOLDS.spacePerRowEstMax)
+      );
+    })
+    .sort((x, y) => num(y.total_bytes) - num(x.total_bytes))
+    .slice(0, 3);
+  if (inconsistent.length) {
+    const worst = inconsistent[0] as SqlRow;
+    const perRowKb = Math.round(num(worst.total_bytes) / num(worst.live_rows) / 1024);
+    out.push({
+      severity: "low",
+      category: "Capacity",
+      title: `${inconsistent.length} table${inconsistent.length === 1 ? "" : "s"} with a footprint the bloat estimate can't explain (worst ${String(worst.table)}: ~${perRowKb} KB/row, estimator says un-bloated)`,
+      anchor: "#tables",
+      ...meta("bloat_estimate_suspect"),
     });
   }
   // Index-heavy large tables: indexes rivalling the heap = disk + write cost.
@@ -1849,7 +1915,18 @@ export function derivePositives(a: Analysis): Positive[] {
   const memPts = tpoints("Memory used (%)");
   if (sufficient(memPts)) {
     const s = trendStat(memPts)!;
-    if (sustainedFrac(memPts, THRESHOLDS.memSustainedHighPct, ">=") < THRESHOLDS.memSustainedFrac)
+    // Suppress the healthy-memory positive when the paging finding is firing:
+    // occupancy can look fine while the working set pages to disk, and asserting
+    // "healthy" next to a "paging to disk" finding reads as a contradiction.
+    const avgV = (pts: Point[]) =>
+      pts.length ? pts.reduce((a2, p) => a2 + p.v, 0) / pts.length : 0;
+    const pagingActive =
+      avgV(tpoints("Major page faults/s")) >= THRESHOLDS.majorFaultsPerSec ||
+      avgV(tpoints("Swap-in pages/s")) >= THRESHOLDS.swapInPagesPerSec;
+    if (
+      !pagingActive &&
+      sustainedFrac(memPts, THRESHOLDS.memSustainedHighPct, ">=") < THRESHOLDS.memSustainedFrac
+    )
       out.push({
         category: "Capacity",
         title: `Memory within healthy range: avg ${Math.round(s.mean)}%, peak ${Math.round(s.max)}% over ${Math.round(s.spanDays)}d`,

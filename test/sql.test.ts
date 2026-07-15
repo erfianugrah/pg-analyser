@@ -88,4 +88,9 @@ describe("perf query set is read-only", () => {
   test("hbaRules includes the netmask column (address is ambiguous alone)", () => {
     expect(QUERIES.hbaRules).toContain("netmask");
   });
+
+  test("connections split by backend_type (walsender not conflated with client)", () => {
+    expect(QUERIES.connections).toContain("backend_type");
+    expect(QUERIES.connections).toContain("group by state, backend_type");
+  });
 });

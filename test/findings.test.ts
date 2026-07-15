@@ -210,6 +210,59 @@ describe("countDepletionEpisodes + episodic EBS framing", () => {
   });
 });
 
+describe("review-7 batch: pg-minor / cron-history / bloat cross-check / memory", () => {
+  test("pg_minor_behind fires in no-PAT from server_version, suppressed in PAT mode", () => {
+    const a = base();
+    a.upgrade = null; // no-PAT
+    a.sql.pgSettings = [{ name: "server_version", setting: "15.1 (Ubuntu 15.1-1)", unit: "" }];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "pg_minor_behind");
+    expect(f?.title).toContain("15.1");
+    expect(f?.title).toContain("behind");
+    // with the Management upgrade plane present, the no-PAT complement is suppressed
+    a.upgrade = {
+      current_app_version: "x",
+      latest_app_version: "x",
+    } as unknown as typeof a.upgrade;
+    expect(deriveFindings(a).some((x) => x.heuristicId === "pg_minor_behind")).toBe(false);
+  });
+  test("cron_history_unpruned fires on a large job_run_details", () => {
+    const a = base();
+    a.sql.biggestTables = [
+      {
+        schema: "cron",
+        table: "cron.job_run_details",
+        total_size: "120 MB",
+        total_bytes: 120 * 1024 ** 2,
+        live_rows: 5000,
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "cron_history_unpruned");
+    expect(f?.title).toContain("cron.job_run_details");
+  });
+  test("bloat_estimate_suspect flags huge bytes/row the estimator calls un-bloated", () => {
+    const a = base();
+    a.sql.biggestTables = [
+      {
+        schema: "public",
+        table: "public.widget_events",
+        total_size: "300 MB",
+        total_bytes: 300 * 1024 ** 2,
+        live_rows: 20000,
+      },
+    ];
+    a.sql.bloat = [
+      { name: "public.widget_events", bloat_x: 1.4, waste: "1 MB", waste_bytes: 1024 ** 2 },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "bloat_estimate_suspect");
+    expect(f?.title).toContain("public.widget_events");
+    // when the estimator DID catch bloat (high bloat_x), we defer to it -> no cross-check
+    a.sql.bloat = [
+      { name: "public.widget_events", bloat_x: 3.0, waste: "200 MB", waste_bytes: 200 * 1024 ** 2 },
+    ];
+    expect(deriveFindings(a).some((x) => x.heuristicId === "bloat_estimate_suspect")).toBe(false);
+  });
+});
+
 describe("cron overrun", () => {
   test("parseCronIntervalSeconds handles the common schedule shapes", () => {
     expect(parseCronIntervalSeconds("*/5 * * * *")).toBe(300);
