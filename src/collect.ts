@@ -159,8 +159,51 @@ export async function collect(
   const mgmtLive = <T>(source: string, fn: (mm: Management) => Promise<T>, fallback: T) =>
     dbServing ? mgmt(source, fn, fallback) : Promise.resolve(fallback);
 
+  // A backend that is UP but NOT ACCEPTING CONNECTIONS: a standby mid-recovery
+  // (Postgres 57P03 cannot_connect_now / "the database system is not accepting
+  // connections" / "Hot standby mode is disabled"), a restart/restore replaying
+  // WAL, or startup/shutdown. Through Supabase's Supavisor pooler this same
+  // state surfaces as EAUTHQUERY "connection to database not available" (the
+  // pooler can't run its per-connection auth query against the offline tenant).
+  // Transient - the DB is recovering, not misconfigured; every SQL plane would
+  // otherwise fail identically at connect time.
+  const isDbUnavailable = (msg: string): boolean =>
+    /\bEAUTHQUERY\b|connection to database not available|not accepting connections|the database system is (starting up|shutting down|in recovery)|Hot standby mode is disabled|\b57P03\b|cannot_connect_now/i.test(
+      msg,
+    );
+
+  // Superuser SQL preflight. In no-PAT / --db-url mode `dbServing` is derived
+  // only from project status (a null project -> true), so a recovering backend
+  // would let all ~40 SQL planes + splinter fan out and each fail identically
+  // with the pooler's EAUTHQUERY - ~43 per-plane warns for one root cause. Probe
+  // once with `select 1`; if the DB reports it is not accepting connections,
+  // skip the SQL planes and record ONE note (the SQL-tier analogue of the
+  // dbServing short-circuit for paused PAT-mode projects). A non-recovery error
+  // (bad creds, network) is NOT masked - let the planes surface it individually.
+  let sqlServing = dbServing;
+  if (dbServing && runner.source === "superuser") {
+    try {
+      await runner.run("select 1");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (isDbUnavailable(message)) {
+        sqlServing = false;
+        errors.push({
+          source: "database",
+          message:
+            'the database is not accepting connections - it is recovering / restarting / restoring (Postgres 57P03 cannot_connect_now, surfaced through the pooler as EAUTHQUERY "connection to database not available"). SQL diagnostics and splinter advisors were skipped; retry once the project is ACTIVE_HEALTHY.',
+        });
+        clog.warn("database not accepting connections - skipping SQL planes", { error: message });
+      } else {
+        clog.debug("sql preflight probe failed (non-recovery); planes will surface it", {
+          error: message,
+        });
+      }
+    }
+  }
+
   const sql = (key: keyof typeof QUERIES) =>
-    dbServing ? safe(`sql:${key}`, () => runner.run(QUERIES[key]), []) : Promise.resolve([]);
+    sqlServing ? safe(`sql:${key}`, () => runner.run(QUERIES[key]), []) : Promise.resolve([]);
 
   const [
     health,
@@ -284,7 +327,8 @@ export async function collect(
     // SQL tier - otherwise it warns + records a note on every PAT run.
     runner.source === "superuser" ? sql("hbaRules") : Promise.resolve([]),
     // pg_ls_waldir() needs superuser / pg_monitor; the PAT read-only user lacks
-    // it. Gate to the superuser tier so it never warns on a PAT run.
+    // it. Gate to the superuser tier so it never warns on a PAT run. (sql()
+    // already no-ops when the preflight found the DB not accepting connections.)
     runner.source === "superuser" ? sql("walDirSize") : Promise.resolve([]),
     sql("authAudit"),
     sql("authMfa"),
@@ -448,7 +492,10 @@ export async function collect(
   // and gated behind --amcheck=heap.
   const amcheckIndex: SqlRow[] = [];
   let amcheckHeap: SqlRow[] = [];
-  if (opts.amcheck && runner.source === "superuser") {
+  // sqlServing-gated too: with the DB not accepting connections `extensions` is
+  // empty, so an ungated block would push a misleading "amcheck not installed"
+  // note when the real reason is the recovery short-circuit above.
+  if (opts.amcheck && runner.source === "superuser" && sqlServing) {
     const hasAmcheck = extensions.some((r) => String(r.name) === "amcheck");
     if (!hasAmcheck) {
       errors.push({
@@ -508,7 +555,11 @@ export async function collect(
   // planes empty -> both filled).
   let performanceAdvisors = perfAdvisors;
   let securityAdvisors = secAdvisors;
-  if ((performanceAdvisors.length === 0 || securityAdvisors.length === 0) && runner.runMulti) {
+  if (
+    sqlServing &&
+    (performanceAdvisors.length === 0 || securityAdvisors.length === 0) &&
+    runner.runMulti
+  ) {
     const all = await safe("advisors:splinter", () => collectSplinterLints(runner), []);
     if (performanceAdvisors.length === 0)
       performanceAdvisors = all.filter((l) => (l.categories ?? []).includes("PERFORMANCE"));
