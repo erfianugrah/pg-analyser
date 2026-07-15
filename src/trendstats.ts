@@ -13,6 +13,14 @@ import type { TrendSeries } from "./schemas.ts";
 
 export type Point = { t: number; v: number };
 
+/**
+ * Minimum |drift| as a fraction of the observed range for a series to count as
+ * rising/falling rather than flat. Drift within +/-10% of the range is treated
+ * as noise - a hand-tuned floor, not a significance test (a slope confidence
+ * interval would be more defensible; documented here so the constant is named).
+ */
+export const DIRECTION_MIN_DRIFT_FRACTION = 0.1;
+
 export type TrendStat = {
   n: number;
   spanDays: number;
@@ -24,10 +32,21 @@ export type TrendStat = {
   p95: number;
   /** Linear-regression slope in units per DAY. */
   slopePerDay: number;
+  /**
+   * The fitted regression value at the last observation (intercept + slope*x_last).
+   * Projections anchor on THIS, not the raw `last`, so a noisy final sample does
+   * not swing days-to-full.
+   */
+  fittedLast: number;
   direction: "rising" | "falling" | "flat";
 };
 
-/** Enough data to trust a trend? Default: >=12 points spanning >=3 days. */
+/**
+ * Enough data to trust a trend? Default: >=12 points spanning >=3 days. The
+ * 12/3 floor is a pragmatic guard (roughly two snapshots/day for ~a week, or a
+ * Grafana window), chosen so a 2-point store series stays dormant rather than
+ * claiming "sustained over 30d" - not a statistically derived power threshold.
+ */
 export function sufficient(points: Point[], minPoints = 12, minDays = 3): boolean {
   if (points.length < minPoints) return false;
   const span = (points[points.length - 1]!.t - points[0]!.t) / 86400;
@@ -58,8 +77,11 @@ export function trendStat(points: Point[]): TrendStat | null {
   const spanSec = ts[n - 1]! - ts[0]!;
   const spanDays = spanSec / 86400;
 
-  // Least-squares slope of value vs time-in-days.
+  // Least-squares slope of value vs time-in-days, plus the fitted value at the
+  // last x (the regression's estimate of "where we are now", robust to a noisy
+  // final sample - projectDaysTo anchors on this rather than the raw last point).
   let slopePerDay = 0;
+  let fittedLast = last;
   if (n >= 2 && spanSec > 0) {
     const t0 = ts[0]!;
     const xs = ts.map((t) => (t - t0) / 86400);
@@ -71,6 +93,7 @@ export function trendStat(points: Point[]): TrendStat | null {
       den += (xs[i]! - xm) ** 2;
     }
     slopePerDay = den > 0 ? num / den : 0;
+    fittedLast = mean + slopePerDay * (xs[n - 1]! - xm);
   }
 
   // Direction: only call it rising/falling if the drift over the window is a
@@ -78,9 +101,14 @@ export function trendStat(points: Point[]): TrendStat | null {
   const drift = slopePerDay * spanDays;
   const range = max - min || Math.abs(mean) || 1;
   const dir = drift / range;
-  const direction = dir > 0.1 ? "rising" : dir < -0.1 ? "falling" : "flat";
+  const direction =
+    dir > DIRECTION_MIN_DRIFT_FRACTION
+      ? "rising"
+      : dir < -DIRECTION_MIN_DRIFT_FRACTION
+        ? "falling"
+        : "flat";
 
-  return { n, spanDays, first, last, min, max, mean, p95, slopePerDay, direction };
+  return { n, spanDays, first, last, min, max, mean, p95, slopePerDay, fittedLast, direction };
 }
 
 /** Fraction of points at/above (dir '>=') or at/below (dir '<=') a threshold. */
@@ -92,11 +120,12 @@ export function sustainedFrac(points: Point[], threshold: number, dir: ">=" | "<
 
 /**
  * Days until the trend reaches `target`, extrapolating the current slope from
- * the last value. Null when the slope isn't moving toward the target (flat, or
+ * the FITTED value at the last point (not the raw last sample, which may be an
+ * outlier). Null when the slope isn't moving toward the target (flat, or
  * heading away) - i.e. no meaningful projection.
  */
 export function projectDaysTo(stat: TrendStat, target: number): number | null {
-  const gap = target - stat.last;
+  const gap = target - stat.fittedLast;
   if (stat.slopePerDay === 0) return null;
   const days = gap / stat.slopePerDay;
   return days > 0 && Number.isFinite(days) ? days : null;
