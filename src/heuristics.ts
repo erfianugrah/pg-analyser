@@ -175,6 +175,11 @@ export const THRESHOLDS = {
    * reports 0 live rows but occupies at least this much disk almost certainly
    * had its counters reset (pg_statistic / size survive), not truly empty. */
   staleStatsMinBytes: 10 * 1024 * 1024,
+  /** Minimum slope (bytes/day) of an active slot's retained WAL before the
+   * trend-based "retention climbing" finding fires - a floor so a trivially
+   * rising series is not flagged. Catches the "396 MB and growing" case the
+   * point-in-time 1 GiB threshold (slotLagBytes) misses. */
+  slotWalGrowthMinBytesPerDay: 256 * 1024 * 1024,
 } as const;
 
 export type Plane =
@@ -229,6 +234,18 @@ const R = HEURISTICS_REVIEWED;
 
 /** Registry keyed by heuristic id. See docs/heuristics.md for the full grounding. */
 export const HEURISTICS: Record<string, Heuristic> = {
+  wal_slot_growing: {
+    id: "wal_slot_growing",
+    plane: "Storage",
+    howToVerify:
+      "After the write burst settles, the slot's retained WAL (pg_replication_slots restart_lsn lag) should plateau or fall; if it keeps climbing the consumer is not keeping up.",
+    whyItMatters:
+      "An active replication slot whose retained WAL keeps rising means its consumer is falling behind. Retained WAL lives on the data volume and cannot be recycled until the slot advances, so unbounded growth fills the disk - the failure mode the point-in-time 1 GiB threshold misses while retention is still under a gig.",
+    remediation:
+      "Check the consumer's health (Realtime / logical-replication subscriber). If it never catches up, scale or fix the consumer; if the slot is abandoned, drop it. Retained WAL is only reclaimed once the slot advances or is dropped.",
+    docUrl: "https://www.postgresql.org/docs/current/view-pg-replication-slots.html",
+    reviewed: R,
+  },
   stale_table_stats: {
     id: "stale_table_stats",
     plane: "Vacuum",
