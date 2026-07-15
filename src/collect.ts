@@ -241,6 +241,7 @@ export async function collect(
     deadTuples,
     txidWraparound,
     multixactWraparound,
+    sequenceExhaustion,
     neverVacuumed,
     fkUnindexed,
     invalidIndexes,
@@ -303,6 +304,7 @@ export async function collect(
     sql("deadTuples"),
     sql("txidWraparound"),
     sql("multixactWraparound"),
+    sql("sequenceExhaustion"),
     sql("neverVacuumed"),
     sql("fkUnindexed"),
     sql("invalidIndexes"),
@@ -539,6 +541,9 @@ export async function collect(
   const rawIndexHit = cacheHitRows[0]?.index_hit_pct;
   const indexHitPct = rawIndexHit == null ? null : Number(rawIndexHit);
   const statsResetAge = (statsResetRows[0]?.stats_age as string | undefined) ?? null;
+  const rawDealloc = statsResetRows[0]?.dealloc;
+  const statementsDealloc =
+    rawDealloc == null || !Number.isFinite(Number(rawDealloc)) ? null : Number(rawDealloc);
   const tableStatsResetAge = (tableStatsResetRows[0]?.stats_age as string | undefined) ?? null;
 
   // The hosted advisors/performance endpoint currently 400s on the splinter
@@ -633,6 +638,7 @@ export async function collect(
       indexHitPct: indexHitPct != null && Number.isFinite(indexHitPct) ? indexHitPct : null,
       cacheBlocksAccessed,
       statsResetAge,
+      statementsDealloc,
       tableStatsResetAge,
       pgSettings,
       topStatements,
@@ -650,6 +656,7 @@ export async function collect(
       deadTuples,
       txidWraparound,
       multixactWraparound,
+      sequenceExhaustion,
       neverVacuumed,
       fkUnindexed,
       invalidIndexes,

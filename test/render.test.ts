@@ -51,6 +51,7 @@ function fixture(overrides: Partial<Analysis> = {}): Analysis {
       cacheHitPct: 100,
       indexHitPct: 99.9,
       cacheBlocksAccessed: null,
+      statementsDealloc: null,
       tableStatsResetAge: null,
       statsResetAge: "8 days 01:02:03",
       pgSettings: [
@@ -89,6 +90,7 @@ function fixture(overrides: Partial<Analysis> = {}): Analysis {
       storageUsage: [],
       extensions: [],
       unindexedVectors: [],
+      sequenceExhaustion: [],
       walArchiving: [],
       hbaRules: [],
       authAudit: [],
@@ -137,15 +139,18 @@ function tagBalance(html: string): boolean {
 }
 
 describe("render", () => {
-  test("RLS-unindexed evidence is app-scoped (platform cron rows excluded, matching the positive)", () => {
+  test("RLS-unindexed evidence renders ALL schemas (convention: report is the full auditable record)", () => {
     const a = fixture();
     a.sql.rlsUnindexed = [
       { schema: "cron", table: "cron.job", column: "username" },
       { schema: "public", table: "public.docs", column: "owner_id" },
     ];
     const html = render(a).replace(/<wbr>/g, ""); // strip break-opportunity markers
+    // Evidence shows every schema (incl. platform-managed cron); only the
+    // finding + positive are app-scoped. This keeps the report the complete
+    // record while the "application" positive avoids contradicting it.
     expect(html).toContain("public.docs");
-    expect(html).not.toContain("cron.job");
+    expect(html).toContain("cron.job");
   });
 
   test("capabilities strip: shows optional features either way (absent -> explicit, not hidden)", () => {
@@ -568,6 +573,7 @@ describe("renderSummary", () => {
         cacheHitPct: 100,
         indexHitPct: 100,
         cacheBlocksAccessed: null,
+        statementsDealloc: null,
         tableStatsResetAge: null,
         statsResetAge: null,
         pgSettings: [],
@@ -601,6 +607,7 @@ describe("renderSummary", () => {
         storageUsage: [],
         extensions: [],
         unindexedVectors: [],
+        sequenceExhaustion: [],
         walArchiving: [],
         hbaRules: [],
         authAudit: [],

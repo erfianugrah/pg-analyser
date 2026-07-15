@@ -97,7 +97,7 @@ export const QUERIES = {
   // How long pg_stat_statements has been accumulating. Cache-hit % and the
   // outliers/calls views are only interpretable against this window.
   statsResetAge: /* sql */ `
-    select (now() - stats_reset)::text as stats_age
+    select (now() - stats_reset)::text as stats_age, dealloc
     from extensions.pg_stat_statements_info`,
 
   // How long the PER-TABLE / per-index counters (pg_stat_database) have been
@@ -664,6 +664,27 @@ export const QUERIES = {
     order by age(c.relfrozenxid) desc
     limit 20`,
 
+  // Sequence exhaustion: sequences approaching their max value. int4/serial
+  // sequences cap at 2^31-1 (~2.1B) - a live risk class on high-insert tables
+  // (bulk imports, hot append). A bigint/bigserial sequence caps at ~9.2e18 so
+  // its pct is ~0 and it never surfaces here. Scoped to app schemas. Companion
+  // to the txid/multixact wraparound checks (the other 'a counter hits a
+  // ceiling' failure class). pg_sequences is PG10+, readable without superuser.
+  sequenceExhaustion: /* sql */ `
+    select
+      schemaname as schema,
+      schemaname || '.' || sequencename as sequence,
+      last_value,
+      max_value,
+      round((last_value::numeric / nullif(max_value, 0)) * 100, 1) as pct_used
+    from pg_sequences
+    where last_value is not null
+      and max_value > 0
+      and (last_value::numeric / max_value) >= 0.70
+      and schemaname not in (${NON_APP_SCHEMAS_SQL})
+    order by (last_value::numeric / nullif(max_value, 0)) desc
+    limit 20`,
+
   // Replication slots + retained WAL. An INACTIVE slot pins WAL forever and can
   // fill the disk; a lagging active slot signals a slow downstream consumer.
   // Empty on projects with no logical replication / read replicas / CDC.
@@ -697,7 +718,13 @@ export const QUERIES = {
       case when last_archived_time is null then null
         else extract(epoch from (now() - last_archived_time))::int end as last_archived_age_s,
       failed_count,
-      last_failed_time::text as last_failed_time
+      last_failed_time::text as last_failed_time,
+      -- Currently failing: at least one failure AND the most recent attempt
+      -- failed (last failure newer than the last success, or nothing archived).
+      -- A failure that already recovered (last success newer) is NOT flagged.
+      case when failed_count > 0
+        and (last_archived_time is null or last_failed_time > last_archived_time)
+        then true else false end as archiver_failing
     from pg_stat_archiver`,
 
   // Host-based auth rules (pg_hba_file_rules). The no-PAT proxy for the
