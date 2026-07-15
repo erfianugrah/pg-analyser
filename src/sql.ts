@@ -55,6 +55,9 @@ const PLATFORM_NOISE = [
   // a platform service query, not app workload; without this it can slip into
   // the outliers / latency-variance views once Realtime is enabled.
   "%pg_publication%",
+  // Replication-slot management (create/drop logical slot) - platform / Realtime
+  // plumbing, not app workload; keeps the slot-ensure call out of the outliers.
+  "%replication_slot%",
 ]
   .map((p) => `'${p}'`)
   .join(",");
@@ -361,10 +364,10 @@ export const QUERIES = {
       schemaname as schema,
       schemaname || '.' || relname as table,
       seq_scan,
-      idx_scan,
+      coalesce(idx_scan, 0) as idx_scan,
       n_live_tup as live_rows,
       case when seq_scan > 0
-        then round((seq_scan::numeric / nullif(seq_scan + idx_scan, 0)) * 100, 1)
+        then round((seq_scan::numeric / nullif(seq_scan + coalesce(idx_scan, 0), 0)) * 100, 1)
         else 0 end as seq_scan_pct
     from pg_stat_user_tables
     where seq_scan > coalesce(idx_scan, 0)
