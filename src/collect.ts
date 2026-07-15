@@ -1,4 +1,5 @@
 import { detectEpisodes } from "./contention.ts";
+import { parseLockLog } from "./locklog.ts";
 import { type Logger, log } from "./log.ts";
 import { Management } from "./management.ts";
 import { parsePrometheus } from "./metrics.ts";
@@ -6,7 +7,7 @@ import { fetchIncidentSeries, fetchTrends } from "./prometheus.ts";
 import { isUnwrappedAuth } from "./rls.ts";
 import { type Analysis, MetricSample, type SqlRow } from "./schemas.ts";
 import { collectSplinterLints } from "./splinter.ts";
-import { QUERIES } from "./sql.ts";
+import { logTailQuery, QUERIES, relationNamesQuery } from "./sql.ts";
 import { ManagementSqlRunner, type SqlRunner } from "./sqlrunner.ts";
 import { computeSyncStatus } from "./sync.ts";
 import type { Transport } from "./transport.ts";
@@ -665,9 +666,11 @@ export async function collect(
   // Supabase, so the read-only user can never succeed). A permission/other
   // failure records ONE note and readable=false, never a throw.
   let logProbe: Analysis["meta"]["logProbe"] = null;
+  let probeRows: SqlRow[] = [];
   if (sqlServing && runner.source === "superuser") {
     try {
       const rows = await runner.run(QUERIES.logDirProbe);
+      probeRows = rows;
       if (rows.length === 0) {
         logProbe = {
           readable: true,
@@ -713,6 +716,67 @@ export async function collect(
           "server log files not readable over SQL; retrospective lock-wave detection unavailable in this mode",
       });
       clog.debug("logDirProbe failed (expected off the superuser tier)", { error: message });
+    }
+  }
+
+  // Retrospective lock-wave parse (Check 1). Only when the probe found readable
+  // logs. Reads bounded tails (<=4 MB/file, <=20 MB/run), newest-first, ONE
+  // run() per chunk (each inherits the 120s guard). Skips compressed (.gz)
+  // rotations - pg_read_file returns raw bytes it cannot decompress. PRIVACY:
+  // the raw log text lives only in this local scope; only the parsed,
+  // literal-free LockWaveSummary is stored in analysis.json.
+  let lockWave: Analysis["sql"]["lockWave"] = null;
+  if (logProbe?.readable && probeRows.length > 0) {
+    const CHUNK = 4_000_000;
+    const RUN_BUDGET = 20_000_000;
+    const textFiles = probeRows.filter((r) => /\.(csv|log)$/i.test(String(r.name)));
+    const chunks: string[] = [];
+    let total = 0;
+    try {
+      for (const f of textFiles) {
+        if (total >= RUN_BUDGET) break;
+        const size = Number(f.size) || 0;
+        const want = Math.min(CHUNK, size, RUN_BUDGET - total);
+        if (want <= 0) continue;
+        const res = await runner.run(logTailQuery(String(f.name), size, want));
+        const chunk = res[0]?.chunk;
+        if (typeof chunk === "string" && chunk.length > 0) {
+          chunks.push(chunk);
+          total += want;
+        }
+      }
+      if (chunks.length > 0) {
+        const summary = parseLockLog(chunks.join("\n"), {
+          from: null,
+          to: null,
+          files: chunks.length,
+          bytesScanned: total,
+        });
+        // Coverage window = span of the timestamped buckets actually parsed.
+        const mins = summary.buckets
+          .map((b) => b.minute)
+          .filter((m) => m !== "window")
+          .sort();
+        summary.coverage.from = mins[0] ?? null;
+        summary.coverage.to = mins[mins.length - 1] ?? null;
+        // Resolve relids -> schema.table (same superuser session).
+        const relids = summary.topRelations.map((r) => r.relid);
+        if (relids.length > 0) {
+          try {
+            const names = await runner.run(relationNamesQuery(relids));
+            const nameByOid = new Map(names.map((n) => [Number(n.relid), String(n.name)]));
+            summary.topRelations = summary.topRelations.map((r) => ({
+              ...r,
+              name: nameByOid.get(r.relid) ?? null,
+            }));
+          } catch {
+            /* names are best-effort; relids stay unresolved */
+          }
+        }
+        lockWave = summary;
+      }
+    } catch (err) {
+      clog.debug("lock-wave log read failed", { error: String(err) });
     }
   }
 
@@ -826,6 +890,7 @@ export async function collect(
       authMfa,
       cronJobs,
       waitSamples,
+      lockWave,
     },
     metrics: { available: metricsText != null, samples },
     trends,

@@ -450,6 +450,36 @@ export const Analysis = z.object({
     // histograms taken ~500ms apart during collection. Repeated 'Lock' waits =
     // live contention during the run. Back-compat default.
     waitSamples: z.array(SqlRows).default([]),
+    // Retrospective lock-wave summary from the server logs (Check 1, superuser +
+    // probe-gated). PRIVACY: parsed counts + reconstructed literal-free sample
+    // phrases only - never raw log text. Null when not attempted / not readable.
+    lockWave: z
+      .object({
+        coverage: z.object({
+          from: z.string().nullable(),
+          to: z.string().nullable(),
+          files: z.number(),
+          bytesScanned: z.number(),
+        }),
+        buckets: z.array(
+          z.object({
+            minute: z.string(),
+            waiting: z.number(),
+            maxWaitMs: z.number(),
+            acquired: z.number(),
+            cancelsLock: z.number(),
+            cancelsStmt: z.number(),
+            cancelsUser: z.number(),
+            deadlocks: z.number(),
+          }),
+        ),
+        topRelations: z.array(
+          z.object({ relid: z.number(), name: z.string().nullable(), hits: z.number() }),
+        ),
+        samples: z.array(z.string()),
+      })
+      .nullable()
+      .default(null),
   }),
   metrics: z.object({
     available: z.boolean(),

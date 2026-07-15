@@ -568,6 +568,41 @@ describe("logDirProbe (superuser log-directory three-fact probe)", () => {
     expect(a.meta.logProbe?.files).toBe(2);
   });
 
+  test("readable logs -> lockWave parsed, relids resolved, NO raw query text stored", async () => {
+    const runner = {
+      source: "superuser" as const,
+      run: async (q: string) => {
+        if (/pg_ls_logdir\(\)/.test(q))
+          return [
+            {
+              node_addr: "10.0.0.7",
+              name: "postgresql.csv",
+              size: 5000,
+              modification: "2026-07-15T18:15:00Z",
+            },
+          ];
+        if (/pg_read_file/.test(q))
+          return [
+            {
+              chunk: `2026-07-15 18:15:46.123 UTC,,,1,,,,,,LOG,00000,"process 1 still waiting for ShareLock on relation 12345 of database 5 after 90000.000 ms",,,,"UPDATE accounts SET token='sk_live_SECRET' WHERE ssn='123-45-6789'"`,
+            },
+          ];
+        if (/from pg_class where oid = any/.test(q))
+          return [{ relid: 12345, name: "public.orders" }];
+        return [];
+      },
+    };
+    const a = await collect("ref", t(), "0.0.0-test", { syncCheck: false, sqlRunner: runner });
+    expect(a.sql.lockWave).not.toBeNull();
+    expect(a.sql.lockWave?.buckets[0]?.waiting).toBe(1);
+    expect(a.sql.lockWave?.topRelations[0]?.name).toBe("public.orders");
+    // PRIVACY: no query text / secret / PII from the raw log line may survive.
+    const blob = JSON.stringify(a.sql.lockWave);
+    expect(blob).not.toContain("sk_live_SECRET");
+    expect(blob).not.toContain("123-45-6789");
+    expect(blob).not.toContain("UPDATE accounts");
+  });
+
   test("superuser + permission denied -> readable=false + one note, no throw", async () => {
     const runner = {
       source: "superuser" as const,

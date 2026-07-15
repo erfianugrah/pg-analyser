@@ -816,6 +816,19 @@ export const HEURISTICS: Record<string, Heuristic> = {
       "https://www.postgresql.org/docs/current/runtime-config-statistics.html#GUC-TRACK-IO-TIMING",
     reviewed: R,
   },
+  lock_wave: {
+    id: "lock_wave",
+    plane: "Config",
+    whyItMatters:
+      "A burst of 'still waiting for ...Lock' and timeout-cancellation lines in the server log is the signature of a lock-queue cascade: a DDL statement (AccessExclusiveLock) queued behind long-running readers, with every NEW reader then queueing behind the waiting DDL - Postgres grants locks in queue order, so a lock that would not conflict still waits. The cascade is transient and invisible to any point-in-time snapshot; the log is the only on-box record of it.",
+    remediation:
+      "Attribute the window: what DDL and which scheduled jobs ran then (the top-relation column names the contended table). Prevent the next one: run migrations with a session-level lock_timeout (a few seconds) + a retry loop so a blocked ALTER fails fast instead of queueing readers; shorten or CONCURRENTLY-ify the long jobs holding AccessShareLock; avoid ALTER COLUMN ... TYPE rewrites on hot tables (add column + backfill + swap).",
+    sql: `-- live view if it is happening right now:\nselect pid, wait_event_type, wait_event, state, query_start,\n       pg_blocking_pids(pid) as blocked_by, left(query, 80) as query\nfrom pg_stat_activity\nwhere wait_event_type = 'Lock';`,
+    howToVerify:
+      "Re-run after the fix window: the scanned log window should show no waiting/cancellation bursts. Confirm migrations now fail fast (lock timeout in the migration session) instead of stalling readers.",
+    docUrl: "https://www.postgresql.org/docs/current/explicit-locking.html",
+    reviewed: R,
+  },
   lock_forensics: {
     id: "lock_forensics",
     plane: "Config",
