@@ -298,6 +298,7 @@ High Disk I/O troubleshooting.
 | `maintenance_work_mem_low` | RAM-RELATIVE (Supabase tier-scales it, so a small value on a small instance is correct): flagged only when < `maintWorkMemMinFrac` 3% of est RAM AND est RAM >= `maintWorkMemMinRamGb` 8GB | see thresholds | low | HAVE |
 | `checkpoint_completion_low` | `checkpoint_completion_target` below 0.9 spreads checkpoint I/O too tightly (spiky flushes) | < `checkpointCompletionMin` 0.7 | low | HAVE |
 | `track_io_timing_off` | `track_io_timing = off` - no per-query I/O timing (blinds pg_stat_statements + sbperf's own I/O analysis); negligible overhead on tsc-clocksource hosts | =off | low | HAVE |
+| `lock_forensics` | observability posture (mirrors `track_io_timing_off`): (1) `log_lock_waits=off` so lock waits leave no log trail; (2) no session/role-scoped `lock_timeout` (checked via `pg_roles.rolconfig`) so a blocked migration waits indefinitely. Guardrail advice is session/role-scoped ONLY - a cluster-wide `lock_timeout` is never recommended (settled design). `deadlock_timeout > 5s` is a one-line note in the same card, not its own finding. Positive when `log_lock_waits=on` | see signal | low | NEW |
 | `work_mem_spill` | `pg_stat_database_temp_bytes_total` rising (sorts/hashes spill to disk) | rate >= 1MB/s (trend) | med | HAVE |
 | `checkpoint_pressure` | `pg_stat_bgwriter_checkpoints_req_total` vs `_timed_total` rate (trend) | requested >= 30% of checkpoints -> raise max_wal_size | med | HAVE (trend) |
 | `shared_buffers_ratio` | `shared_buffers` vs RAM | not ~25% (warn > 40%) | low | NEW |
