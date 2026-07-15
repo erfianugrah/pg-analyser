@@ -180,6 +180,10 @@ export const THRESHOLDS = {
    * rising series is not flagged. Catches the "396 MB and growing" case the
    * point-in-time 1 GiB threshold (slotLagBytes) misses. */
   slotWalGrowthMinBytesPerDay: 256 * 1024 * 1024,
+  /** Fractional jump in provisioned volume size between consecutive trend
+   * points that counts as a RESIZE (not organic growth). Used to segment the
+   * disk series so a manual/auto expansion isn't trended as a fill/empty. */
+  diskResizeStepFrac: 0.2,
 } as const;
 
 export type Plane =
@@ -244,6 +248,18 @@ export const HEURISTICS: Record<string, Heuristic> = {
     remediation:
       "Check the consumer's health (Realtime / logical-replication subscriber). If it never catches up, scale or fix the consumer; if the slot is abandoned, drop it. Retained WAL is only reclaimed once the slot advances or is dropped.",
     docUrl: "https://www.postgresql.org/docs/current/view-pg-replication-slots.html",
+    reviewed: R,
+  },
+  disk_expanded: {
+    id: "disk_expanded",
+    plane: "Storage",
+    howToVerify:
+      "Confirm the new provisioned size in the dashboard (Database -> Disk); the used-% drop is the expansion, not a data loss.",
+    whyItMatters:
+      "The volume was expanded during the window, so the used-% series straddles a step-change and cannot be trended for fill risk across it - and provisioned disk is billed per GB. After any cleanup/repack lands, right-size back down (a project upgrade to ~1.2x the database size) so you are not paying for idle headroom.",
+    remediation:
+      "No immediate action - this notes the expansion so the used-% drop is not misread. Once storage work settles, right-size the volume to ~1.2x database size via a project upgrade.",
+    docUrl: "https://supabase.com/docs/guides/platform/database-size",
     reviewed: R,
   },
   stale_table_stats: {

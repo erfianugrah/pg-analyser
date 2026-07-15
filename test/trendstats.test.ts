@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   DIRECTION_MIN_DRIFT_FRACTION,
+  detectResizes,
   projectDaysTo,
   sufficient,
   sustainedFrac,
@@ -45,6 +46,43 @@ describe("trendStat", () => {
   });
   test("null on empty", () => {
     expect(trendStat([])).toBeNull();
+  });
+});
+
+describe("detectResizes", () => {
+  test("flags a step-change above the fraction, ignores organic growth", () => {
+    const pts = [
+      { t: 0, v: 50e9 },
+      { t: 1, v: 51e9 }, // +2% organic
+      { t: 2, v: 150e9 }, // +194% resize
+      { t: 3, v: 151e9 },
+    ];
+    const ev = detectResizes(pts, 0.2);
+    expect(ev).toHaveLength(1);
+    expect(ev[0]).toEqual({ at: 2, fromBytes: 51e9, toBytes: 150e9 });
+  });
+  test("no events on a flat / gently-growing series", () => {
+    expect(
+      detectResizes(
+        [
+          { t: 0, v: 100 },
+          { t: 1, v: 105 },
+          { t: 2, v: 108 },
+        ],
+        0.2,
+      ),
+    ).toEqual([]);
+  });
+  test("detects a shrink too (abs step)", () => {
+    expect(
+      detectResizes(
+        [
+          { t: 0, v: 150e9 },
+          { t: 1, v: 50e9 },
+        ],
+        0.2,
+      ),
+    ).toHaveLength(1);
   });
 });
 

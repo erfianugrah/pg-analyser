@@ -253,6 +253,51 @@ describe("replication-slot WAL growth (trend)", () => {
   });
 });
 
+describe("disk resize-aware projection", () => {
+  const DAY = 86400;
+  const series = (title: string, vals: number[]) => ({
+    title,
+    unit: title.includes("%") ? "%" : "bytes",
+    points: vals.map((v, i) => ({ t: i * DAY, v })),
+  });
+
+  test("a volume expansion emits disk_expanded and suppresses a stale 'Disk stable'", () => {
+    const a = base();
+    // 10 pre-resize points at 60% of a 50 GB volume, resize at point 10 to a
+    // 150 GB volume -> 20%, then 9 short post-resize points (insufficient).
+    const pct = [...Array(10).fill(60), 20, ...Array(9).fill(20)];
+    const size = [...Array(10).fill(50e9), ...Array(10).fill(150e9)];
+    a.trends = [series("Disk used (%)", pct), series("Disk size (bytes)", size)];
+    const f = deriveFindings(a);
+    const exp = f.find((x) => x.heuristicId === "disk_expanded");
+    expect(exp?.title).toContain("auto-expanded");
+    expect(exp?.title).toContain("GB");
+    // post-resize segment is too short to trust -> no "Disk stable" claim
+    expect(derivePositives(a).some((p) => p.title.startsWith("Disk stable"))).toBe(false);
+  });
+
+  test("steady rising disk projects in absolute bytes", () => {
+    const a = base();
+    // 15 pts / 14d, constant 100 GB volume, used rising 50% -> ~85%.
+    const pct = Array.from({ length: 15 }, (_, i) => 50 + i * 2.5);
+    const size = Array(15).fill(100e9);
+    a.trends = [series("Disk used (%)", pct), series("Disk size (bytes)", size)];
+    const f = deriveFindings(a).find((x) => x.title.startsWith("Data disk filling"));
+    expect(f?.title).toContain("GB of");
+    expect(f?.title).toContain("days to full");
+  });
+
+  test("steady non-filling disk -> 'Disk stable' with absolute bytes", () => {
+    const a = base();
+    const pct = Array(15).fill(30);
+    const size = Array(15).fill(100e9);
+    a.trends = [series("Disk used (%)", pct), series("Disk size (bytes)", size)];
+    const p = derivePositives(a).find((x) => x.title.startsWith("Disk stable"));
+    expect(p?.title).toContain("GB of");
+    expect(p?.title).toContain("(30%)");
+  });
+});
+
 describe("meaningful-negative positives", () => {
   test("empty-but-collected replication slots and topByWal render as positives", () => {
     const a = base(); // both [] and no errors
