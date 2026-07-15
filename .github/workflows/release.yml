@@ -21,7 +21,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.3.13
       - run: bun install --frozen-lockfile
       - run: bun build ./src/index.ts --compile --target=${{ matrix.target }} --outfile sbperf-${{ matrix.target }}
       - uses: actions/upload-artifact@v7
@@ -37,6 +37,9 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - name: Generate SHA256 checksums
+        working-directory: dist
+        run: sha256sum sbperf-* > SHA256SUMS
       - uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
