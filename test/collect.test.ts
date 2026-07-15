@@ -398,8 +398,13 @@ describe("amcheck integrity gating (opt-in, superuser + extension only)", () => 
   // A superuser runner that: reports amcheck installed/absent via the extensions
   // query, lists one btree target, and THROWS on bt_index_check for a corrupt
   // index (amcheck raises rather than returning rows).
-  function amcheckRunner(opts: { installed: boolean; corruptOids?: string[] }) {
-    return {
+  function amcheckRunner(opts: {
+    installed: boolean;
+    corruptOids?: string[];
+    timeoutOids?: string[];
+    withMulti?: boolean;
+  }) {
+    const base = {
       source: "superuser" as const,
       run: async (q: string) => {
         if (/from pg_extension\b/.test(q))
@@ -412,6 +417,20 @@ describe("amcheck integrity gating (opt-in, superuser + extension only)", () => 
         }
         if (q.includes("verify_heapam")) return [{ table: "public.t", blkno: 3, msg: "bad tuple" }];
         return [];
+      },
+    };
+    if (!opts.withMulti) return base;
+    return {
+      ...base,
+      runMulti: async (q: string) => {
+        if (q.includes("bt_index_check")) {
+          const oid = q.match(/bt_index_check\((\d+)/)?.[1];
+          if (opts.timeoutOids?.includes(oid ?? ""))
+            throw new Error("canceling statement due to statement timeout");
+          if (opts.corruptOids?.includes(oid ?? "")) throw new Error("index tuple out of order");
+          return [[], []];
+        }
+        return [[]];
       },
     };
   }
@@ -455,6 +474,28 @@ describe("amcheck integrity gating (opt-in, superuser + extension only)", () => 
     });
     expect(a.sql.amcheckIndex).toHaveLength(1);
     expect(String(a.sql.amcheckIndex[0]?.index)).toBe("public.idx_a");
+    expect(String(a.sql.amcheckIndex[0]?.message)).toContain("out of order");
+  });
+
+  test("a per-index timeout is recorded as a SKIP note, not a corruption hit", async () => {
+    const a = await collect("ref", t(), "0.0.0-test", {
+      syncCheck: false,
+      amcheck: true,
+      sqlRunner: amcheckRunner({ installed: true, timeoutOids: ["16385"], withMulti: true }),
+    });
+    expect(a.sql.amcheckIndex).toHaveLength(0); // a timeout is NOT corruption
+    const note = a.errors.find((e) => e.source === "amcheck");
+    expect(note?.message).toContain("exceeded");
+    expect(note?.message).toContain("NOT a corruption");
+  });
+
+  test("corruption via the runMulti path is still captured", async () => {
+    const a = await collect("ref", t(), "0.0.0-test", {
+      syncCheck: false,
+      amcheck: true,
+      sqlRunner: amcheckRunner({ installed: true, corruptOids: ["16385"], withMulti: true }),
+    });
+    expect(a.sql.amcheckIndex).toHaveLength(1);
     expect(String(a.sql.amcheckIndex[0]?.message)).toContain("out of order");
   });
 
