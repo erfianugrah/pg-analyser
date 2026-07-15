@@ -1913,3 +1913,52 @@ describe("visibility map & public-schema privilege (Tier C)", () => {
     expect(f?.evidence).toContain("cannot modify disk");
   });
 });
+
+describe("lock_forensics (lock-observability posture)", () => {
+  function withGucs(
+    over: Partial<Record<"log_lock_waits" | "lock_timeout" | "deadlock_timeout", string>>,
+    roleConfig: string[][] = [],
+  ): Analysis {
+    const a = base();
+    a.sql.pgSettings = [
+      { name: "log_lock_waits", setting: over.log_lock_waits ?? "off", unit: null },
+      { name: "lock_timeout", setting: over.lock_timeout ?? "0", unit: "ms" },
+      { name: "deadlock_timeout", setting: over.deadlock_timeout ?? "1000", unit: "ms" },
+    ];
+    a.sql.roleConfig = roleConfig.map((c, i) => ({ role: `r${i}`, rolconfig: c }));
+    return a;
+  }
+
+  test("log_lock_waits=off + no role lock_timeout -> finding naming both axes", () => {
+    const f = deriveFindings(withGucs({})).find((x) => x.heuristicId === "lock_forensics");
+    expect(f).toBeDefined();
+    expect(f?.severity).toBe("low");
+    expect(f?.evidence).toMatch(/log_lock_waits/);
+    expect(f?.evidence).toMatch(/lock_timeout/);
+  });
+
+  test("log_lock_waits=on + role-scoped lock_timeout -> positive, no finding", () => {
+    const a = withGucs({ log_lock_waits: "on" }, [["lock_timeout=3s"]]);
+    expect(deriveFindings(a).find((x) => x.heuristicId === "lock_forensics")).toBeUndefined();
+    expect(derivePositives(a).some((p) => /lock-wait logging/i.test(p.title))).toBe(true);
+  });
+
+  test("log_lock_waits=off but role-scoped lock_timeout present -> only the log axis fires", () => {
+    const f = deriveFindings(withGucs({}, [["lock_timeout=3s"]])).find(
+      (x) => x.heuristicId === "lock_forensics",
+    );
+    expect(f).toBeDefined();
+    expect(f?.evidence).toMatch(/log_lock_waits/);
+    expect(f?.evidence).not.toMatch(/no session\/role-scoped lock_timeout/);
+  });
+
+  test("deadlock_timeout > 5s appends a note to the card", () => {
+    // log on + no guardrail -> finding fires on the guardrail axis; the >5s
+    // deadlock_timeout note is appended into the same card's evidence.
+    expect(
+      deriveFindings(withGucs({ log_lock_waits: "on", deadlock_timeout: "8000" })).find(
+        (x) => x.heuristicId === "lock_forensics",
+      )?.evidence,
+    ).toMatch(/deadlock_timeout/);
+  });
+});
