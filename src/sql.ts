@@ -140,6 +140,22 @@ export const QUERIES = {
     from pg_roles
     where rolconfig is not null`,
 
+  // logDirProbe: three facts before any log parse attempt -
+  //  (a) is a log directory readable at all (pg_ls_logdir has EXECUTE revoked
+  //      from PUBLIC on hosted Supabase, so this only ever runs as a true
+  //      superuser - gate on runner.source === 'superuser' in collect),
+  //  (b) what time span the newest files cover (retention - rotation on the
+  //      image may keep hours, not days), and
+  //  (c) which node we are on (inet_server_addr) - a transaction pooler may
+  //      route pg_read_file off the node that logged an incident.
+  logDirProbe: /* sql */ `
+    select
+      inet_server_addr()::text as node_addr,
+      d.name, d.size, d.modification
+    from pg_ls_logdir() d
+    order by d.modification desc
+    limit 10`,
+
   // Page-checksum failure counters (pg_stat_database, cluster-wide row). A
   // NON-ZERO checksums_failures is on-disk corruption caught by the checksum
   // layer - a CRITICAL, actionable integrity signal available in BOTH modes
