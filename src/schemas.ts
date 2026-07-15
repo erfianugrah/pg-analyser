@@ -452,6 +452,21 @@ export const Analysis = z.object({
     samples: z.array(MetricSample),
   }),
   trends: z.array(TrendSeries),
+  // Contention episodes from the native-resolution Prometheus incident scan
+  // (Check 2 of the lock-contention plan). Separate from `trends` (which is the
+  // downsampled 30d pass); empty when no Prometheus is configured or no burst
+  // was found. Back-compat default.
+  contentionEpisodes: z
+    .array(
+      z.object({
+        from: z.number(),
+        to: z.number(),
+        series: z.array(z.string()),
+        rollbackTotal: z.number(),
+        peakActive: z.number(),
+      }),
+    )
+    .default([]),
   // Upstream sync check; nullable + defaulted for back-compat with analysis.json
   // written before the check existed.
   sync: SyncStatus.nullable().default(null),

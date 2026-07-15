@@ -110,6 +110,7 @@ function fixture(overrides: Partial<Analysis> = {}): Analysis {
       samples: [{ name: "node_load1", labels: { service_type: "db" }, value: 0.42 }],
     },
     trends: [],
+    contentionEpisodes: [],
     sync: null,
     narrative: null,
     errors: [],
