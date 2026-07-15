@@ -44,6 +44,17 @@ CREATE INDEX IF NOT EXISTS idx_ss_snap ON sql_scalars(snapshot_id);
 const SCALAR_KEYS: Array<{ key: string; pick: (a: Analysis) => number | null }> = [
   { key: "cache_hit_pct", pick: (a) => a.sql.cacheHitPct },
   { key: "index_hit_pct", pick: (a) => a.sql.indexHitPct },
+  // Max WAL retained across ACTIVE replication slots. Trended so a slot whose
+  // retention keeps climbing (consumer falling behind) is caught even below the
+  // point-in-time 1 GiB threshold. Null when there are no active slots.
+  {
+    key: "slot_wal_retained_max_bytes",
+    pick: (a) => {
+      const active = a.sql.replicationSlots.filter((r) => r.active === true);
+      if (!active.length) return null;
+      return active.reduce((mx, r) => Math.max(mx, Number(r.retained_wal_bytes) || 0), 0);
+    },
+  },
 ];
 
 export const DEFAULT_STORE = `${process.env.HOME ?? "."}/.sbperf/history.db`;

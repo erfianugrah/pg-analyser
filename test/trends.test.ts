@@ -32,6 +32,43 @@ describe("computeTrends", () => {
     ]);
   });
 
+  test("Disk size (bytes): raw provisioned size per snapshot (not the ratio)", () => {
+    const out = computeTrends([
+      snap(1000, [
+        s("node_filesystem_size_bytes", 50e9, { mountpoint: "/data" }),
+        s("node_filesystem_avail_bytes", 20e9, { mountpoint: "/data" }),
+      ]),
+      snap(2000, [
+        s("node_filesystem_size_bytes", 150e9, { mountpoint: "/data" }),
+        s("node_filesystem_avail_bytes", 120e9, { mountpoint: "/data" }),
+      ]),
+    ]);
+    expect(find(out, "Disk size (bytes)")?.points).toEqual([
+      { t: 1000, v: 50e9 },
+      { t: 2000, v: 150e9 },
+    ]);
+    // and the % series still tracks the ratio across the resize
+    const pct = find(out, "Disk used (%)")?.points;
+    expect(pct?.[0]?.v).toBeCloseTo(60, 5); // (1-20/50)*100
+    expect(pct?.[1]?.v).toBeCloseTo(20, 5); // (1-120/150)*100
+  });
+
+  test("Disk size (bytes) omitted when the sample is absent", () => {
+    const out = computeTrends([snap(1000, [s("pg_database_size_bytes", 1)])]);
+    expect(find(out, "Disk size (bytes)")).toBeUndefined();
+  });
+
+  test("Slot WAL retained (max, bytes): scalar series from the store", () => {
+    const out = computeTrends([
+      snap(1000, [], { slot_wal_retained_max_bytes: 100e6 }),
+      snap(2000, [], { slot_wal_retained_max_bytes: 400e6 }),
+    ]);
+    expect(find(out, "Slot WAL retained (max, bytes)")?.points).toEqual([
+      { t: 1000, v: 100e6 },
+      { t: 2000, v: 400e6 },
+    ]);
+  });
+
   test("gauge series sums across label sets (DB connections)", () => {
     const out = computeTrends([
       snap(1000, [

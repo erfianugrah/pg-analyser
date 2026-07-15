@@ -56,6 +56,14 @@ export function buildPanels(refMatcher: string): TrendPanel[] {
       unit: "%",
       query: `100 - (avg(${sel("node_filesystem_avail_bytes", 'mountpoint="/"', 'fstype!="rootfs"')}) * 100 / avg(${sel("node_filesystem_size_bytes", 'mountpoint="/"', 'fstype!="rootfs"')}))`,
     },
+    {
+      // Provisioned volume size - the denominator behind "Disk used (%)".
+      // Charted so a resize (step-change) is visible and fill can be projected
+      // against real bytes rather than the %, which resets on every expansion.
+      title: "Disk size (bytes)",
+      unit: "bytes",
+      query: `avg(${sel("node_filesystem_size_bytes", 'mountpoint="/data"')})`,
+    },
     { title: "Database size", unit: "bytes", query: `sum(${sel("pg_database_size_bytes")})` },
     { title: "DB connections", unit: "", query: `sum(${sel("pg_stat_database_num_backends")})` },
     {
