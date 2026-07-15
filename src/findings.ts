@@ -1094,7 +1094,7 @@ export function deriveFindings(a: Analysis): Finding[] {
     out.push({
       severity: "low",
       category: "Performance",
-      title: `Table statistics look stale (${staleTables.length} ${staleTables.length === 1 ? "table shows" : "tables show"} 0 live rows but hold data)`,
+      title: `Table statistics look stale (${staleTables.length} ${staleTables.length === 1 ? "table shows" : "tables show"} 0 live rows but ${staleTables.length === 1 ? "holds" : "hold"} data)`,
       anchor: "#tables",
       evidence: `Largest: ${String(worst.table)} at ${String(worst.total_size)} with 0 reported live rows - pg_stat counters were likely reset recently.`,
       ...meta("stale_table_stats"),

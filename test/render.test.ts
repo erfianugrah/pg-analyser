@@ -137,6 +137,17 @@ function tagBalance(html: string): boolean {
 }
 
 describe("render", () => {
+  test("RLS-unindexed evidence is app-scoped (platform cron rows excluded, matching the positive)", () => {
+    const a = fixture();
+    a.sql.rlsUnindexed = [
+      { schema: "cron", table: "cron.job", column: "username" },
+      { schema: "public", table: "public.docs", column: "owner_id" },
+    ];
+    const html = render(a).replace(/<wbr>/g, ""); // strip break-opportunity markers
+    expect(html).toContain("public.docs");
+    expect(html).not.toContain("cron.job");
+  });
+
   test("capabilities strip: shows optional features either way (absent -> explicit, not hidden)", () => {
     // Empty fixture: no pg_cron extension, no buckets, no auth rows.
     const html = render(fixture());

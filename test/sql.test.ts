@@ -52,5 +52,12 @@ describe("perf query set is read-only", () => {
     expect(QUERIES.topStatements).toContain("not ilike all");
     // the pattern list itself carries the pg_publication entry
     expect(QUERIES.topStatements).toContain("%pg_publication%");
+    // and the replication-slot management calls (slot-ensure)
+    expect(QUERIES.topStatements).toContain("%replication_slot%");
+  });
+
+  test("seqScanHeavy coalesces a null idx_scan to 0 (no blank cells / 100% pct)", () => {
+    expect(QUERIES.seqScanHeavy).toContain("coalesce(idx_scan, 0) as idx_scan");
+    expect(QUERIES.seqScanHeavy).toContain("seq_scan + coalesce(idx_scan, 0)");
   });
 });
