@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { projectDaysTo, sufficient, sustainedFrac, trendStat } from "../src/trendstats.ts";
+import {
+  DIRECTION_MIN_DRIFT_FRACTION,
+  projectDaysTo,
+  sufficient,
+  sustainedFrac,
+  trendStat,
+} from "../src/trendstats.ts";
 
 const DAY = 86400;
 // A rising series: 10 points over 9 days, +1/day.
@@ -61,5 +67,30 @@ describe("projectDaysTo", () => {
   test("null on a flat series (no movement)", () => {
     const flat = trendStat(Array.from({ length: 10 }, (_, i) => ({ t: i * DAY, v: 42 })))!;
     expect(projectDaysTo(flat, 100)).toBeNull();
+  });
+});
+
+describe("projectDaysTo (fitted-line anchor, not raw last)", () => {
+  test("DIRECTION_MIN_DRIFT_FRACTION is a named exported constant", () => {
+    expect(DIRECTION_MIN_DRIFT_FRACTION).toBe(0.1);
+  });
+  test("fittedLast equals last on a perfectly linear series", () => {
+    const s = trendStat(rising)!;
+    expect(s.fittedLast).toBeCloseTo(s.last, 5);
+  });
+  test("anchors the projection on fittedLast when the last sample is a noisy outlier", () => {
+    // ~+1/day for 9 points, then a spike outlier as the final sample.
+    const pts = Array.from({ length: 9 }, (_, i) => ({ t: i * DAY, v: 10 + i }));
+    pts.push({ t: 9 * DAY, v: 200 });
+    const s = trendStat(pts)!;
+    expect(s.last).toBe(200);
+    // the fitted value at the last x sits far below the raw spike
+    expect(s.fittedLast).toBeLessThan(100);
+    expect(Math.abs(s.fittedLast - s.last)).toBeGreaterThan(50);
+    // projection uses the fitted anchor, NOT the raw last point
+    const target = 500;
+    expect(projectDaysTo(s, target)).toBeCloseTo((target - s.fittedLast) / s.slopePerDay, 5);
+    // and that differs materially from the old raw-last behaviour
+    expect(projectDaysTo(s, target)).not.toBeCloseTo((target - s.last) / s.slopePerDay, 1);
   });
 });
