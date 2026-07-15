@@ -639,6 +639,25 @@ export async function collect(
       securityAdvisors = all.filter((l) => (l.categories ?? []).includes("SECURITY"));
   }
 
+  // Wait-event sampling (Check 6, ASH-lite): a few point-in-time histograms
+  // ~500ms apart. Both tiers (pg_stat_activity is readable read-only). Default
+  // 5 samples; SBPERF_WAIT_SAMPLES=0 disables it (skips the ~2.5s it adds).
+  // One try/catch for the whole loop so a failure records ONE note, not five.
+  const envWaitSamples = Number(process.env.SBPERF_WAIT_SAMPLES);
+  const nWaitSamples = Number.isFinite(envWaitSamples) ? envWaitSamples : 5;
+  const waitSamples: SqlRow[][] = [];
+  if (sqlServing && nWaitSamples > 0) {
+    try {
+      for (let i = 0; i < nWaitSamples; i++) {
+        waitSamples.push(await runner.run(QUERIES.waitEventSample));
+        if (i < nWaitSamples - 1) await Bun.sleep(500);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      clog.debug("wait-event sampling failed", { error: message });
+    }
+  }
+
   // Superuser log-directory probe (Check 1): three facts that gate whether
   // retrospective log parsing is meaningful - readable at all, retention span,
   // and which node pg_read_file routed to. Gated exactly like hbaRules
@@ -806,6 +825,7 @@ export async function collect(
       authAudit,
       authMfa,
       cronJobs,
+      waitSamples,
     },
     metrics: { available: metricsText != null, samples },
     trends,

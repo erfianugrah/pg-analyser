@@ -110,4 +110,10 @@ describe("perf query set is read-only", () => {
     expect(QUERIES.roleConfig).toContain("rolconfig");
     expect(QUERIES.roleConfig).toContain("from pg_roles");
   });
+
+  test("waitEventSample buckets active backends by wait_event_type", () => {
+    expect(QUERIES.waitEventSample).toContain("wait_event_type");
+    expect(QUERIES.waitEventSample).toContain("state = 'active'");
+    expect(QUERIES.waitEventSample).toContain("pid <> pg_backend_pid()");
+  });
 });

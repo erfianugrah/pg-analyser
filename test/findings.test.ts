@@ -81,6 +81,7 @@ function base(): Analysis {
       authAudit: [],
       authMfa: [],
       cronJobs: [],
+      waitSamples: [],
       dbSizeBytes: null,
       bloatExact: [],
       checksumFailures: [],
@@ -2090,5 +2091,30 @@ describe("stall-victim note on the unstable-latency card (Check 5)", () => {
     ];
     const f = deriveFindings(a).find((x) => x.heuristicId === "query_high_variance");
     expect(f?.evidence ?? "").not.toMatch(/stall signature/i);
+  });
+});
+
+describe("live_lock_contention (wait-event sampling, Check 6)", () => {
+  const lock = [{ wait_event_type: "Lock", n: 3 }];
+  const running = [{ wait_event_type: "Running", n: 1 }];
+
+  test("Lock in >=2 samples -> MED", () => {
+    const a = base();
+    a.sql.waitSamples = [lock, running, lock, lock, running];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "live_lock_contention");
+    expect(f?.severity).toBe("med");
+    expect(f?.evidence).toMatch(/point-in-time/);
+  });
+
+  test("Lock in a single sample -> no finding", () => {
+    const a = base();
+    a.sql.waitSamples = [lock, running, running, running, running];
+    expect(deriveFindings(a).find((x) => x.heuristicId === "live_lock_contention")).toBeUndefined();
+  });
+
+  test("no samples -> no finding", () => {
+    expect(
+      deriveFindings(base()).find((x) => x.heuristicId === "live_lock_contention"),
+    ).toBeUndefined();
   });
 });
