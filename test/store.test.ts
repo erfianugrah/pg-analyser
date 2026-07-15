@@ -82,6 +82,7 @@ function makeAnalysis(opts: {
       authMfa: [],
       cronJobs: [],
       waitSamples: [],
+      lockWave: null,
       dbSizeBytes: null,
       bloatExact: [],
       checksumFailures: [],

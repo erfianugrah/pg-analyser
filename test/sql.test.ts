@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { QUERIES } from "../src/sql.ts";
+import { logTailQuery, QUERIES, relationNamesQuery } from "../src/sql.ts";
 
 const WRITE = /\b(insert|update|delete|drop|alter|truncate|create|grant|revoke)\b/i;
 
@@ -115,5 +115,36 @@ describe("perf query set is read-only", () => {
     expect(QUERIES.waitEventSample).toContain("wait_event_type");
     expect(QUERIES.waitEventSample).toContain("state = 'active'");
     expect(QUERIES.waitEventSample).toContain("pid <> pg_backend_pid()");
+  });
+});
+
+describe("log-tail / relation-name query builders (sanitized inlining)", () => {
+  test("logTailQuery allowlists the filename and inlines integer offsets", () => {
+    const q = logTailQuery("postgresql.csv.8.gz", 10_000_000, 4_000_000);
+    expect(q).toContain("pg_read_file");
+    expect(q).toContain("'postgresql.csv.8.gz'");
+    expect(q).toContain("6000000"); // size - chunk
+    expect(q).toContain("4000000");
+    // read-only
+    expect(q.trim().toLowerCase().startsWith("select")).toBe(true);
+  });
+
+  test("logTailQuery strips injection + path-traversal chars from the filename", () => {
+    const q = logTailQuery("../../etc/passwd'; drop table x; --", 100, 50);
+    // No slash (no directory traversal), no quote (no string break-out), no
+    // semicolon/space (no statement chaining). A bare '..' with no slash cannot
+    // traverse, so it is harmless once slashes are gone.
+    expect(q).not.toContain("/etc/");
+    expect(q).not.toContain("'; drop");
+    expect(q).not.toContain(";");
+    // the inlined filename is a single quoted token of allowlisted chars only
+    expect(q).toContain("'....etcpasswddroptablex--'");
+  });
+
+  test("relationNamesQuery only inlines integer relids", () => {
+    const q = relationNamesQuery([12345, 678, Number.NaN]);
+    expect(q).toContain("array[12345,678]::oid[]");
+    const empty = relationNamesQuery([]);
+    expect(empty).toContain("array[0]::oid[]");
   });
 });
