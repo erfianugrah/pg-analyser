@@ -51,6 +51,7 @@ function fixture(overrides: Partial<Analysis> = {}): Analysis {
       cacheHitPct: 100,
       indexHitPct: 99.9,
       cacheBlocksAccessed: null,
+      tableStatsResetAge: null,
       statsResetAge: "8 days 01:02:03",
       pgSettings: [
         { name: "max_connections", setting: "60", unit: null },
@@ -556,6 +557,7 @@ describe("renderSummary", () => {
         cacheHitPct: 100,
         indexHitPct: 100,
         cacheBlocksAccessed: null,
+        tableStatsResetAge: null,
         statsResetAge: null,
         pgSettings: [],
         topStatements: [],

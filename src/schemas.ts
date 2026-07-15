@@ -341,6 +341,10 @@ export const Analysis = z.object({
     // gates the cache-hit finding/positive. Defaulted for back-compat.
     cacheBlocksAccessed: z.number().nullable().default(null),
     statsResetAge: z.string().nullable(),
+    // Per-table counter reset window (pg_stat_database) - distinct from the
+    // pg_stat_statements reset above. Unused-index / dead-tuple / cache-hit
+    // signals are relative to this. Defaulted null for back-compat.
+    tableStatsResetAge: z.string().nullable().default(null),
     pgSettings: SqlRows,
     topStatements: SqlRows,
     topByCalls: SqlRows,

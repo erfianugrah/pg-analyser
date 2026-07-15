@@ -33,4 +33,12 @@ describe("perf query set is read-only", () => {
       expect(keys).toContain(k);
     }
   });
+
+  test("tableStatsResetAge reads the per-table counter reset from pg_stat_database", () => {
+    expect(QUERIES.tableStatsResetAge).toBeDefined();
+    expect(QUERIES.tableStatsResetAge).toContain("pg_stat_database");
+    expect(QUERIES.tableStatsResetAge).toContain("stats_reset");
+    // distinct from the pg_stat_statements window
+    expect(QUERIES.tableStatsResetAge).not.toContain("pg_stat_statements");
+  });
 });

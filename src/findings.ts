@@ -422,6 +422,79 @@ export function securityConfigFindings(a: Analysis): Finding[] {
 }
 
 /** Derive a ranked, deduped findings list - the pyramid apex of the report. */
+/**
+ * Parse a Postgres interval text ('16:31:12', '3 days 04:05:06', '1 day',
+ * '2 mons 5 days') into fractional days. Returns null when absent/unparseable
+ * so callers can distinguish "no window" from "zero window".
+ */
+export function parseIntervalDays(text: string | null | undefined): number | null {
+  if (!text) return null;
+  let days = 0;
+  let matched = false;
+  const yr = text.match(/(\d+)\s+years?/);
+  if (yr?.[1]) {
+    days += Number(yr[1]) * 365;
+    matched = true;
+  }
+  const mon = text.match(/(\d+)\s+mons?/);
+  if (mon?.[1]) {
+    days += Number(mon[1]) * 30;
+    matched = true;
+  }
+  const d = text.match(/(\d+)\s+days?/);
+  if (d?.[1]) {
+    days += Number(d[1]);
+    matched = true;
+  }
+  const hms = text.match(/(\d{1,2}):(\d{2}):(\d{2}(?:\.\d+)?)/);
+  if (hms?.[1] && hms[2] && hms[3]) {
+    days += (Number(hms[1]) * 3600 + Number(hms[2]) * 60 + Number(hms[3])) / 86400;
+    matched = true;
+  }
+  return matched ? days : null;
+}
+
+/**
+ * The stats-accumulation window in days. Prefers the per-table counter reset
+ * (pg_stat_database - what unused-index / dead-tuple / cache-hit signals are
+ * actually relative to), falling back to the pg_stat_statements age. Null when
+ * neither was collected.
+ */
+export function statsWindowDays(a: Analysis): number | null {
+  return parseIntervalDays(a.sql.tableStatsResetAge) ?? parseIntervalDays(a.sql.statsResetAge);
+}
+
+/**
+ * Low-confidence caveat string for counter-derived findings when the stats
+ * window is below THRESHOLDS.minStatsWindowDays, else null. Keeps the caveat
+ * text in one place and gated on the threshold (never hardcoded per finding).
+ */
+function shortStatsWindowCaveat(a: Analysis): string | null {
+  const d = statsWindowDays(a);
+  if (d == null || d >= THRESHOLDS.minStatsWindowDays) return null;
+  const window = d < 1 ? `~${Math.round(d * 24)}h` : `~${d.toFixed(1)}d`;
+  return `Low confidence: counters have only accumulated for ${window} (< ${THRESHOLDS.minStatsWindowDays}d); re-check after a full workload cycle before acting.`;
+}
+
+/**
+ * Count depletion EPISODES in a trend series: a transition from above a
+ * threshold to at/below it (a fresh dip), so a series that dips, recovers, and
+ * dips again counts as 2. Turns a window-minimum into when/how-often/recovered.
+ */
+export function countDepletionEpisodes(points: { v: number }[], threshold: number): number {
+  let episodes = 0;
+  let below = false;
+  for (const p of points) {
+    if (p.v <= threshold) {
+      if (!below) episodes++;
+      below = true;
+    } else {
+      below = false;
+    }
+  }
+  return episodes;
+}
+
 export function deriveFindings(a: Analysis): Finding[] {
   const out: Finding[] = [];
   const set = settingsMap(a.sql.pgSettings);
@@ -431,6 +504,10 @@ export function deriveFindings(a: Analysis): Finding[] {
   // present to run splinter): when the advisor already covers a lint, its richer
   // catalogued card wins and we must not emit a second card for the same objects.
   const advisorLints = new Set(a.advisors.performance.map((l) => String(l.name)));
+  // Confidence caveat for counter-derived findings when the stats window is
+  // short (counters recently reset - unused-index / cache-hit / dead-tuple
+  // verdicts have not seen a full workload cycle yet). Gated on the threshold.
+  const winCaveat = shortStatsWindowCaveat(a);
 
   // Advisors (grouped by title)
   out.push(...groupAdvisors(a.advisors.performance, "Performance", "#adv-perf", a.meta.ref));
@@ -448,6 +525,7 @@ export function deriveFindings(a: Analysis): Finding[] {
       category: "Performance",
       title: `Cache hit ratio ${a.sql.cacheHitPct}% (target > ${THRESHOLDS.cacheHitPct}%)`,
       anchor: "#infra",
+      ...(winCaveat ? { evidence: winCaveat } : {}),
       ...meta("cache_hit_low"),
     });
   }
@@ -517,6 +595,7 @@ export function deriveFindings(a: Analysis): Finding[] {
       category: "Performance",
       title: `${unused} unused ${unused === 1 ? "index" : "indexes"} (write overhead)`,
       anchor: "#unused",
+      ...(winCaveat ? { evidence: winCaveat } : {}),
       ...meta("unused_index"),
     });
   }
@@ -694,6 +773,7 @@ export function deriveFindings(a: Analysis): Finding[] {
       category: "Capacity",
       title: `${countCapped(a.sql.deadTuples.length, overdue)} ${overdue === 1 ? "table" : "tables"} past the autovacuum dead-tuple threshold (vacuum not keeping up)`,
       anchor: "#deadtuples",
+      ...(winCaveat ? { evidence: winCaveat } : {}),
       ...meta("autovacuum_overdue"),
     });
   }
@@ -862,6 +942,24 @@ export function deriveFindings(a: Analysis): Finding[] {
       });
     }
   }
+  // Stale table statistics: a table reporting 0 live rows while occupying real
+  // disk means its pg_stat counters were reset (size + pg_statistic survive a
+  // reset), so every counter-derived signal for it is blind. This is a data
+  // CONTRADICTION, not emptiness - worth surfacing before trusting the numbers.
+  const staleTables = a.sql.biggestTables.filter(
+    (r) => num(r.live_rows) === 0 && num(r.total_bytes) >= THRESHOLDS.staleStatsMinBytes,
+  );
+  if (staleTables.length > 0) {
+    const worst = staleTables[0] as SqlRow;
+    out.push({
+      severity: "low",
+      category: "Performance",
+      title: `Table statistics look stale (${staleTables.length} ${staleTables.length === 1 ? "table" : "tables"} show 0 live rows but hold data)`,
+      anchor: "#tables",
+      evidence: `Largest: ${String(worst.table)} at ${String(worst.total_size)} with 0 reported live rows - pg_stat counters were likely reset recently.`,
+      ...meta("stale_table_stats"),
+    });
+  }
   // Index-heavy large tables: indexes rivalling the heap = disk + write cost.
   // Capped to the worst few by absolute index size so a wide schema can't
   // produce a wall of low findings; the drill-down still lists every table.
@@ -946,15 +1044,6 @@ export function deriveFindings(a: Analysis): Finding[] {
     const pts = a.trends.find((t) => t.title === title)?.points ?? [];
     return pts.length ? pts.reduce((sum, p) => sum + p.v, 0) / pts.length : 0;
   };
-  // Whether a series is present at all - needed for "lower is worse" signals
-  // (EBS balance) where an absent series must NOT be read as 0%.
-  const hasTrend = (title: string) =>
-    (a.trends.find((t) => t.title === title)?.points.length ?? 0) > 0;
-  // Worst (min) point over the window - for depletion signals.
-  const minTrend = (title: string) => {
-    const pts = a.trends.find((t) => t.title === title)?.points ?? [];
-    return pts.length ? Math.min(...pts.map((p) => p.v)) : Number.POSITIVE_INFINITY;
-  };
   const maxMetric = (name: string) =>
     a.metrics.samples.filter((s) => s.name === name).reduce((mx, s) => Math.max(mx, s.value), 0);
   const sumMetric = (name: string) =>
@@ -1025,22 +1114,49 @@ export function deriveFindings(a: Analysis): Finding[] {
     });
   }
   // EBS burst-balance depletion: gp2/gp3 throttle hard when credits run down.
-  // Only evaluate when the series exists - an absent series is NOT 0% balance.
-  const depleted = (
+  // Framed EPISODICALLY, not present-tense: the window MINIMUM hitting 0% may
+  // be a scar that already recovered, so a bare "depleting (0%)" misreads a past
+  // incident as an active one. Report when/how-often/current instead. Only
+  // evaluate when the series exists - an absent series is NOT 0% balance.
+  const ebsEpisodic = (
     [
       ["EBS IOPS balance (%)", "IOPS"],
       ["EBS throughput balance (%)", "throughput"],
     ] as const
   )
-    .filter(([title]) => hasTrend(title))
-    .map(([title, label]) => [minTrend(title), label] as const)
-    .filter(([v]) => v <= THRESHOLDS.ebsBalancePct);
-  if (depleted.length) {
-    const bits = depleted.map(([v, label]) => `${label} ${Math.round(v)}%`);
+    .map(([title, label]) => ({
+      label,
+      pts: a.trends.find((t) => t.title === title)?.points ?? [],
+    }))
+    .filter(({ pts }) => pts.length > 0)
+    .map(({ label, pts }) => {
+      const last = pts[pts.length - 1] as { t: number; v: number };
+      const lastDip = [...pts].reverse().find((p) => p.v <= THRESHOLDS.ebsBalancePct);
+      const spanDays = pts.length > 1 ? (last.t - (pts[0] as { t: number }).t) / 86400 : 0;
+      return {
+        label,
+        episodes: countDepletionEpisodes(pts, THRESHOLDS.ebsBalancePct),
+        current: last.v,
+        lastDipT: lastDip?.t ?? null,
+        spanDays,
+      };
+    })
+    .filter((s) => s.episodes > 0);
+  if (ebsEpisodic.length) {
+    const currentlyLow = ebsEpisodic.some((s) => s.current <= THRESHOLDS.ebsBalancePct);
+    const maxEpisodes = Math.max(...ebsEpisodic.map((s) => s.episodes));
+    const span = Math.round(Math.max(...ebsEpisodic.map((s) => s.spanDays)));
+    const bits = ebsEpisodic.map((s) => {
+      const when = s.lastDipT ? new Date(s.lastDipT * 1000).toISOString().slice(0, 10) : "?";
+      const times = `${s.episodes}x${span ? ` in ${span}d` : ""}`;
+      return `${s.label} depleted ${times} (last ${when}, currently ${Math.round(s.current)}%)`;
+    });
     out.push({
-      severity: "high",
+      // High only if it is depleted RIGHT NOW or recurred (>=2 episodes); a
+      // single healed dip is a scar, not an active incident -> medium.
+      severity: currentlyLow || maxEpisodes >= 2 ? "high" : "med",
       category: "Capacity",
-      title: `EBS burst balance depleting (${bits.join(", ")})`,
+      title: `EBS burst balance: ${bits.join("; ")}`,
       anchor: "#trends",
       ...meta("ebs_balance_low"),
     });
@@ -1492,6 +1608,15 @@ export function derivePositives(a: Analysis): Positive[] {
   }
   if (set.get("statement_timeout") !== "0" && set.get("statement_timeout") != null) {
     out.push({ category: "Performance", title: "statement_timeout is configured" });
+  }
+  // Meaningful negatives: an empty plane that was actually COLLECTED is a
+  // healthy affirmative, not silence. Guard on the errored set so a
+  // not-collected plane never renders as a false positive.
+  if (!errored.has("sql:replicationSlots") && a.sql.replicationSlots.length === 0) {
+    out.push({ category: "Capacity", title: "No replication slots retaining WAL" });
+  }
+  if (!errored.has("sql:topByWal") && a.sql.topByWal.length === 0) {
+    out.push({ category: "Performance", title: "No WAL-heavy statements in the window" });
   }
   // Capacity
   if (a.disk?.usedBytes != null && a.disk.availBytes != null) {

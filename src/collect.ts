@@ -225,6 +225,7 @@ export async function collect(
     dbSizeRows,
     cacheHitRows,
     statsResetRows,
+    tableStatsResetRows,
     pgSettings,
     topStatements,
     topByCalls,
@@ -286,6 +287,7 @@ export async function collect(
     sql("dbSize"),
     sql("cacheHit"),
     sql("statsResetAge"),
+    sql("tableStatsResetAge"),
     sql("pgSettings"),
     sql("topStatements"),
     sql("topByCalls"),
@@ -537,6 +539,7 @@ export async function collect(
   const rawIndexHit = cacheHitRows[0]?.index_hit_pct;
   const indexHitPct = rawIndexHit == null ? null : Number(rawIndexHit);
   const statsResetAge = (statsResetRows[0]?.stats_age as string | undefined) ?? null;
+  const tableStatsResetAge = (tableStatsResetRows[0]?.stats_age as string | undefined) ?? null;
 
   // The hosted advisors/performance endpoint currently 400s on the splinter
   // storage-buckets lint (42601, prepared-statement path). With a superuser
@@ -630,6 +633,7 @@ export async function collect(
       indexHitPct: indexHitPct != null && Number.isFinite(indexHitPct) ? indexHitPct : null,
       cacheBlocksAccessed,
       statsResetAge,
+      tableStatsResetAge,
       pgSettings,
       topStatements,
       topByCalls,

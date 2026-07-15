@@ -32,6 +32,7 @@ function base(): Analysis {
       cacheHitPct: null,
       indexHitPct: null,
       cacheBlocksAccessed: null,
+      tableStatsResetAge: null,
       statsResetAge: null,
       pgSettings: [],
       topStatements: [],
