@@ -895,9 +895,16 @@ export function render(
     ? `<tr><td>WAL directory</td><td class=mono>${esc(String(a.sql.walDirSize[0]?.wal_size))}</td><td class=note>pg_wal on the data volume (${esc(String(a.sql.walDirSize[0]?.wal_segments ?? "?"))} segments)</td></tr>`
     : "";
   const cksumFail = Number(a.sql.checksumFailures[0]?.checksum_failures ?? 0);
-  const cksumRow = a.sql.checksumFailures.length
-    ? `<tr><td>Page checksums</td><td class=mono>${cksumFail === 0 ? "0 failures" : `${cksumFail} FAILURES`}</td><td>${cksumFail === 0 ? '<span class="badge ok">clean</span>' : '<span class="badge err">corruption</span>'}</td></tr>`
-    : "";
+  // Gate on data_checksums: a 0 failure count is vacuous when the feature is
+  // off (the detector never runs), so do not render it as "clean".
+  const checksumsOff = a.sql.pgSettings.some(
+    (r) => String(r.name) === "data_checksums" && String(r.setting) === "off",
+  );
+  const cksumRow = !a.sql.checksumFailures.length
+    ? ""
+    : checksumsOff
+      ? `<tr><td>Page checksums</td><td class=mono>off</td><td><span class="badge warn">not enabled - corruption detection unavailable</span></td></tr>`
+      : `<tr><td>Page checksums</td><td class=mono>${cksumFail === 0 ? "0 failures" : `${cksumFail} FAILURES`}</td><td>${cksumFail === 0 ? '<span class="badge ok">clean</span>' : '<span class="badge err">corruption</span>'}</td></tr>`;
   // Checked-and-clean status rows (honesty rule: an empty section must read as
   // "checked, nothing found", not "not checked"). Skipped when not collected.
   const seqRow = errored.has("sql:sequenceExhaustion")

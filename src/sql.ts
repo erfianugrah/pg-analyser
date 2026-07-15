@@ -760,11 +760,15 @@ export const QUERIES = {
   connections: /* sql */ `
     select
       coalesce(state, '(none)') as state,
+      backend_type,
       count(*) as connections,
       max(extract(epoch from (now() - state_change))::int) as max_state_age_s
     from pg_stat_activity
     where pid <> pg_backend_pid()
-    group by state
+    -- split by backend_type so a walsender (Realtime) that sits in state='active'
+    -- for the life of its slot is a labelled 'walsender' row, not conflated with
+    -- a client backend running an 11-day query (a false hair-on-fire signal).
+    group by state, backend_type
     order by connections desc`,
 
   // POINT-IN-TIME snapshots (state at collection, not a trend). Usually empty;

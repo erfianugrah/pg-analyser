@@ -187,6 +187,17 @@ export const THRESHOLDS = {
   /** pct-used of a sequence's max at/above which exhaustion is HIGH (else MED).
    * The SQL surfaces sequences >=70% used; this is the escalation line. */
   sequenceExhaustionHighPct: 90,
+  /** cron.job_run_details size past which the unpruned-history finding fires
+   * (pg_cron never prunes its own run log). */
+  cronHistoryMaxBytes: 50 * 1024 * 1024,
+  /** Space-per-row cross-check: a table with >= this many bytes/row that the
+   * pg_stats estimator still calls un-bloated is structurally suspect. */
+  spacePerRowHighBytes: 8 * 1024,
+  spacePerRowMinRows: 1000,
+  spacePerRowMinBytes: 50 * 1024 * 1024,
+  /** bloat_x below this = estimator says "not bloated" (so a huge bytes/row is
+   * the estimator's blind spot, not a caught bloat). */
+  spacePerRowEstMax: 1.5,
 } as const;
 
 export type Plane =
@@ -241,6 +252,42 @@ const R = HEURISTICS_REVIEWED;
 
 /** Registry keyed by heuristic id. See docs/heuristics.md for the full grounding. */
 export const HEURISTICS: Record<string, Heuristic> = {
+  cron_history_unpruned: {
+    id: "cron_history_unpruned",
+    plane: "Storage",
+    howToVerify:
+      "After scheduling a cleanup, cron.job_run_details row count / size should stop growing unbounded; the table's WAL share drops.",
+    whyItMatters:
+      "pg_cron does not prune its own run log - cron.job_run_details grows forever (per-minute jobs add ~2,880 rows/day). Left alone it bloats, dominates writes (its bookkeeping INSERTs become top-frequency statements and a large share of WAL), and slows the scheduler's own queries.",
+    remediation:
+      "Schedule a cleanup, e.g. a daily cron job: DELETE FROM cron.job_run_details WHERE end_time < now() - interval '7 days'. Keep only the retention you actually query.",
+    docUrl: "https://github.com/citusdata/pg_cron#viewing-job-run-details",
+    reviewed: R,
+  },
+  bloat_estimate_suspect: {
+    id: "bloat_estimate_suspect",
+    plane: "Storage",
+    howToVerify:
+      "Run pgstattuple(<table>) (or pgstattuple_approx) for the exact live/dead/free bytes; compare against the pg_stats estimate to see which is right.",
+    whyItMatters:
+      "This table's on-disk footprint per live row is far larger than its column widths explain, yet the pg_stats bloat estimator reports it as roughly un-bloated. The estimator is structurally unreliable here (wide TOAST, or dead space it cannot see), so its ~1.0x reading should not be trusted for a downsize/repack decision.",
+    remediation:
+      "Do not rely on the estimate for this table. ANALYZE, then measure exactly with pgstattuple; if it is dead space, VACUUM (or repack); if it is legitimately wide (large TOAST values), the footprint is real.",
+    docUrl: "https://www.postgresql.org/docs/current/pgstattuple.html",
+    reviewed: R,
+  },
+  pg_minor_behind: {
+    id: "pg_minor_behind",
+    plane: "Config",
+    howToVerify:
+      "After the platform applies the minor upgrade, server_version should match the latest minor for the major line; minor upgrades are backward-compatible (no dump/restore).",
+    whyItMatters:
+      "The server is behind the latest minor release for its major version. Postgres minor releases are cumulative security and data-loss bugfixes only - running an old minor means shipping known, already-fixed defects. This is the single cheapest currency win: a minor upgrade needs no application change.",
+    remediation:
+      "Apply the latest minor for your major line. On Supabase this is a platform upgrade (Infrastructure -> Upgrade); self-hosted, bump the server package and restart.",
+    docUrl: "https://www.postgresql.org/support/versioning/",
+    reviewed: R,
+  },
   cron_job_overrun: {
     id: "cron_job_overrun",
     plane: "Query",

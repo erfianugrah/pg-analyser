@@ -139,6 +139,17 @@ function tagBalance(html: string): boolean {
 }
 
 describe("render", () => {
+  test("checksum row reflects data_checksums=off (not a vacuous 'clean')", () => {
+    const a = fixture();
+    a.sql.checksumFailures = [{ checksum_failures: 0, checksum_last_failure: null }];
+    a.sql.pgSettings = [{ name: "data_checksums", setting: "off", unit: "" }];
+    const off = render(a);
+    expect(off).toContain("corruption detection unavailable");
+    expect(off).not.toContain('<span class="badge ok">clean</span>');
+    a.sql.pgSettings = [{ name: "data_checksums", setting: "on", unit: "" }];
+    expect(render(a)).toContain("clean");
+  });
+
   test("edge functions distinguish no-PAT skipped from genuinely clean", () => {
     const a = fixture();
     a.functions = [];
