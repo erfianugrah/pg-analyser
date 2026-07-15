@@ -43,10 +43,32 @@ threat model.
 - It does not exfiltrate data anywhere. All network calls go to
   `api.supabase.com`, the `<ref>.supabase.co` metrics endpoint, your own
   `--db-url`, and (optionally) a Grafana/Prometheus you point it at.
-- It never issues writes to your database. SQL runs read-only in PAT mode; in
-  superuser mode the only state-changing calls are the opt-in
-  `pg_stat_statements_reset()` (to window queries) and, under `--amcheck`, the
-  read-only integrity checks - it never `CREATE`s an extension or alters data.
+- It never issues writes to your database. Every diagnostic query is a
+  `SELECT`/CTE (enforced by a test over the whole query set); the only
+  non-SELECT statements it sends are session `SET statement_timeout` /
+  `SET lock_timeout` guards. It never `INSERT`/`UPDATE`/`DELETE`s, never runs
+  DDL, never `CREATE`s an extension, and does not reset your query statistics.
+
+### How sbperf protects the target database
+
+sbperf is designed to be safe to run against a live production primary:
+
+- **Bounded runtime.** The superuser runner prepends `statement_timeout`
+  (default 120s) and `lock_timeout` (default 15s) to *every* query, sent in the
+  same message so they bind to the same pooled backend. No diagnostic can run
+  unbounded. Override with `SBPERF_STATEMENT_TIMEOUT` / `SBPERF_LOCK_TIMEOUT`
+  (`0` disables a cap).
+- **Read-only, non-blocking locks.** Being SELECT-only, sbperf takes only
+  `AccessShareLock`, which does not block reads or writes; `lock_timeout` makes
+  it fail fast rather than queue behind someone's `ALTER`.
+- **Heavy checks are opt-in and gated.** The integrity checks
+  (`bt_index_check`, `verify_heapam`) run only under `--amcheck` and only when
+  the `amcheck` extension is already installed; exact bloat (`pgstattuple`) runs
+  only when that extension is already installed. amcheck additionally bounds
+  each index check separately (`SBPERF_AMCHECK_TIMEOUT`, default 300s) and
+  records a timeout as a skip, not a corruption result.
+- **Connection-frugal.** The pool is capped at 2 connections
+  (`prepare:false, max:2`) so an audit cannot exhaust connection slots.
 
 ### Operator responsibilities
 

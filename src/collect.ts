@@ -513,19 +513,53 @@ export async function collect(
         () => runner.run(QUERIES.btreeIndexTargets),
         [],
       );
-      for (const t of targets) {
+      // Bound EACH bt_index_check with a per-index statement_timeout so one
+      // multi-GB index (targets are size-DESC, so the biggest runs first) can't
+      // hang the whole run. Sent as a single simple-query message (SET + check)
+      // so the timeout binds to the SAME pooled connection. Default 300s/index,
+      // override with SBPERF_AMCHECK_TIMEOUT (e.g. '20min' to actually finish a
+      // huge index). A timeout is a SKIP (recorded as a note), NOT corruption.
+      const amcheckTimeout = (process.env.SBPERF_AMCHECK_TIMEOUT ?? "300s").replace(
+        /[^0-9a-z ]/gi,
+        "",
+      );
+      const runM = runner.runMulti?.bind(runner);
+      clog.info("amcheck index scan starting", {
+        indexes: targets.length,
+        perIndexTimeout: amcheckTimeout,
+      });
+      let amcheckTimedOut = 0;
+      for (let i = 0; i < targets.length; i++) {
+        const t = targets[i] as SqlRow;
         const oid = Number(t.oid);
         if (!Number.isFinite(oid)) continue;
+        clog.debug("amcheck index", { at: i + 1, of: targets.length, index: String(t.index) });
         try {
-          await runner.run(`select bt_index_check(${oid}::regclass, false)`);
+          if (runM) {
+            await runM(
+              `set statement_timeout='${amcheckTimeout}'; select bt_index_check(${oid}::regclass, false)`,
+            );
+          } else {
+            await runner.run(`select bt_index_check(${oid}::regclass, false)`);
+          }
         } catch (err) {
-          amcheckIndex.push({
-            index: String(t.index),
-            message: err instanceof Error ? err.message : String(err),
-          });
+          const msg = err instanceof Error ? err.message : String(err);
+          if (/statement timeout|canceling statement due to statement timeout|57014/i.test(msg)) {
+            amcheckTimedOut++;
+            errors.push({
+              source: "amcheck",
+              message: `amcheck skipped ${String(t.index)}: exceeded ${amcheckTimeout} (index too large to verify within the bound - raise SBPERF_AMCHECK_TIMEOUT to check it). NOT a corruption result.`,
+            });
+          } else {
+            amcheckIndex.push({ index: String(t.index), message: msg });
+          }
         }
       }
-      clog.info("amcheck index scan", { indexes: targets.length, hits: amcheckIndex.length });
+      clog.info("amcheck index scan", {
+        indexes: targets.length,
+        hits: amcheckIndex.length,
+        timedOut: amcheckTimedOut,
+      });
       if (opts.amcheck === "heap") {
         amcheckHeap = await safe("sql:amcheckHeap", () => runner.run(QUERIES.amcheckHeap), []);
       }

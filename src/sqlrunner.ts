@@ -64,29 +64,52 @@ export class ManagementSqlRunner implements SqlRunner {
  * transaction-mode pooler (Supabase's 6543 pooler rejects prepared statements).
  * Close with `close()` when done so the process can exit.
  */
+/**
+ * Session guards prepended to EVERY superuser query so no diagnostic can run
+ * unbounded against a live customer database. statement_timeout caps runtime;
+ * lock_timeout caps time spent blocked on a lock (sbperf is read-only, so it
+ * only ever takes AccessShareLock, but this fails fast rather than queueing
+ * behind someone's ALTER). Both overridable via env; '0' disables a cap
+ * (Postgres semantics). Sent in the SAME simple-query message as the query so
+ * they bind to the same pooled backend (a plain prior `SET` would not, in a
+ * transaction pooler). The guard's SET results are empty sets: run() takes the
+ * LAST result set (the query's) and splinter picks the LARGEST, so the leading
+ * empties are ignored by both.
+ */
+export function sessionGuard(): string {
+  const clean = (v: string) => v.replace(/[^0-9a-z ]/gi, "").trim() || "0";
+  const st = clean(process.env.SBPERF_STATEMENT_TIMEOUT ?? "120s");
+  const lt = clean(process.env.SBPERF_LOCK_TIMEOUT ?? "15s");
+  return `set statement_timeout='${st}'; set lock_timeout='${lt}'; `;
+}
+
 export class DirectSqlRunner implements SqlRunner {
   readonly source = "superuser" as const;
   #sql: SqlLike;
+  #guard: string;
   /**
    * `dbUrl` opens a pooler-safe connection (prepare:false + max:2). Tests may
    * pass a fake `sql` backend to exercise run/runMulti/close without a network.
    */
   constructor(dbUrl: string, sql?: SqlLike) {
     this.#sql = sql ?? new SQL(dbUrl, { prepare: false, max: 2 });
+    this.#guard = sessionGuard();
   }
   async run(query: string): Promise<SqlRow[]> {
-    const rows = await this.#sql.unsafe(query);
-    return rows as unknown as SqlRow[];
+    // Guard + query in one message; the query's rows are the LAST result set.
+    const sets = normalizeMultiResult((await this.#sql.unsafe(this.#guard + query)) as unknown[]);
+    return (sets[sets.length - 1] ?? []) as SqlRow[];
   }
 
   /**
    * Bun.SQL with prepare:false uses the simple-query protocol, which allows
    * multiple statements in one command and returns one result set per
    * statement. A single-statement query returns a flat row array, so normalize
-   * to SqlRow[][].
+   * to SqlRow[][]. The guard's two empty SET sets lead; callers that scan the
+   * sets (splinter picks the largest) ignore them.
    */
   async runMulti(query: string): Promise<SqlRow[][]> {
-    return normalizeMultiResult((await this.#sql.unsafe(query)) as unknown[]);
+    return normalizeMultiResult((await this.#sql.unsafe(this.#guard + query)) as unknown[]);
   }
   close(): Promise<void> {
     return this.#sql.end();
