@@ -446,6 +446,10 @@ export const Analysis = z.object({
     authAudit: SqlRows.default([]),
     authMfa: SqlRows.default([]),
     cronJobs: SqlRows.default([]),
+    // ASH-lite wait-event samples (Check 6): an array of point-in-time
+    // histograms taken ~500ms apart during collection. Repeated 'Lock' waits =
+    // live contention during the run. Back-compat default.
+    waitSamples: z.array(SqlRows).default([]),
   }),
   metrics: z.object({
     available: z.boolean(),

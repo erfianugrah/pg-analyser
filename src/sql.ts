@@ -140,6 +140,16 @@ export const QUERIES = {
     from pg_roles
     where rolconfig is not null`,
 
+  // waitEventSample: one point-in-time histogram of what active backends are
+  // waiting on. Sampled a few times ~500ms apart during collection (ASH-lite):
+  // repeated wait_event_type='Lock' is live contention happening DURING the run.
+  // Both tiers (pg_stat_activity is readable by the read-only user too).
+  waitEventSample: /* sql */ `
+    select coalesce(wait_event_type, 'Running') as wait_event_type, count(*)::int as n
+    from pg_stat_activity
+    where state = 'active' and pid <> pg_backend_pid()
+    group by 1`,
+
   // logDirProbe: three facts before any log parse attempt -
   //  (a) is a log directory readable at all (pg_ls_logdir has EXECUTE revoked
   //      from PUBLIC on hosted Supabase, so this only ever runs as a true

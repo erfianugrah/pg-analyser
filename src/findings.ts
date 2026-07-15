@@ -314,6 +314,31 @@ export function configTuningFindings(a: Analysis): Finding[] {
 }
 
 /**
+ * Live lock contention (live_lock_contention): point-in-time. When >= 2 of the
+ * wait-event samples caught an active backend waiting on a Lock, contention was
+ * happening DURING collection. Not retrospective - that is lock_wave (logs) and
+ * contention_episode (metrics).
+ */
+export function liveLockContentionFindings(a: Analysis): Finding[] {
+  const samples = a.sql.waitSamples ?? [];
+  if (samples.length === 0) return [];
+  const lockSamples = samples.filter((sample) =>
+    sample.some((row) => String(row.wait_event_type) === "Lock" && num(row.n) > 0),
+  ).length;
+  if (lockSamples < 2) return [];
+  return [
+    {
+      severity: "med",
+      category: "Performance",
+      title: "Live lock contention during collection",
+      anchor: "#locks",
+      evidence: `${lockSamples} of ${samples.length} wait-event samples caught an active backend waiting on a Lock (point-in-time - contention during the audit run, not retrospective).`,
+      ...meta("live_lock_contention"),
+    },
+  ];
+}
+
+/**
  * Contention episodes (contention_episode): the metrics-side retrospective
  * channel. Severity is correlation-gated - a single-series burst can never
  * reach HIGH (a chatty app's rollback rate alone is not an incident); HIGH
@@ -1981,6 +2006,7 @@ export function deriveFindings(a: Analysis): Finding[] {
   out.push(...configTuningFindings(a));
   out.push(...lockForensicsFindings(a));
   out.push(...contentionEpisodeFindings(a));
+  out.push(...liveLockContentionFindings(a));
 
   // Security config (auth / network / SSL) - sbperf-original Security findings.
   out.push(...securityConfigFindings(a));
