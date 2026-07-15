@@ -177,6 +177,48 @@ describe("collect", () => {
     expect(t.calls.mgmt.some((p) => p.includes("query/read-only"))).toBe(false);
   });
 
+  test("a recovering backend (EAUTHQUERY) short-circuits to ONE note, not a warn per plane", async () => {
+    const seen: string[] = [];
+    const runner = {
+      source: "superuser" as const,
+      // Every connection - including the `select 1` preflight - fails the way
+      // Supavisor reports an offline tenant backend mid-recovery.
+      run: async (q: string) => {
+        seen.push(q);
+        throw new Error(
+          "(EAUTHQUERY) authentication query failed: connection to database not available",
+        );
+      },
+    };
+    const t = fakeTransport({ onMgmt: fullRoutes(), onMetrics: okMetrics });
+    const a = await collect("ref", t, "0.0.0-test", { syncCheck: false, sqlRunner: runner });
+    // Only the preflight probe ran; the ~40 diagnostic planes were skipped.
+    expect(seen).toEqual(["select 1"]);
+    // Exactly ONE database note, and no per-plane sql:* failure notes.
+    const dbNotes = a.errors.filter((e) => e.source === "database");
+    expect(dbNotes.length).toBe(1);
+    expect(dbNotes[0]?.message).toMatch(/not accepting connections/i);
+    expect(a.errors.some((e) => e.source.startsWith("sql:"))).toBe(false);
+    // splinter advisors were skipped too (no runMulti call fan-out on a dead DB).
+    expect(a.errors.some((e) => e.source === "advisors:splinter")).toBe(false);
+  });
+
+  test("a non-recovery SQL error is NOT masked - planes still surface it individually", async () => {
+    const runner = {
+      source: "superuser" as const,
+      run: async () => {
+        // e.g. bad password - a real misconfiguration the user must see per-plane.
+        throw new Error('password authentication failed for user "supabase_admin"');
+      },
+    };
+    const t = fakeTransport({ onMgmt: fullRoutes(), onMetrics: okMetrics });
+    const a = await collect("ref", t, "0.0.0-test", { syncCheck: false, sqlRunner: runner });
+    // The preflight did NOT short-circuit; the planes ran and failed loudly.
+    expect(a.errors.some((e) => e.source.startsWith("sql:"))).toBe(true);
+    // No spurious "not accepting connections" database note.
+    expect(a.errors.some((e) => e.source === "database")).toBe(false);
+  });
+
   test("a missing optional relation is NOT a collection note (debug 'plane absent', not warn)", async () => {
     const lines: string[] = [];
     const logger = makeLogger({ level: "debug", json: true, sink: (l) => lines.push(l) });
