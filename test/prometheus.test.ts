@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { fetchTrends } from "../src/prometheus.ts";
+import { fetchIncidentSeries, fetchTrends } from "../src/prometheus.ts";
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
@@ -321,5 +321,63 @@ describe("fetchTrends adaptive window (auto-scope to real data span)", () => {
     const starts = distinctStarts(urls);
     expect(starts.length).toBe(2); // fallback inference still re-queries at ~7d
     expect(now - starts[1]!).toBeLessThan(9 * 86400);
+  });
+});
+
+describe("fetchIncidentSeries (native-resolution contention scan)", () => {
+  test("pins step=300, probes families, skips absent series", async () => {
+    const urls: string[] = [];
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      const u = String(url);
+      // availability probe (instant query with count by (__name__))
+      if (u.includes("/api/v1/query?") && u.includes("count")) {
+        return new Response(
+          JSON.stringify({
+            status: "success",
+            data: {
+              result: [
+                { metric: { __name__: "pg_stat_database_xact_rollback" }, value: [1, "1"] },
+                { metric: { __name__: "pg_locks_count" }, value: [1, "1"] },
+              ],
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      urls.push(u);
+      return new Response(
+        JSON.stringify({
+          status: "success",
+          data: {
+            result: [
+              {
+                values: [
+                  [1000, "5"],
+                  [1300, "80"],
+                ],
+              },
+            ],
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+
+    const s = await fetchIncidentSeries("http://prom", 7, "p1");
+    expect(s.available).toContain("pg_stat_database_xact_rollback");
+    // rollbacks + both lock-mode series present (families in the probe)
+    expect(s.rollbacks).toBeDefined();
+    expect(s.accessShare).toBeDefined();
+    expect(s.accessExcl).toBeDefined();
+    // pg_stat_activity_count NOT in the probe -> skipped, not errored
+    expect(s.activeBackends).toBeUndefined();
+    // every range query pinned to step=300
+    const rangeUrls = urls.filter((u) => u.includes("query_range"));
+    expect(rangeUrls.length).toBeGreaterThan(0);
+    expect(rangeUrls.every((u) => u.includes("step=300"))).toBe(true);
+    // ref scoping reached the query
+    expect(rangeUrls.some((u) => decodeURIComponent(u).includes('supabase_project_ref="p1"'))).toBe(
+      true,
+    );
   });
 });
