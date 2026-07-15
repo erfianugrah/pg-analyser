@@ -2053,3 +2053,42 @@ describe("cron DDL-collision annotation (Check 4)", () => {
     expect(f?.evidence ?? "").not.toMatch(/AccessShareLock/);
   });
 });
+
+describe("stall-victim note on the unstable-latency card (Check 5)", () => {
+  test("high stall_ratio + large max_ms appends the stall signature + caveat", () => {
+    const a = base();
+    a.sql.queryIoStats = [
+      {
+        queryid: "1",
+        calls: 100,
+        mean_ms: 50,
+        stddev_ms: 120,
+        cv: 2.4,
+        max_ms: 6000,
+        stall_ratio: 120,
+        query: "select 1",
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "query_high_variance");
+    expect(f?.evidence).toMatch(/stall signature/i);
+    expect(f?.evidence).toMatch(/completed executions/i);
+  });
+
+  test("modest spread -> no stall note", () => {
+    const a = base();
+    a.sql.queryIoStats = [
+      {
+        queryid: "1",
+        calls: 100,
+        mean_ms: 50,
+        stddev_ms: 120,
+        cv: 2.4,
+        max_ms: 300,
+        stall_ratio: 6,
+        query: "select 1",
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "query_high_variance");
+    expect(f?.evidence ?? "").not.toMatch(/stall signature/i);
+  });
+});
