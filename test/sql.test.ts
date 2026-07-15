@@ -93,4 +93,14 @@ describe("perf query set is read-only", () => {
     expect(QUERIES.connections).toContain("backend_type");
     expect(QUERIES.connections).toContain("group by state, backend_type");
   });
+
+  test("pgSettings allowlist includes lock-forensics GUCs", () => {
+    expect(QUERIES.pgSettings).toContain("log_lock_waits");
+    expect(QUERIES.pgSettings).toContain("deadlock_timeout");
+  });
+
+  test("roleConfig reads pg_roles.rolconfig", () => {
+    expect(QUERIES.roleConfig).toContain("rolconfig");
+    expect(QUERIES.roleConfig).toContain("from pg_roles");
+  });
 });

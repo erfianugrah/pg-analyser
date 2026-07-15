@@ -391,6 +391,10 @@ export const Analysis = z.object({
     rlsPolicies: SqlRows,
     connections: SqlRows,
     roleStats: SqlRows,
+    // Role-scoped GUC overrides (pg_roles.rolconfig): whether a role carries a
+    // session lock_timeout / statement_timeout. Feeds lock_forensics. Internal
+    // composed field; back-compat default.
+    roleConfig: SqlRows.default([]),
     longRunning: SqlRows,
     locks: SqlRows,
     blocking: SqlRows,

@@ -124,9 +124,21 @@ export const QUERIES = {
       -- WAL compression, and whether page checksums are on.
       'checkpoint_completion_target', 'default_statistics_target',
       'track_io_timing', 'effective_io_concurrency', 'wal_compression',
-      'data_checksums'
+      'data_checksums',
+      -- lock-observability posture (lock_forensics finding): whether lock waits
+      -- are logged at all, and the wait threshold before one is logged.
+      'log_lock_waits', 'deadlock_timeout'
     )
     order by name`,
+
+  // Role-scoped GUC overrides (pg_roles.rolconfig). Both runners can read
+  // pg_roles. Used by lock_forensics to check whether a migration role sets a
+  // session-scoped lock_timeout (the settled-design guardrail), and to verify
+  // per-role statement_timeout claims rather than asserting the platform default.
+  roleConfig: /* sql */ `
+    select rolname as role, rolconfig
+    from pg_roles
+    where rolconfig is not null`,
 
   // Page-checksum failure counters (pg_stat_database, cluster-wide row). A
   // NON-ZERO checksums_failures is on-disk corruption caught by the checksum

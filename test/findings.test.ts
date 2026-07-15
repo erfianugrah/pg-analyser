@@ -67,6 +67,7 @@ function base(): Analysis {
       rlsPolicies: [],
       connections: [],
       roleStats: [],
+      roleConfig: [],
       longRunning: [],
       locks: [],
       blocking: [],
