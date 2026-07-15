@@ -179,27 +179,36 @@ export function classifyLockWave(s: LockWaveSummary, windowMinutes = 10): LockWa
       best = { severity, windowFrom: from, windowTo: to, waiting, cancels, maxWaitMs, deadlocks };
   };
 
-  // Slide a windowMinutes window across the timestamped buckets.
+  // Slide a windowMinutes WALL-CLOCK window across the timestamped buckets. A
+  // bucket's minute is "YYYY-MM-DD HH:MM"; window by real elapsed time, NOT by
+  // bucket count - logs are sparse (a bucket only exists for a minute that had
+  // a lock event), so a fixed bucket count would span hours and over-aggregate
+  // spread-out background noise into a false cascade.
+  const tOf = (minute: string) => {
+    const ms = Date.parse(`${minute.replace(" ", "T")}:00Z`);
+    return Number.isFinite(ms) ? ms : null;
+  };
+  const windowMs = windowMinutes * 60_000;
   for (let i = 0; i < b.length; i++) {
+    const start = tOf(b[i]!.minute);
     let waiting = 0;
     let cancels = 0;
     let maxWaitMs = 0;
     let deadlocks = 0;
-    for (let j = i; j < b.length && j < i + windowMinutes; j++) {
+    let lastIdx = i;
+    for (let j = i; j < b.length; j++) {
+      const tj = tOf(b[j]!.minute);
+      // Stop once we pass the wall-clock window (unparseable timestamps fall
+      // back to inclusion so nothing is silently dropped).
+      if (start != null && tj != null && tj - start >= windowMs) break;
       const w = b[j]!;
       waiting += w.waiting;
       cancels += w.cancelsLock + w.cancelsStmt;
       maxWaitMs = Math.max(maxWaitMs, w.maxWaitMs);
       deadlocks += w.deadlocks;
+      lastIdx = j;
     }
-    consider(
-      b[i]!.minute,
-      b[Math.min(i + windowMinutes - 1, b.length - 1)]!.minute,
-      waiting,
-      cancels,
-      maxWaitMs,
-      deadlocks,
-    );
+    consider(b[i]!.minute, b[lastIdx]!.minute, waiting, cancels, maxWaitMs, deadlocks);
   }
   if (oneOff)
     consider(
