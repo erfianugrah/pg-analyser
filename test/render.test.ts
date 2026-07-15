@@ -154,6 +154,25 @@ describe("render", () => {
     expect(render(a)).toContain("clean");
   });
 
+  test("cron capability chip is not 'all healthy' when a job overruns its cadence", () => {
+    const a = fixture();
+    a.sql.extensions = [{ name: "pg_cron", installed: "1.6" }];
+    a.sql.cronJobs = [
+      {
+        jobname: "nightly-refresh",
+        schedule: "*/5 * * * *",
+        active: true,
+        failed_runs: 0,
+        runs_7d: 100,
+        max_duration_s: 400,
+        avg_duration_s: 200,
+      },
+    ];
+    const html = render(a);
+    expect(html).toMatch(/overrun/i);
+    expect(html).not.toMatch(/Scheduled jobs.*all healthy/s);
+  });
+
   test("edge functions distinguish no-PAT skipped from genuinely clean", () => {
     const a = fixture();
     a.functions = [];
