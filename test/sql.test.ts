@@ -41,4 +41,16 @@ describe("perf query set is read-only", () => {
     // distinct from the pg_stat_statements window
     expect(QUERIES.tableStatsResetAge).not.toContain("pg_stat_statements");
   });
+
+  test("longRunning excludes non-client backends (walsenders / autovacuum)", () => {
+    expect(QUERIES.longRunning).toContain("backend_type = 'client backend'");
+  });
+
+  test("platform-noise denylist filters Realtime's publication poll", () => {
+    // the outliers / latency-variance queries must exclude pg_publication[_tables]
+    expect(QUERIES.queryIoStats).toContain("not ilike all");
+    expect(QUERIES.topStatements).toContain("not ilike all");
+    // the pattern list itself carries the pg_publication entry
+    expect(QUERIES.topStatements).toContain("%pg_publication%");
+  });
 });

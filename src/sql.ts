@@ -51,6 +51,10 @@ const PLATFORM_NOISE = [
   "%_realtime.%",
   "%graphql.%",
   "%pgrst%",
+  // Realtime's own publication poll (pg_publication_tables / pg_publication) -
+  // a platform service query, not app workload; without this it can slip into
+  // the outliers / latency-variance views once Realtime is enabled.
+  "%pg_publication%",
 ]
   .map((p) => `'${p}'`)
   .join(",");
@@ -738,6 +742,12 @@ export const QUERIES = {
     from pg_stat_activity
     where query <> '' and state <> 'idle'
       and pid <> pg_backend_pid()
+      -- Only real application backends. A walsender (Realtime's
+      -- START_REPLICATION worker), autovacuum worker, or the logical
+      -- replication launcher sits in state='active' for its whole lifetime by
+      -- design - counting those as "a query running > 5 min" is a false
+      -- positive on every Realtime-enabled project.
+      and backend_type = 'client backend'
       and age(now(), query_start) > interval '5 minutes'
     order by age(now(), query_start) desc
     limit 20`,
