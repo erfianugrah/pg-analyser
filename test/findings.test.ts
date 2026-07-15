@@ -3,6 +3,7 @@ import {
   countDepletionEpisodes,
   deriveFindings,
   derivePositives,
+  parseCronIntervalSeconds,
   parseIntervalDays,
   statsWindowDays,
 } from "../src/findings.ts";
@@ -206,6 +207,65 @@ describe("countDepletionEpisodes + episodic EBS framing", () => {
     expect(f?.title).toContain("currently 99%");
     // recovered + recurred -> still high (>=2 episodes)
     expect(f?.severity).toBe("high");
+  });
+});
+
+describe("cron overrun", () => {
+  test("parseCronIntervalSeconds handles the common schedule shapes", () => {
+    expect(parseCronIntervalSeconds("*/5 * * * *")).toBe(300);
+    expect(parseCronIntervalSeconds("* * * * *")).toBe(60);
+    expect(parseCronIntervalSeconds("0 * * * *")).toBe(3600);
+    expect(parseCronIntervalSeconds("0 */2 * * *")).toBe(7200);
+    expect(parseCronIntervalSeconds("0 0 * * *")).toBe(86400);
+    expect(parseCronIntervalSeconds("30 seconds")).toBe(30);
+    expect(parseCronIntervalSeconds("5 minutes")).toBe(300);
+  });
+  test("returns null for schedules it cannot confidently reduce", () => {
+    expect(parseCronIntervalSeconds("0 0 1 * *")).toBeNull(); // monthly
+    expect(parseCronIntervalSeconds("15,45 * * * *")).toBeNull(); // multi-value
+    expect(parseCronIntervalSeconds("nonsense")).toBeNull();
+  });
+  test("an active job whose max run >= its cadence fires cron_job_overrun (MED)", () => {
+    const a = base();
+    a.sql.cronJobs = [
+      {
+        jobname: "refresh-dash",
+        schedule: "*/5 * * * *",
+        active: true,
+        failed_runs: 0,
+        max_duration_s: 388,
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "cron_job_overrun");
+    expect(f?.severity).toBe("med");
+    expect(f?.title).toContain("refresh-dash");
+    expect(f?.title).toContain("388s run vs 300s");
+  });
+  test("a job comfortably inside its cadence does NOT fire", () => {
+    const a = base();
+    a.sql.cronJobs = [
+      {
+        jobname: "quick",
+        schedule: "*/5 * * * *",
+        active: true,
+        failed_runs: 0,
+        max_duration_s: 12,
+      },
+    ];
+    expect(deriveFindings(a).some((x) => x.heuristicId === "cron_job_overrun")).toBe(false);
+  });
+  test("an unparseable schedule is skipped even with a long run", () => {
+    const a = base();
+    a.sql.cronJobs = [
+      {
+        jobname: "monthly",
+        schedule: "0 0 1 * *",
+        active: true,
+        failed_runs: 0,
+        max_duration_s: 999999,
+      },
+    ];
+    expect(deriveFindings(a).some((x) => x.heuristicId === "cron_job_overrun")).toBe(false);
   });
 });
 

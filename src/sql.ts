@@ -630,7 +630,13 @@ export const QUERIES = {
       j.active,
       count(r.*) filter (where r.status = 'failed') as failed_runs,
       count(r.*) as runs_7d,
-      max(r.end_time)::text as last_run
+      max(r.end_time)::text as last_run,
+      -- Run duration (7d): a job whose runtime approaches/exceeds its own
+      -- schedule cadence overlaps itself - invisible to failed_runs.
+      round(avg(extract(epoch from (r.end_time - r.start_time)))
+        filter (where r.end_time is not null))::int as avg_duration_s,
+      round(max(extract(epoch from (r.end_time - r.start_time)))
+        filter (where r.end_time is not null))::int as max_duration_s
     from cron.job j
     left join cron.job_run_details r
       on r.jobid = j.jobid and r.start_time > now() - interval '7 days'
