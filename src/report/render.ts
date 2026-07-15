@@ -5,6 +5,7 @@ import {
   type Finding,
   type Positive,
   type Severity,
+  statsWindowDays,
 } from "../findings.ts";
 import { THRESHOLDS } from "../heuristics.ts";
 import { EMPTY_OVERLAY, type Overlay } from "../overlay.ts";
@@ -196,7 +197,10 @@ function rlsTable(rows: SqlRow[]): string {
 }
 
 function functionsSection(a: Analysis): string {
-  if (!a.functions.length) return "<p class=empty>none deployed</p>";
+  if (!a.functions.length)
+    return a.meta.managementApi === false
+      ? '<p class="empty warn-text">not collected (no Management API - edge functions are a platform plane)</p>'
+      : "<p class=empty>none deployed</p>";
   const list = sqlTable(a.functions as unknown as SqlRow[], { mono: ["slug"], hide: ["id"] });
   if (!a.functionStats.length) return list;
   const stats = a.functionStats.map((s) => ({
@@ -646,7 +650,15 @@ function vitalsMini(a: Analysis): string {
   const rows: [string, string][] = [
     ["Postgres", esc(a.meta.pgVersion ?? "-")],
     ["DB size", esc(a.sql.dbSize ?? "-")],
-    ["Cache hit", a.sql.cacheHitPct == null ? "-" : `${a.sql.cacheHitPct}%`],
+    [
+      "Cache hit",
+      a.sql.cacheHitPct == null
+        ? "-"
+        : `${a.sql.cacheHitPct}%${(() => {
+            const w = statsWindowDays(a);
+            return w != null && w < THRESHOLDS.minStatsWindowDays ? " (low confidence)" : "";
+          })()}`,
+    ],
     [
       "Disk used",
       d?.usedBytes != null
@@ -886,6 +898,15 @@ export function render(
   const cksumRow = a.sql.checksumFailures.length
     ? `<tr><td>Page checksums</td><td class=mono>${cksumFail === 0 ? "0 failures" : `${cksumFail} FAILURES`}</td><td>${cksumFail === 0 ? '<span class="badge ok">clean</span>' : '<span class="badge err">corruption</span>'}</td></tr>`
     : "";
+  // Checked-and-clean status rows (honesty rule: an empty section must read as
+  // "checked, nothing found", not "not checked"). Skipped when not collected.
+  const seqRow = errored.has("sql:sequenceExhaustion")
+    ? ""
+    : `<tr><td>Sequence headroom</td><td class=mono>${a.sql.sequenceExhaustion.length === 0 ? "ok" : `${a.sql.sequenceExhaustion.length} near limit`}</td><td>${a.sql.sequenceExhaustion.length === 0 ? '<span class="badge ok">no int4 sequence near its ceiling</span>' : '<span class="badge warn">review</span>'}</td></tr>`;
+  const deallocRow =
+    a.sql.statementsDealloc == null
+      ? ""
+      : `<tr><td>Query-stats evictions</td><td class=mono>${a.sql.statementsDealloc} dealloc</td><td>${a.sql.statementsDealloc === 0 ? '<span class="badge ok">top-N complete</span>' : '<span class="badge warn">top-N is a partial sample</span>'}</td></tr>`;
   const diskPctTrend = diskUsedPctTrend(a);
   const diskUsed =
     disk && disk.usedBytes != null
@@ -945,6 +966,8 @@ ${capabilitiesSection(a)}
   <tr><td>Disk</td><td class=mono>${diskLine}</td><td>${diskUsed}${autoscaleLine ? `<br><span class=note>${autoscaleLine}</span>` : ""}${modifiableLine ? `<br><span class=note>${modifiableLine}</span>` : ""}</td></tr>
   ${walDirRow}
   ${cksumRow}
+  ${seqRow}
+  ${deallocRow}
   <tr><td>DB size</td><td class=mono>${esc(a.sql.dbSize ?? (errored.has("sql:dbSize") ? "not collected" : "-"))}</td><td></td></tr>
   <tr><td>Cache hit (table)</td><td class=mono>${a.sql.cacheHitPct == null ? "-" : `${a.sql.cacheHitPct}%`}</td><td>${a.sql.cacheHitPct != null && a.sql.cacheHitPct < 99 ? '<span class="badge warn">below 99%</span>' : ""}</td></tr>
   <tr><td>Cache hit (index)</td><td class=mono>${a.sql.indexHitPct == null ? "-" : `${a.sql.indexHitPct}%`}</td><td>${a.sql.indexHitPct != null && a.sql.indexHitPct < 99 ? '<span class="badge warn">below 99%</span>' : ""}</td></tr>

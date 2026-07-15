@@ -139,6 +139,33 @@ function tagBalance(html: string): boolean {
 }
 
 describe("render", () => {
+  test("edge functions distinguish no-PAT skipped from genuinely clean", () => {
+    const a = fixture();
+    a.functions = [];
+    a.meta.managementApi = false;
+    expect(render(a)).toContain("not collected (no Management API");
+    a.meta.managementApi = true;
+    expect(render(a)).toContain("none deployed");
+  });
+
+  test("cache-hit vitals tile carries the low-confidence label on a short stats window", () => {
+    const a = fixture();
+    a.sql.cacheHitPct = 50;
+    a.sql.tableStatsResetAge = "12:00:00"; // 12h < 7d
+    expect(render(a)).toContain("50% (low confidence)");
+    a.sql.tableStatsResetAge = "30 days";
+    expect(render(a)).not.toContain("50% (low confidence)");
+  });
+
+  test("checked-and-clean status rows: sequences + query-stats evictions", () => {
+    const a = fixture();
+    a.sql.sequenceExhaustion = [];
+    a.sql.statementsDealloc = 0;
+    const html = render(a);
+    expect(html).toContain("no int4 sequence near its ceiling");
+    expect(html).toContain("top-N complete");
+  });
+
   test("RLS-unindexed evidence renders ALL schemas (convention: report is the full auditable record)", () => {
     const a = fixture();
     a.sql.rlsUnindexed = [
