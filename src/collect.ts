@@ -611,6 +611,64 @@ export async function collect(
       securityAdvisors = all.filter((l) => (l.categories ?? []).includes("SECURITY"));
   }
 
+  // Superuser log-directory probe (Check 1): three facts that gate whether
+  // retrospective log parsing is meaningful - readable at all, retention span,
+  // and which node pg_read_file routed to. Gated exactly like hbaRules
+  // (superuser only: pg_ls_logdir has EXECUTE revoked from PUBLIC on hosted
+  // Supabase, so the read-only user can never succeed). A permission/other
+  // failure records ONE note and readable=false, never a throw.
+  let logProbe: Analysis["meta"]["logProbe"] = null;
+  if (sqlServing && runner.source === "superuser") {
+    try {
+      const rows = await runner.run(QUERIES.logDirProbe);
+      if (rows.length === 0) {
+        logProbe = {
+          readable: true,
+          nodeAddr: null,
+          newestFile: null,
+          oldestFile: null,
+          spanHours: null,
+          files: 0,
+        };
+        errors.push({
+          source: "logDirProbe",
+          message: "server log directory is empty; retrospective lock-wave detection unavailable",
+        });
+      } else {
+        const times = rows
+          .map((r) => new Date(String(r.modification)).getTime())
+          .filter((n) => Number.isFinite(n))
+          .sort((a, b) => a - b);
+        const spanHours =
+          times.length >= 2 ? (times[times.length - 1]! - times[0]!) / 3_600_000 : 0;
+        logProbe = {
+          readable: true,
+          nodeAddr: (rows[0]?.node_addr as string | null) ?? null,
+          newestFile: (rows[0]?.name as string | undefined) ?? null,
+          oldestFile: (rows[rows.length - 1]?.name as string | undefined) ?? null,
+          spanHours: Math.round(spanHours * 10) / 10,
+          files: rows.length,
+        };
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logProbe = {
+        readable: false,
+        nodeAddr: null,
+        newestFile: null,
+        oldestFile: null,
+        spanHours: null,
+        files: 0,
+      };
+      errors.push({
+        source: "logDirProbe",
+        message:
+          "server log files not readable over SQL; retrospective lock-wave detection unavailable in this mode",
+      });
+      clog.debug("logDirProbe failed (expected off the superuser tier)", { error: message });
+    }
+  }
+
   const collectionMs = Math.round(performance.now() - startedAt);
   const analysis: Analysis = {
     meta: {
@@ -630,6 +688,7 @@ export async function collect(
       sbperfVersion: version,
       sqlSource: runner.source,
       managementApi: !noPat,
+      logProbe,
       // Trends here can only have come from Prometheus/Grafana (the store/import
       // fill happens later, at report time). Only claim a source if it yielded data.
       trendSource: promUrl && trends.length ? "prometheus" : undefined,

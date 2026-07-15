@@ -529,3 +529,58 @@ describe("amcheck integrity gating (opt-in, superuser + extension only)", () => 
     expect(a.sql.amcheckIndex).toHaveLength(0);
   });
 });
+
+describe("logDirProbe (superuser log-directory three-fact probe)", () => {
+  const t = () => fakeTransport({ onMgmt: fullRoutes(), onMetrics: okMetrics });
+
+  test("read-only (PAT) tier never attempts the probe", async () => {
+    const readonly = { source: "read-only" as const, run: async () => [] };
+    const a = await collect("ref", t(), "0.0.0-test", { syncCheck: false, sqlRunner: readonly });
+    expect(a.meta.logProbe).toBeNull();
+  });
+
+  test("superuser + readable -> records span + node", async () => {
+    const runner = {
+      source: "superuser" as const,
+      run: async (q: string) =>
+        /pg_ls_logdir\(\)/.test(q)
+          ? [
+              {
+                node_addr: "10.0.0.7",
+                name: "pg-2.log",
+                size: 4096,
+                modification: "2026-07-15T18:00:00Z",
+              },
+              {
+                node_addr: "10.0.0.7",
+                name: "pg-1.log",
+                size: 8192,
+                modification: "2026-07-15T17:00:00Z",
+              },
+            ]
+          : [],
+    };
+    const a = await collect("ref", t(), "0.0.0-test", { syncCheck: false, sqlRunner: runner });
+    expect(a.meta.logProbe?.readable).toBe(true);
+    expect(a.meta.logProbe?.nodeAddr).toBe("10.0.0.7");
+    expect(a.meta.logProbe?.newestFile).toBe("pg-2.log");
+    expect(a.meta.logProbe?.spanHours).toBeCloseTo(1, 1);
+    expect(a.meta.logProbe?.files).toBe(2);
+  });
+
+  test("superuser + permission denied -> readable=false + one note, no throw", async () => {
+    const runner = {
+      source: "superuser" as const,
+      run: async (q: string) => {
+        if (/pg_ls_logdir\(\)/.test(q))
+          throw new Error("permission denied for function pg_ls_logdir");
+        return [];
+      },
+    };
+    const a = await collect("ref", t(), "0.0.0-test", { syncCheck: false, sqlRunner: runner });
+    expect(a.meta.logProbe?.readable).toBe(false);
+    expect(
+      a.errors.some((e) => e.source === "logDirProbe" && /not readable/i.test(e.message)),
+    ).toBe(true);
+  });
+});
