@@ -165,12 +165,12 @@ describe("stale-stats contradiction finding", () => {
   test("0 live rows on a multi-MB table flags stale statistics", () => {
     const a = base();
     a.sql.biggestTables = [
-      { table: "public.leads", total_size: "17 GB", total_bytes: 17 * 1024 ** 3, live_rows: 0 },
+      { table: "public.orders", total_size: "17 GB", total_bytes: 17 * 1024 ** 3, live_rows: 0 },
     ];
     const f = deriveFindings(a).find((x) => x.heuristicId === "stale_table_stats");
     expect(f?.title).toContain("Table statistics look stale");
     expect(f?.title).toContain("1 table shows 0 live rows"); // singular verb agreement
-    expect(f?.evidence).toContain("public.leads");
+    expect(f?.evidence).toContain("public.orders");
   });
   test("a tiny 0-row table does NOT trip it (below the byte floor)", () => {
     const a = base();
