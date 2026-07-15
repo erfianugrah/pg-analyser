@@ -135,3 +135,25 @@ export function projectDaysTo(stat: TrendStat, target: number): number | null {
 export function pointsOf(trends: TrendSeries[], title: string): Point[] {
   return trends.find((t) => t.title === title)?.points ?? [];
 }
+
+export type ResizeEvent = { at: number; fromBytes: number; toBytes: number };
+
+/**
+ * Detect step-changes (volume resizes) in a size series: consecutive points
+ * where the value jumps by >= `minStepFrac` of the earlier value. Returns each
+ * event in time order (usually 0 or 1). Catches both expansions and shrinks;
+ * the caller decides which direction it cares about. A resize makes "% used"
+ * meaningless across the boundary (the denominator changed), so callers use
+ * this to segment the series before projecting.
+ */
+export function detectResizes(points: Point[], minStepFrac: number): ResizeEvent[] {
+  const events: ResizeEvent[] = [];
+  for (let i = 1; i < points.length; i++) {
+    const prev = points[i - 1]!.v;
+    const cur = points[i]!.v;
+    if (prev > 0 && Math.abs(cur - prev) / prev >= minStepFrac) {
+      events.push({ at: points[i]!.t, fromBytes: prev, toBytes: cur });
+    }
+  }
+  return events;
+}

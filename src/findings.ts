@@ -2,7 +2,15 @@ import { appRows } from "./appschema.ts";
 import { meta, THRESHOLDS } from "./heuristics.ts";
 import { lintFix } from "./lints.ts";
 import type { Analysis, SqlRow } from "./schemas.ts";
-import { projectDaysTo, sufficient, sustainedFrac, trendStat } from "./trendstats.ts";
+import {
+  detectResizes,
+  type Point,
+  projectDaysTo,
+  type ResizeEvent,
+  sufficient,
+  sustainedFrac,
+  trendStat,
+} from "./trendstats.ts";
 
 export type Severity = "high" | "med" | "low";
 export type Category = "Performance" | "Security" | "Capacity";
@@ -492,6 +500,125 @@ function shortStatsWindowCaveat(a: Analysis): string | null {
  * threshold to at/below it (a fresh dip), so a series that dips, recovers, and
  * dips again counts as 2. Turns a window-minimum into when/how-often/recovered.
  */
+/** Value of the point whose timestamp is closest to `t` (series may be sampled
+ * at slightly different times across providers). Null on an empty series. */
+function nearestValue(points: Point[], t: number): number | null {
+  if (!points.length) return null;
+  let best = points[0] as Point;
+  let bestD = Math.abs(best.t - t);
+  for (const p of points) {
+    const d = Math.abs(p.t - t);
+    if (d < bestD) {
+      bestD = d;
+      best = p;
+    }
+  }
+  return best.v;
+}
+
+export type DiskProjection = {
+  usedPctNow: number;
+  usedBytesNow: number | null;
+  sizeBytesNow: number | null;
+  slopeBytesPerDay: number | null;
+  daysToFull: number | null;
+  spanDays: number;
+  rising: boolean;
+  /** The last EXPANSION in the window, if any (segmentation happened on it). */
+  expansion: ResizeEvent | null;
+  /** True when the (post-resize) segment had enough points to trust a trend. */
+  sufficient: boolean;
+};
+
+/**
+ * Resize-aware projection for the data disk. Reconstructs used-BYTES from the
+ * used-% and provisioned-size series (used = size * pct/100), segments the
+ * series after the last expansion (a step-change makes % meaningless across the
+ * boundary), and projects used-bytes toward the current provisioned size. Falls
+ * back to a %-only projection when the size series is absent (older stores).
+ * Pure over the two series so it is trivially testable.
+ */
+export function projectDataDisk(
+  pctPts: Point[],
+  sizePts: Point[],
+  resizeStepFrac: number,
+): DiskProjection | null {
+  if (pctPts.length === 0) return null;
+  const expansions = detectResizes(sizePts, resizeStepFrac).filter((e) => e.toBytes > e.fromBytes);
+  const lastExp = expansions.length ? (expansions[expansions.length - 1] as ResizeEvent) : null;
+  // Segment after the last expansion so we never trend across the cliff.
+  const pctSeg = lastExp ? pctPts.filter((p) => p.t > lastExp.at) : pctPts;
+  const sizeSeg = lastExp ? sizePts.filter((p) => p.t > lastExp.at) : sizePts;
+  const usedPctNow = (pctSeg[pctSeg.length - 1] ?? pctPts[pctPts.length - 1] ?? { v: 0 }).v;
+  const sizeBytesNow = sizeSeg.length ? (sizeSeg[sizeSeg.length - 1] as Point).v : null;
+  const enough = sufficient(pctSeg);
+
+  // Prefer a bytes projection when the size series is present.
+  if (sizeSeg.length) {
+    const usedBytesPts = pctSeg
+      .map((p) => {
+        const sz = nearestValue(sizeSeg, p.t);
+        return sz == null ? null : { t: p.t, v: (sz * p.v) / 100 };
+      })
+      .filter((x): x is Point => x != null);
+    const usedBytesNow = usedBytesPts.length
+      ? (usedBytesPts[usedBytesPts.length - 1] as Point).v
+      : null;
+    if (enough && usedBytesPts.length && sizeBytesNow != null) {
+      const s = trendStat(usedBytesPts)!;
+      return {
+        usedPctNow,
+        usedBytesNow,
+        sizeBytesNow,
+        slopeBytesPerDay: s.slopePerDay,
+        daysToFull: s.direction === "rising" ? projectDaysTo(s, sizeBytesNow) : null,
+        spanDays: s.spanDays,
+        rising: s.direction === "rising",
+        expansion: lastExp,
+        sufficient: true,
+      };
+    }
+    return {
+      usedPctNow,
+      usedBytesNow,
+      sizeBytesNow,
+      slopeBytesPerDay: null,
+      daysToFull: null,
+      spanDays: 0,
+      rising: false,
+      expansion: lastExp,
+      sufficient: false,
+    };
+  }
+
+  // %-only fallback (no size series).
+  if (enough) {
+    const s = trendStat(pctSeg)!;
+    return {
+      usedPctNow,
+      usedBytesNow: null,
+      sizeBytesNow: null,
+      slopeBytesPerDay: null,
+      daysToFull: s.direction === "rising" ? projectDaysTo(s, 100) : null,
+      spanDays: s.spanDays,
+      rising: s.direction === "rising",
+      expansion: lastExp,
+      sufficient: true,
+    };
+  }
+  return {
+    usedPctNow,
+    usedBytesNow: null,
+    sizeBytesNow: null,
+    slopeBytesPerDay: null,
+    daysToFull: null,
+    spanDays: 0,
+    rising: false,
+    expansion: lastExp,
+    sufficient: false,
+  };
+}
+
 export function countDepletionEpisodes(points: { v: number }[], threshold: number): number {
   let episodes = 0;
   let below = false;
@@ -1295,25 +1422,51 @@ export function deriveFindings(a: Analysis): Finding[] {
     }
   }
 
-  // Disk fill projection - rising used% -> days to full, capped to a horizon we
-  // can actually see (~3x the observed span) so we never extrapolate a
-  // far-future date off a short history. Checks BOTH the data disk (/data, where
-  // the DB grows) and the root FS (/) - either filling takes the box down.
-  for (const [title, label] of [
-    ["Disk used (%)", "Data disk"],
-    ["Root FS used (%)", "Root FS"],
-  ] as const) {
-    const pts = pointsOf(title);
-    if (!sufficient(pts)) continue;
-    const s = trendStat(pts)!;
-    if (s.direction !== "rising") continue;
-    const daysToFull = projectDaysTo(s, 100);
+  // Disk fill projection - capped to a horizon we can actually see (~3x the
+  // observed span). The DATA disk is resize-aware: it reconstructs used-BYTES
+  // and projects toward the provisioned size, segmenting after any expansion so
+  // a manual/auto resize is never trended as a fill (or as a false "stable").
+  const dataDisk = projectDataDisk(
+    pointsOf("Disk used (%)"),
+    pointsOf("Disk size (bytes)"),
+    THRESHOLDS.diskResizeStepFrac,
+  );
+  if (dataDisk?.expansion) {
+    out.push({
+      severity: "low",
+      category: "Capacity",
+      title: `Disk auto-expanded ${bytesGb(dataDisk.expansion.fromBytes)} -> ${bytesGb(dataDisk.expansion.toBytes)} in the window`,
+      anchor: "#trends",
+      ...meta("disk_expanded"),
+    });
+  }
+  if (dataDisk?.sufficient && dataDisk.rising && dataDisk.daysToFull != null) {
+    const trustHorizon = Math.min(THRESHOLDS.diskFillHorizonDays, 3 * dataDisk.spanDays);
+    if (dataDisk.daysToFull <= trustHorizon) {
+      const absNote =
+        dataDisk.usedBytesNow != null && dataDisk.sizeBytesNow != null
+          ? `${bytesGb(dataDisk.usedBytesNow)} of ${bytesGb(dataDisk.sizeBytesNow)}`
+          : `${Math.round(dataDisk.usedPctNow)}% used`;
+      out.push({
+        severity: dataDisk.daysToFull <= 30 ? "high" : "med",
+        category: "Capacity",
+        title: `Data disk filling: ${absNote} -> ~${Math.round(dataDisk.daysToFull)} days to full`,
+        anchor: "#trends",
+        ...meta("disk_fill_projection"),
+      });
+    }
+  }
+  // Root FS (/) - %-only (no provisioned-size series for the root volume).
+  const rootPts = pointsOf("Root FS used (%)");
+  if (sufficient(rootPts)) {
+    const s = trendStat(rootPts)!;
+    const daysToFull = s.direction === "rising" ? projectDaysTo(s, 100) : null;
     const trustHorizon = Math.min(THRESHOLDS.diskFillHorizonDays, 3 * s.spanDays);
     if (daysToFull != null && daysToFull <= trustHorizon) {
       out.push({
         severity: daysToFull <= 30 ? "high" : "med",
         category: "Capacity",
-        title: `${label} filling: ${Math.round(s.last)}% used, +${s.slopePerDay.toFixed(2)}%/day over ${Math.round(s.spanDays)}d -> ~${Math.round(daysToFull)} days to full`,
+        title: `Root FS filling: ${Math.round(s.last)}% used, +${s.slopePerDay.toFixed(2)}%/day over ${Math.round(s.spanDays)}d -> ~${Math.round(daysToFull)} days to full`,
         anchor: "#trends",
         ...meta("disk_fill_projection"),
       });
@@ -1586,19 +1739,29 @@ export function derivePositives(a: Analysis): Positive[] {
         title: `Memory within healthy range: avg ${Math.round(s.mean)}%, peak ${Math.round(s.max)}% over ${Math.round(s.spanDays)}d`,
       });
   }
-  const diskPts = tpoints("Disk used (%)");
-  if (sufficient(diskPts)) {
-    const s = trendStat(diskPts)!;
-    const daysToFull = projectDaysTo(s, 100);
+  // Resize-aware: reconstruct used-bytes and segment after any expansion, so we
+  // never claim "stable" by trending the used-% across a volume resize cliff.
+  // When a resize left too short a post-resize segment to trust, emit NOTHING
+  // (neither the false-calm nor a scary claim).
+  const diskProj = projectDataDisk(
+    tpoints("Disk used (%)"),
+    tpoints("Disk size (bytes)"),
+    THRESHOLDS.diskResizeStepFrac,
+  );
+  if (diskProj?.sufficient) {
+    const trustHorizon = Math.min(THRESHOLDS.diskFillHorizonDays, 3 * diskProj.spanDays);
     const filling =
-      s.direction === "rising" &&
-      daysToFull != null &&
-      daysToFull <= Math.min(THRESHOLDS.diskFillHorizonDays, 3 * s.spanDays);
-    if (!filling)
+      diskProj.rising && diskProj.daysToFull != null && diskProj.daysToFull <= trustHorizon;
+    if (!filling) {
+      const absNote =
+        diskProj.usedBytesNow != null && diskProj.sizeBytesNow != null
+          ? `${bytesGb(diskProj.usedBytesNow)} of ${bytesGb(diskProj.sizeBytesNow)} (${Math.round(diskProj.usedPctNow)}%)`
+          : `${Math.round(diskProj.usedPctNow)}% used`;
       out.push({
         category: "Capacity",
-        title: `Disk stable: ${Math.round(s.last)}% used, no fill risk over ${Math.round(s.spanDays)}d`,
+        title: `Disk stable: ${absNote}, no fill risk over ${Math.round(diskProj.spanDays)}d`,
       });
+    }
   }
 
   // Mirror the finding's volume gate: don't praise a tiny/idle DB's ratio. null
