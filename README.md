@@ -161,6 +161,33 @@ bun run src/index.ts report <dir>            # draws trends from accumulated sna
   (index-only-scan efficiency), replication-slot lag, connection state + per-role
   usage, and **point-in-time contention** (locks, blocking, long-running +
   idle-in-transaction backends, captioned as snapshots)
+- **Lock-contention detection** - a lock-queue cascade (a DDL statement queued
+  behind long readers, then every new reader queued behind the waiting DDL,
+  because Postgres grants locks in queue order) is transient and invisible to a
+  point-in-time snapshot, so sbperf detects it three ways plus a posture check:
+    - **Config posture** (`lock_forensics`, any tier) - flags `log_lock_waits=off`
+      (lock waits leave no trail) and the absence of a session/role-scoped
+      `lock_timeout` (a blocked migration waits indefinitely). Guidance is
+      session/role-scoped only; a cluster-wide `lock_timeout` is never
+      recommended. Emits a positive when `log_lock_waits=on`.
+    - **Retrospective from server logs** (`lock_wave`, superuser + probe-gated) -
+      parses the server log for `still waiting for ...Lock` bursts and
+      timeout-cancellations, buckets them per minute, and scores the worst
+      10-minute window (with the contended relation named). A probe first
+      confirms the logs are readable, how far back they reach, and which node
+      served them; reads are bounded (<=4 MB/file, <=20 MB/run) and compressed
+      rotations are skipped. **Privacy: only parsed counts and reconstructed,
+      literal-free sample phrases are stored - never raw log text**, so query
+      literals / secrets / PII in the logs cannot reach `analysis.json`.
+    - **Retrospective from metrics** (`contention_episode`) - a mass-cancellation
+      event is a synchronized burst of transaction rollbacks, active backends,
+      and share-lock counts. The 30-day trend panels average a 10-minute event
+      into invisibility, so this is a *separate* Prometheus scan at native
+      resolution over a short window (`--incident-scan-days`, default 7).
+      Severity is correlation-gated - a single noisy series never reaches HIGH.
+    - **Live during collection** (`live_lock_contention`) - a few wait-event
+      samples taken during the run; repeated `Lock` waits mean contention is
+      happening right now (point-in-time, not retrospective).
 - **Data integrity** - page-checksum failures (`pg_stat_database`, any mode) and
   opt-in **amcheck** (`--amcheck`): `bt_index_check` on app B-tree indexes, plus
   `verify_heapam` under `--amcheck heap`. Superuser + amcheck-installed only;
