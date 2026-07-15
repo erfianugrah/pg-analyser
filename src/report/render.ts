@@ -4,6 +4,7 @@ import {
   derivePositives,
   type Finding,
   type Positive,
+  parseCronIntervalSeconds,
   type Severity,
   statsWindowDays,
 } from "../findings.ts";
@@ -1336,12 +1337,24 @@ function capabilitiesSection(a: Analysis): string {
     rows.push(row("Scheduled jobs (pg_cron)", yes("installed"), "no jobs scheduled"));
   } else {
     const failing = a.sql.cronJobs.filter((r) => Number(r.failed_runs) > 0).length;
+    // A job whose runtime meets/exceeds its own cadence overruns (self-overlap) -
+    // not "healthy", and it contradicts the cron_job_overrun finding. Gate the
+    // chip on both failures AND overruns.
+    const overrun = a.sql.cronJobs.filter((r) => {
+      if (r.active === false) return false;
+      const iv = parseCronIntervalSeconds(String(r.schedule ?? ""));
+      return iv != null && iv > 0 && Number(r.max_duration_s) >= iv;
+    }).length;
     const n = a.sql.cronJobs.length;
+    const issues = [
+      failing ? `${failing} with recent failures` : "",
+      overrun ? `${overrun} overrunning cadence` : "",
+    ].filter(Boolean);
     rows.push(
       row(
         "Scheduled jobs (pg_cron)",
         yes(`${n} job${n === 1 ? "" : "s"}`),
-        failing ? `${failing} with recent failures` : "all healthy",
+        issues.length ? issues.join(", ") : "all healthy",
       ),
     );
   }
