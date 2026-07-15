@@ -313,6 +313,54 @@ export function configTuningFindings(a: Analysis): Finding[] {
   return out;
 }
 
+/**
+ * Lock-observability posture (lock_forensics): a single card with up to two
+ * axes - (1) log_lock_waits off, so lock waits leave no forensic trail, and
+ * (2) no session/role-scoped lock_timeout, so a blocked migration waits
+ * indefinitely. Respects the settled design: axis 2 fires only when NEITHER a
+ * global NOR a role-scoped lock_timeout exists, and the remediation is
+ * session/role-scoped only (a cluster-wide lock_timeout is never recommended).
+ */
+export function lockForensicsFindings(a: Analysis): Finding[] {
+  const rows = a.sql.pgSettings;
+  if (rows.length === 0) return [];
+  const set = settingsMap(rows);
+  const logOff = set.get("log_lock_waits") === "off";
+  const globalLt = set.get("lock_timeout") ?? "0";
+  const roleHasLt = (a.sql.roleConfig ?? []).some((r) => {
+    const cfg = (r as { rolconfig?: unknown }).rolconfig;
+    return (
+      Array.isArray(cfg) && cfg.some((c) => String(c).toLowerCase().startsWith("lock_timeout="))
+    );
+  });
+  const noGuardrail = globalLt === "0" && !roleHasLt;
+  if (!logOff && !noGuardrail) return [];
+
+  const parts: string[] = [];
+  if (logOff) parts.push("log_lock_waits is off, so lock waits leave no log trail");
+  if (noGuardrail)
+    parts.push(
+      "no session/role-scoped lock_timeout is set, so a blocked migration waits indefinitely",
+    );
+  // deadlock_timeout far from 1s is a one-line note inside the same card (it
+  // also gates how quickly a lock wait is logged once log_lock_waits is on).
+  const deadlockMs = Number(set.get("deadlock_timeout"));
+  if (Number.isFinite(deadlockMs) && deadlockMs > 5000)
+    parts.push(
+      `deadlock_timeout is ${Math.round(deadlockMs / 1000)}s (>5s); with log_lock_waits on this delays every logged wait line by that long`,
+    );
+  return [
+    {
+      severity: "low",
+      category: "Performance",
+      title: "Lock observability posture (log_lock_waits / migration lock_timeout)",
+      anchor: "#infra",
+      evidence: `${parts.join("; ")}.`,
+      ...meta("lock_forensics"),
+    },
+  ];
+}
+
 export function securityConfigFindings(a: Analysis): Finding[] {
   const s = a.security;
   if (!s) return [];
@@ -1865,6 +1913,7 @@ export function deriveFindings(a: Analysis): Finding[] {
 
   // Config tuning (static GUC sanity, from pgSettings - both modes).
   out.push(...configTuningFindings(a));
+  out.push(...lockForensicsFindings(a));
 
   // Security config (auth / network / SSL) - sbperf-original Security findings.
   out.push(...securityConfigFindings(a));
@@ -1895,6 +1944,14 @@ export function derivePositives(a: Analysis): Positive[] {
   // Management API was available (mirrors the report banner logic).
   const degraded = a.meta.managementApi !== false && a.meta.status !== "ACTIVE_HEALTHY";
   if (degraded || errored.has("sql:dbSize")) return out;
+
+  // Lock-wait logging on: the affirmative counterpart to lock_forensics. A
+  // project that logged a lock cascade did so BECAUSE this was on.
+  if (set.get("log_lock_waits") === "on")
+    out.push({
+      category: "Performance",
+      title: "Lock-wait logging is enabled (log_lock_waits=on)",
+    });
 
   // Trend-health counterweights to the capacity findings (data-aware: only when
   // there's a real window). A finding and its positive are mutually exclusive.
