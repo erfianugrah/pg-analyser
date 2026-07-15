@@ -816,6 +816,19 @@ export const HEURISTICS: Record<string, Heuristic> = {
       "https://www.postgresql.org/docs/current/runtime-config-statistics.html#GUC-TRACK-IO-TIMING",
     reviewed: R,
   },
+  lock_forensics: {
+    id: "lock_forensics",
+    plane: "Config",
+    whyItMatters:
+      "Lock incidents leave no forensic trail when log_lock_waits is off: a blocked ALTER that queues every reader for minutes produces zero log evidence, so the cascade is invisible after the fact. And without a session/role-scoped lock_timeout, a migration that cannot acquire its lock waits indefinitely, holding the queue open behind it - Postgres grants locks in queue order, so even non-conflicting readers pile up behind the waiting exclusive lock.",
+    remediation:
+      "Enable lock-wait logging: ALTER SYSTEM SET log_lock_waits = on (with deadlock_timeout at 1s, each wait past 1s logs one line - negligible except during the incidents you want recorded). For the guardrail, set lock_timeout on the MIGRATION SESSION OR ROLE only (e.g. ALTER ROLE migrator SET lock_timeout = '3s'), never on the whole cluster - a global lock_timeout cancels legitimate long waits. Pair it with a retry loop so a blocked ALTER fails fast instead of queueing readers.",
+    sql: `-- enable lock-wait logging (superuser), then reload:\nALTER SYSTEM SET log_lock_waits = on;  -- SELECT pg_reload_conf();\n-- session-scoped migration guardrail (run INSIDE the migration, not globally):\nSET lock_timeout = '3s';`,
+    howToVerify:
+      "After enabling: SHOW log_lock_waits returns 'on'. After the next migration, confirm a blocked ALTER logs a 'still waiting for ...Lock' line and fails at the lock_timeout instead of stalling readers.",
+    docUrl: "https://www.postgresql.org/docs/current/runtime-config-locks.html",
+    reviewed: R,
+  },
   mem_pressure_paging: {
     id: "mem_pressure_paging",
     plane: "Compute",

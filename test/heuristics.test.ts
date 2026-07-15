@@ -123,6 +123,14 @@ describe("meta()", () => {
   test("returns an empty object for an unknown id (safe spread)", () => {
     expect(meta("does_not_exist")).toEqual({});
   });
+
+  test("lock_forensics recommends a session/role-scoped guardrail, never global", () => {
+    const m = meta("lock_forensics");
+    expect(m.heuristicId).toBe("lock_forensics");
+    expect(m.remediation).toMatch(/session|role/i);
+    expect(m.remediation).not.toMatch(/globally set|cluster-wide set|set.*globally/i);
+    expect(m.docUrl).toContain("postgresql.org");
+  });
 });
 
 describe("HEURISTICS registry integrity", () => {
