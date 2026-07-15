@@ -140,6 +140,25 @@ describe("counter-finding low-confidence caveat", () => {
     expect(f).toBeDefined();
     expect(f?.evidence ?? "").not.toContain("Low confidence");
   });
+  test("the caveat reaches the authoritative advisor unused_index card (not just the SQL fallback)", () => {
+    const a = base();
+    a.sql.tableStatsResetAge = "12:00:00"; // 12h < 7d
+    a.advisors.performance = [{ name: "unused_index", title: "Unused Index", level: "INFO" }];
+    // advisor card wins (SQL #unused fallback suppressed); it must carry the caveat
+    const adv = deriveFindings(a).find(
+      (x) => x.category === "Performance" && x.dashUrl?.includes("advisors"),
+    );
+    expect(adv?.evidence).toContain("Low confidence");
+  });
+  test("a structural advisor lint (duplicate_index) does NOT get the counter caveat", () => {
+    const a = base();
+    a.sql.tableStatsResetAge = "12:00:00";
+    a.advisors.performance = [{ name: "duplicate_index", title: "Duplicate Index", level: "INFO" }];
+    const adv = deriveFindings(a).find(
+      (x) => x.category === "Performance" && x.dashUrl?.includes("advisors"),
+    );
+    expect(adv?.evidence ?? "").not.toContain("Low confidence");
+  });
 });
 
 describe("stale-stats contradiction finding", () => {
