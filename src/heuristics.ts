@@ -241,6 +241,18 @@ const R = HEURISTICS_REVIEWED;
 
 /** Registry keyed by heuristic id. See docs/heuristics.md for the full grounding. */
 export const HEURISTICS: Record<string, Heuristic> = {
+  cron_job_overrun: {
+    id: "cron_job_overrun",
+    plane: "Query",
+    howToVerify:
+      "Compare each job's run duration (cron.job_run_details end-start) against its schedule cadence; a healthy job finishes well inside its interval. Reduce the work or widen the schedule until max duration < interval.",
+    whyItMatters:
+      "A scheduled job whose runtime meets or exceeds its own cadence overlaps itself - a new run starts (or queues) before the last finished, so copies pile up, compete for the same rows, and can dominate DB time. This is invisible to the failure count (the runs succeed), so it hides behind a green 'no failed runs'.",
+    remediation:
+      "Make the job cheaper (incremental refresh, indexes, batching) or lengthen its schedule so a run comfortably finishes before the next fires. For a materialized-view refresh, consider REFRESH ... CONCURRENTLY and a longer interval.",
+    docUrl: "https://github.com/citusdata/pg_cron",
+    reviewed: R,
+  },
   sequence_exhaustion: {
     id: "sequence_exhaustion",
     plane: "Storage",

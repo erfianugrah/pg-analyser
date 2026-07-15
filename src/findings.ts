@@ -619,6 +619,51 @@ export function projectDataDisk(
   };
 }
 
+/**
+ * Parse a pg_cron schedule into its cadence in SECONDS - the minimum gap
+ * between fires - for the overrun check. Handles the common, unambiguous forms
+ * only; returns null for anything it cannot confidently reduce to a single
+ * interval (so an unparseable schedule is skipped, never false-flagged).
+ * Supported: pg_cron interval syntax ("N seconds/minutes/hours") and 5-field
+ * cron for the every-N-minute, every-minute, hourly, every-N-hour, and daily
+ * shapes.
+ */
+export function parseCronIntervalSeconds(schedule: string): number | null {
+  const s = schedule.trim().toLowerCase();
+  // pg_cron interval syntax, e.g. "30 seconds", "5 minutes", "2 hours".
+  const iv = s.match(/^(\d+)\s+(seconds?|minutes?|hours?)$/);
+  if (iv?.[1] && iv[2]) {
+    const n = Number(iv[1]);
+    if (iv[2].startsWith("second")) return n;
+    if (iv[2].startsWith("minute")) return n * 60;
+    return n * 3600;
+  }
+  // 5-field cron: minute hour dom mon dow
+  const f = s.split(/\s+/);
+  if (f.length !== 5) return null;
+  const [min, hour, dom, mon, dow] = f as [string, string, string, string, string];
+  const allDate = dom === "*" && mon === "*" && dow === "*";
+  const everyN = (field: string): number | null => {
+    const m = field.match(/^\*\/(\d+)$/);
+    return m?.[1] ? Number(m[1]) : null;
+  };
+  if (allDate) {
+    if (hour === "*") {
+      if (min === "*") return 60; // every minute
+      const nm = everyN(min);
+      if (nm) return nm * 60; // every N minutes
+      if (/^\d+$/.test(min)) return 3600; // fixed minute each hour -> hourly
+      return null;
+    }
+    if (/^\d+$/.test(min)) {
+      const nh = everyN(hour);
+      if (nh) return nh * 3600; // every N hours
+      if (/^\d+$/.test(hour)) return 86400; // daily
+    }
+  }
+  return null;
+}
+
 export function countDepletionEpisodes(points: { v: number }[], threshold: number): number {
   let episodes = 0;
   let below = false;
@@ -1603,10 +1648,36 @@ export function deriveFindings(a: Analysis): Finding[] {
       evidence: `Failing: ${names}${failingJobs.length > 3 ? ", ..." : ""}`,
       ...meta("cron_job_failing"),
     });
-  } else if (
+  }
+  // Cron OVERRUN: an active job whose max run duration meets/exceeds its own
+  // schedule cadence overlaps itself (runaway/queued copies) - invisible to
+  // failed_runs, so it hides behind a green run count. Only for schedules we can
+  // confidently parse to an interval; unparseable ones are skipped.
+  const overrunJobs = a.sql.cronJobs.filter((r) => {
+    if (r.active === false) return false;
+    const interval = parseCronIntervalSeconds(String(r.schedule ?? ""));
+    return interval != null && interval > 0 && num(r.max_duration_s) >= interval;
+  });
+  if (overrunJobs.length > 0) {
+    const worst = overrunJobs
+      .slice()
+      .sort((a2, b2) => num(b2.max_duration_s) - num(a2.max_duration_s))[0] as SqlRow;
+    const interval = parseCronIntervalSeconds(String(worst.schedule ?? ""));
+    out.push({
+      severity: "med",
+      category: "Performance",
+      title: `${overrunJobs.length} scheduled job${overrunJobs.length === 1 ? "" : "s"} overrun the schedule cadence (worst "${String(worst.jobname)}": ${num(worst.max_duration_s)}s run vs ${interval}s interval)`,
+      anchor: "#cron",
+      ...meta("cron_job_overrun"),
+    });
+  }
+  if (
+    failingJobs.length === 0 &&
+    overrunJobs.length === 0 &&
     a.sql.extensions.some((r) => String(r.name) === "pg_cron") &&
     a.sql.cronJobs.length === 0
   ) {
+    // (pg_cron installed, no jobs, none failing/overrunning)
     out.push({
       severity: "low",
       category: "Performance",
