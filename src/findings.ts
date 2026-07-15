@@ -823,12 +823,20 @@ export function deriveFindings(a: Analysis): Finding[] {
     (r) => num(r.cv) >= THRESHOLDS.queryCvWarn && num(r.mean_ms) >= THRESHOLDS.queryCvMinMeanMs,
   );
   if (vary) {
+    // Stall-victim extension (Check 5): a large max/mean spread is a tail-latency
+    // stall signature. MANDATORY caveat - pg_stat_statements records only
+    // COMPLETED executions, so statements killed by statement_timeout never land
+    // here; this under-counts cascade victims and is corroboration, not a detector.
+    const stall =
+      num(vary.stall_ratio) > 10 && num(vary.max_ms) > 5000
+        ? " The max/mean spread is a stall signature (lock queue, I/O, or cold cache) - corroborate with the lock-wave / contention-episode findings. Caveat: pg_stat_statements records only completed executions, so statements killed by statement_timeout never appear here; this under-counts cascade victims and is corroboration, never the primary detector."
+        : "";
     out.push({
       severity: "low",
       category: "Performance",
       title: `A query has unstable latency (${vary.cv}x variation around a ${vary.mean_ms}ms mean)`,
       anchor: "#queryio",
-      evidence: String(vary.query ?? ""),
+      evidence: `${String(vary.query ?? "")}${stall}`,
       ...meta("query_high_variance"),
     });
   }

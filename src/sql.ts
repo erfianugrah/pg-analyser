@@ -259,6 +259,10 @@ export const QUERIES = {
       round(mean_exec_time::numeric, 2) as mean_ms,
       round(stddev_exec_time::numeric, 2) as stddev_ms,
       round((stddev_exec_time / nullif(mean_exec_time, 0))::numeric, 2) as cv,
+      -- stall-victim signal: a max/mean spread >> 1 is a tail-latency stall
+      -- (lock queue, I/O, cold cache). Corroborates lock_wave/contention_episode.
+      round(max_exec_time::numeric, 2) as max_ms,
+      round((max_exec_time / nullif(mean_exec_time, 0))::numeric, 1) as stall_ratio,
       temp_blks_written,
       pg_size_pretty(temp_blks_written * 8192::bigint) as temp_written,
       shared_blks_read,
