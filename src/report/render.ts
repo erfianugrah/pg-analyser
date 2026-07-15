@@ -81,12 +81,20 @@ function sqlTable(
   const cols = Object.keys(rows[0]!).filter((c) => !opts.hide?.includes(c));
   const shown = opts.limit ? rows.slice(0, opts.limit) : rows;
   const mono = new Set(opts.mono ?? []);
+  // Insert zero-width break opportunities after separators so a long dotted /
+  // snake_case identifier (schema.table_name) wraps at natural points instead
+  // of one character per line when its column is squeezed in the PDF.
+  const breakableMono = (v: unknown) => esc(v).replace(/([._-])/g, "$1<wbr>");
   const th = cols.map((c) => `<th>${esc(c)}</th>`).join("");
   const body = shown
     .map(
       (r) =>
         "<tr>" +
-        cols.map((c) => `<td${mono.has(c) ? " class=mono" : ""}>${esc(r[c])}</td>`).join("") +
+        cols
+          .map((c) =>
+            mono.has(c) ? `<td class=mono>${breakableMono(r[c])}</td>` : `<td>${esc(r[c])}</td>`,
+          )
+          .join("") +
         "</tr>",
     )
     .join("");

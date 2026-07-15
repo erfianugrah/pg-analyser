@@ -169,6 +169,7 @@ describe("stale-stats contradiction finding", () => {
     ];
     const f = deriveFindings(a).find((x) => x.heuristicId === "stale_table_stats");
     expect(f?.title).toContain("Table statistics look stale");
+    expect(f?.title).toContain("1 table shows 0 live rows"); // singular verb agreement
     expect(f?.evidence).toContain("public.leads");
   });
   test("a tiny 0-row table does NOT trip it (below the byte floor)", () => {
