@@ -1,5 +1,5 @@
 import { appRows } from "./appschema.ts";
-import { meta, THRESHOLDS } from "./heuristics.ts";
+import { type DocRef, meta, THRESHOLDS } from "./heuristics.ts";
 import { lintFix } from "./lints.ts";
 import { classifyLockWave } from "./locklog.ts";
 import { minorsBehind } from "./pgversions.ts";
@@ -36,6 +36,8 @@ export interface Finding {
   dashUrl?: string;
   /** Canonical doc/source URL for the reader and the narrate pass to cite. */
   docUrl?: string;
+  /** Supplementary layered references (Postgres mechanism, AWS infra). */
+  refs?: DocRef[];
   /** Optional changelog / known-issue URL (documented platform change). */
   changelogUrl?: string;
   /** Optional measured evidence string (e.g. object name + size + %). */

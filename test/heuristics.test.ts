@@ -145,6 +145,13 @@ describe("HEURISTICS registry integrity", () => {
       expect(h.remediation.length).toBeGreaterThan(10);
       expect(h.docUrl).toStartWith("https://");
       expect(h.reviewed).toBe(HEURISTICS_REVIEWED);
+      for (const r of h.refs ?? []) {
+        expect(["fix", "mechanism", "infra"]).toContain(r.tier);
+        expect(r.label.length).toBeGreaterThan(0);
+        expect(r.url).toStartWith("https://");
+        // A supplementary ref must not just duplicate the primary link.
+        expect(r.url).not.toBe(h.docUrl);
+      }
     }
   });
 
