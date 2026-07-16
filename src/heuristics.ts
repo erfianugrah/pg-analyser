@@ -1025,7 +1025,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "Sustained major page faults / swap-in mean the working set no longer fits in RAM, so the OS and Postgres keep reading pages back from disk. That is real query latency and disk I/O the instance cannot see as 'memory' - and a point-in-time MemAvailable reading can look perfectly healthy while it is happening (a swap-occupancy snapshot is NOT a reliable signal; the RATE over time is).",
     remediation:
-      "Give the working set more RAM: bump the compute tier (UI: Project Settings > Compute and Disk; API: PATCH /v1/projects/{ref}/billing/addons - the most direct fix on a small instance), or cut memory demand - lower work_mem (per role/database), cut backend count by pooling through Supavisor, shrink the hot set, add indexes so scans touch fewer pages. Occupancy alone is not the trigger; a sustained swap-IN or major-fault rate is.",
+      "Give the working set more RAM by sizing up the compute tier (the most direct fix on a small instance), or cut memory demand - lower work_mem (per role/database), cut backend count by pooling through Supavisor, shrink the hot set, add indexes so scans touch fewer pages. Occupancy alone is not the trigger; a sustained swap-IN or major-fault rate is. UI: Project Settings > Compute and Disk. API: PATCH /v1/projects/{ref}/billing/addons.",
     docUrl: SB_MEM_SWAP,
     refs: [
       { tier: "fix", label: "Compute and Disk", url: SB_COMPUTE_DISK },
@@ -1041,7 +1041,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "Pressure Stall Information is the fraction of time runnable tasks were stalled waiting for CPU, memory, or I/O. Unlike a utilization snapshot (idle% / MemAvailable can read healthy at the instant you look), sustained PSI is direct evidence that work is queueing behind a saturated resource - i.e. real, ongoing latency.",
     remediation:
-      "Identify the stalled resource (CPU / memory / I/O) and relieve it: size up the compute tier (UI: Project Settings > Compute and Disk; API: PATCH /v1/projects/{ref}/billing/addons), cut concurrency (pool connections via Supavisor; lower work_mem), or reduce I/O via indexing + cache hit. PSI names the bottleneck so you size the right axis instead of over-provisioning everything.",
+      "Identify the stalled resource (CPU / memory / I/O) and relieve it: size up the compute tier, cut concurrency (pool connections via Supavisor; lower work_mem), or reduce I/O via indexing + cache hit. PSI names the bottleneck so you size the right axis instead of over-provisioning everything. UI: Project Settings > Compute and Disk. API: PATCH /v1/projects/{ref}/billing/addons.",
     docUrl: SB_COMPUTE_DISK,
     refs: [
       { tier: "infra", label: "AWS EBS I/O characteristics", url: AWS_EBS_IO },
@@ -1057,7 +1057,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "The kernel OOM killer only fires when memory is genuinely exhausted - it terminates a process (often a Postgres backend) to survive. That is a far stronger signal than a high memory %: it means requests were killed, connections dropped, and possibly a crash-recovery cycle. Even a single event over the window is worth acting on.",
     remediation:
-      "Give the instance more memory headroom: bump the compute tier (UI: Project Settings > Compute and Disk; API: PATCH /v1/projects/{ref}/billing/addons), and/or cut demand - lower work_mem, cut backend count by pooling through Supavisor, shrink the hot working set, add indexes so scans touch fewer pages. Recurrent OOM kills almost always mean the tier is undersized for the workload.",
+      "Give the instance more memory headroom by sizing up the compute tier, and/or cut demand - lower work_mem, cut backend count by pooling through Supavisor, shrink the hot working set, add indexes so scans touch fewer pages. Recurrent OOM kills almost always mean the tier is undersized for the workload. UI: Project Settings > Compute and Disk. API: PATCH /v1/projects/{ref}/billing/addons.",
     docUrl: SB_MEM_SWAP,
     refs: [{ tier: "fix", label: "Compute and Disk", url: SB_COMPUTE_DISK }],
     reviewed: R,
@@ -1070,7 +1070,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "AWS gp2/gp3 volumes serve burst I/O from a credit balance. When the balance depletes, throughput and IOPS are throttled HARD to the baseline - a sudden latency cliff that in-guest disk metrics cannot explain (the disk isn't full or busy by its own numbers; the cloud is throttling it). A depleting balance is an early warning before the cliff hits.",
     remediation:
-      'On Supabase this is the Disk IO Budget. The fix depends on compute size: Nano/Micro/Small/Medium get only the gp3 baseline (3,000 IOPS / 125 MB/s) and rely on burst credits - they CANNOT provision extra IOPS/throughput, so the only levers are sizing up compute (Project Settings > Compute and Disk) or cutting sustained I/O. Provisioning additional Disk IOPS/throughput on that page requires Large compute or above (gp3: +500 IOPS per GB of disk, +0.25 MB/s per IOPS, capped by the compute tier); 4XL+ is built for sustained, consistent disk performance. To cut I/O: raise cache-hit, add indexes to kill seq scans, batch writes. Monitor the budget on the Observability page (/dashboard/project/_/observability, the \'Disk IO % consumed\' stat). Programmatic (Large+): disk POST /v1/projects/{ref}/config/disk with {"attributes":{"type":"gp3","iops":N,"throughput_mibps":M,"size_gb":G}}; compute PATCH /v1/projects/{ref}/billing/addons.',
+      'On Supabase this is the Disk IO Budget. The fix depends on compute size: Nano/Micro/Small/Medium get only the gp3 baseline (3,000 IOPS / 125 MB/s) and rely on burst credits - they CANNOT provision extra IOPS/throughput, so the only levers are sizing up compute (Project Settings > Compute and Disk) or cutting sustained I/O. Provisioning additional Disk IOPS/throughput on that page requires Large compute or above (gp3: +500 IOPS per GB of disk, +0.25 MB/s per IOPS, capped by the compute tier); 4XL+ is built for sustained, consistent disk performance. To cut I/O: raise cache-hit, add indexes to kill seq scans, batch writes. Monitor the budget on the Observability page (/dashboard/project/_/observability, the \'Disk IO % consumed\' stat). UI: Project Settings > Compute and Disk (Large+ for extra IOPS/throughput). API: disk POST /v1/projects/{ref}/config/disk with {"attributes":{"type":"gp3","iops":N,"throughput_mibps":M,"size_gb":G}}; compute PATCH /v1/projects/{ref}/billing/addons.',
     docUrl: SB_DISK_IO,
     refs: [
       { tier: "fix", label: "Compute and Disk (IOPS/throughput)", url: SB_COMPUTE_DISK },
@@ -1113,7 +1113,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "Memory sustained near the ceiling leaves no room for the page cache and pushes the working set toward swap - each spill becomes disk I/O and latency. Sustained high memory% is the leading indicator before the paging/OOM signals fire.",
     remediation:
-      "Size up the tier (UI: Project Settings > Compute and Disk; API: PATCH /v1/projects/{ref}/billing/addons), or cut demand: lower work_mem, cut backend count by pooling through Supavisor, shrink the hot working set, add indexes so scans touch fewer pages. Pair with the paging (mem_pressure_paging) and OOM (oom_kill) signals to confirm it's real pressure, not healthy cache use.",
+      "Size up the tier, or cut demand: lower work_mem, cut backend count by pooling through Supavisor, shrink the hot working set, add indexes so scans touch fewer pages. Pair with the paging (mem_pressure_paging) and OOM (oom_kill) signals to confirm it's real pressure, not healthy cache use. UI: Project Settings > Compute and Disk. API: PATCH /v1/projects/{ref}/billing/addons.",
     docUrl: SB_MEM_SWAP,
     reviewed: R,
   },
@@ -1613,6 +1613,25 @@ export const HEURISTICS: Record<string, Heuristic> = {
     remediation:
       "If the table holds data that must survive a restart, convert it to logged: ALTER TABLE <table> SET LOGGED (this rewrites the table and takes an ACCESS EXCLUSIVE lock, so run it in a maintenance window). If it is genuinely ephemeral scratch/cache, leave it unlogged and document that intent so the data loss on failover is expected, not a surprise.",
     docUrl: `${PG}sql-createtable.html`,
+    reviewed: R,
+  },
+  index_advisor_signpost: {
+    id: "index_advisor_signpost",
+    plane: "Query",
+    howToVerify:
+      "Run select * from index_advisor('<a slow query with real literal values>') - a typed query returns index_statements; apply them with CREATE INDEX CONCURRENTLY and confirm the plan improves with EXPLAIN (ANALYZE, BUFFERS).",
+    whyItMatters:
+      "index_advisor is installed but batch analysis over pg_stat_statements produced no recommendations. It recommends only single-column B-tree indexes AND cannot type the generic $1 parameters that pg_stat_statements normalizes queries into, so running it over the statement cache usually comes up empty - this is an input limitation, NOT proof your queries are optimally indexed.",
+    remediation:
+      "Run index_advisor per-query, with real literal values, where it can infer column types. UI: Advisors > Query Performance (/dashboard/project/_/advisors/query-performance) - pick a slow query and open the 'indexes' tab. SQL: select * from index_advisor('select ... where col = 42'); (cast params if it reports a type error, e.g. $1::int).",
+    docUrl: "https://supabase.com/docs/guides/database/extensions/index_advisor",
+    refs: [
+      {
+        tier: "fix",
+        label: "Query performance report",
+        url: "https://supabase.com/docs/guides/platform/performance",
+      },
+    ],
     reviewed: R,
   },
 };
