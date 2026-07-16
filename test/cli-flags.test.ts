@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
+import { parseFlags } from "../src/index.ts";
 
 // The flag parser must fail loud when a value-taking flag swallows the next
 // FLAG as its value (e.g. `--db-config --amcheck` -> a file named "--amcheck"),
@@ -43,5 +44,44 @@ describe("flag value guard", () => {
     // for unrelated reasons, but not with the flag-guard message).
     const { stderr } = run(["narrate", "somedir", "--import", "-"]);
     expect(stderr).not.toContain("--import expects a value");
+  });
+});
+
+describe("--profile chaining", () => {
+  test("space-separated files after one flag all chain (the reported bug)", () => {
+    // `--profile a.json b.json` must load BOTH - the second file used to fall
+    // through to positionals and get silently dropped.
+    const f = parseFlags(["full", "--profile", "a.json", "b.json", "--amcheck"]);
+    expect(f.profiles).toEqual(["a.json", "b.json"]);
+    expect(f.amcheck).toBe(true);
+    expect(f._).toEqual(["full"]);
+  });
+
+  test("greedy consumption stops at the next --flag", () => {
+    const f = parseFlags(["full", "--profile", "a.json", "--interval", "7day"]);
+    expect(f.profiles).toEqual(["a.json"]);
+    expect(f.interval).toBe("7day");
+  });
+
+  test("repeating the flag still chains", () => {
+    const f = parseFlags(["full", "--profile", "a.json", "--profile", "b.json"]);
+    expect(f.profiles).toEqual(["a.json", "b.json"]);
+  });
+
+  test("comma/space-delimited within one quoted value splits", () => {
+    expect(parseFlags(["full", "--profile", "a.json,b.json"]).profiles).toEqual([
+      "a.json",
+      "b.json",
+    ]);
+    expect(parseFlags(["full", "--profile", "a.json b.json"]).profiles).toEqual([
+      "a.json",
+      "b.json",
+    ]);
+  });
+
+  test("--profile with no value still errors", () => {
+    const { code, stderr } = run(["full", "--profile"]);
+    expect(code).toBe(1);
+    expect(stderr).toContain("--profile expects a value, got nothing");
   });
 });

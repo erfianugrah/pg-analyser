@@ -119,11 +119,12 @@ Flags:
                        no-PAT + region-mapped Grafana creds (per-region cookie)
                        + target databases. full --profile <file> sweeps them,
                        resolving each project's regional Grafana by the region
-                       derived from its connstring. REPEATABLE: pass --profile
-                       more than once to chain profiles into ONE combined index
-                       - each DB keeps its own mode (a no-PAT profile's DBs skip
-                       the API planes; a PAT profile's use the token), Grafana,
-                       and trend window. See sbperf.profile.example.json.
+                       derived from its connstring. CHAINABLE: list several
+                       files (--profile a.json b.json) or repeat the flag to
+                       combine profiles into ONE index - each DB keeps its own
+                       mode (a no-PAT profile's DBs skip the API planes; a PAT
+                       profile's use the token), Grafana, and trend window.
+                       See sbperf.profile.example.json.
   --trend-days <n>     trend query window in days (default 30; the store/Grafana
                        is a TSDB so 90 is fine). profile.trendDays wins for a
                        profile run. (env: SBPERF_TREND_DAYS)
@@ -204,7 +205,7 @@ type Flags = {
 
 /** Analytics-endpoint timeframe enum (verified live 2026-07; iso ranges are clamped). */
 const INTERVALS = ["15min", "30min", "1hr", "3hr", "1day", "3day", "7day"] as const;
-function parseFlags(argv: string[]): Flags {
+export function parseFlags(argv: string[]): Flags {
   const out: Flags = { _: [], dbUrls: [], refs: [], refFiles: [], profiles: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -244,8 +245,19 @@ function parseFlags(argv: string[]): Flags {
     else if (a === "--prometheus-cookie") out.prometheusCookie = need("--prometheus-cookie");
     else if (a === "--prometheus-matcher") out.prometheusMatcher = need("--prometheus-matcher");
     else if (a === "--no-pat") out.noPat = true;
-    else if (a === "--profile") out.profiles.push(need("--profile"));
-    else if (a === "--trend-days") out.trendDays = need("--trend-days");
+    // --profile is repeatable AND accepts several files after a single flag
+    // (--profile a.json b.json) OR comma/space-delimited in one value - all
+    // chained into ONE combined index. Greedily consume following non-flag
+    // tokens; stops at the next --flag (so `--profile a.json --amcheck` is safe).
+    else if (a === "--profile") {
+      for (const p of need("--profile")
+        .split(/[,\s]+/)
+        .filter(Boolean))
+        out.profiles.push(p);
+      while (i + 1 < argv.length && !argv[i + 1]!.startsWith("--")) {
+        for (const p of argv[++i]!.split(/[,\s]+/).filter(Boolean)) out.profiles.push(p);
+      }
+    } else if (a === "--trend-days") out.trendDays = need("--trend-days");
     else if (a === "--incident-scan-days") out.incidentScanDays = need("--incident-scan-days");
     else if (a === "--store") out.store = need("--store");
     else if (a === "--retention-days") out.retentionDays = Number(need("--retention-days"));
@@ -1433,4 +1445,6 @@ async function main(): Promise<void> {
   }
 }
 
-await main();
+// Guard so the module can be imported (e.g. to unit-test parseFlags) without
+// executing the CLI against the test runner's own argv.
+if (import.meta.main) await main();
