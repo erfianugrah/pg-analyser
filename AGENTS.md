@@ -243,7 +243,14 @@ src/
                  amplification attribution), visibilityMap (relallvisible/relpages
                  index-only-scan readiness), publicSchemaCreate (PUBLIC CREATE on
                  schema public via aclexplode), and amcheck targets
-                 (btreeIndexTargets + amcheckHeap, opt-in). The auth/
+                 (btreeIndexTargets + amcheckHeap, opt-in). Coverage adds
+                 (2026-07): unloggedTables (relpersistence='u' in app schemas -
+                 not crash-safe, truncated on failover; both tiers) and
+                 indexAdvisor (Supabase's index_advisor run server-side via
+                 LATERAL over the top-N heavy pg_stat_statements entries -
+                 concrete CREATE INDEX DDL; superuser tier AND index_advisor +
+                 hypopg already installed, gated like bloatExact, sbperf never
+                 CREATEs them). The auth/
                  cron/queryIoStats queries run in BOTH modes (pure SQL) - part of
                  keeping no-PAT at feature parity with PAT. bloat carries a 10MB
                  table-size floor (the pg_stats estimator throws absurd bloat_x
@@ -369,7 +376,15 @@ src/
                  checksum_failure, index_corruption/heap_corruption (amcheck),
                  fk_unindexed, invalid_index, multixact_wraparound,
                  never_autovacuumed, wal_heavy_statement, visibility_map_low,
-                 public_schema_create, plus configTuningFindings (a separate
+                 public_schema_create, top_query_db_time (the single statement
+                 with the largest share of total exec time - wires the dead
+                 topQueryDbTimePct threshold; attribution/low by default, med
+                 when the dominant query also has real per-call cost),
+                 query_disk_reads_high (per-query cache-miss - the complement to
+                 the global cache-hit ratio), public_bucket (public storage
+                 bucket, Security awareness), unlogged_table (durability),
+                 index_advisor_rec (exact CREATE INDEX from index_advisor), plus
+                 configTuningFindings (a separate
                  exported fn) for the static GUC sanity set (work_mem blast,
                  timeouts, maintenance_work_mem RAM-relative, checkpoint
                  completion, track_io_timing). gucBytes() converts a pg_settings

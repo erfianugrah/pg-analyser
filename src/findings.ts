@@ -2104,6 +2104,44 @@ export function deriveFindings(a: Analysis): Finding[] {
     });
   }
 
+  // index_advisor CREATE INDEX recommendations (superuser + index_advisor/hypopg
+  // gated in collect). Each row is a heavy statement with concrete DDL that
+  // lowers its planner cost - strictly more actionable than the generic seq-scan
+  // / fk-unindexed findings (it names the exact index), so it stands on its own.
+  // Cap to the top few to avoid flooding a report with a wall of DDL.
+  const toArr = (v: unknown): string[] =>
+    Array.isArray(v) ? v.map(String) : typeof v === "string" && v.length > 0 ? [v] : [];
+  for (const r of (a.sql.indexAdvisor ?? []).slice(0, 5)) {
+    const stmts = toArr(r.index_statements).filter((s) => /create index/i.test(s));
+    if (stmts.length === 0) continue;
+    const ddl = stmts.join(";\n");
+    out.push({
+      severity: "med",
+      category: "Performance",
+      title: `index_advisor suggests ${stmts.length} index${stmts.length === 1 ? "" : "es"} for a heavy query`,
+      anchor: "#outliers",
+      evidence: `${ddl}\n\nFor query: ${String(r.query ?? "")}`,
+      ...meta("index_advisor_rec"),
+    });
+  }
+
+  // Unlogged tables in app schemas (relpersistence='u', both tiers): not
+  // crash-safe - truncated on crash/failover. Awareness-level durability finding
+  // with no advisor equivalent; aggregate so many scratch tables don't flood.
+  const unlogged = (a.sql.unloggedTables ?? []).map((r) => String(r.table));
+  if (unlogged.length > 0) {
+    const shown = unlogged.slice(0, 5).join(", ");
+    const more = unlogged.length > 5 ? ` (+${unlogged.length - 5} more)` : "";
+    out.push({
+      severity: "med",
+      category: "Capacity",
+      title: `${unlogged.length} unlogged table${unlogged.length === 1 ? "" : "s"} - data lost on crash/failover`,
+      anchor: "#tables",
+      evidence: `${shown}${more}`,
+      ...meta("unlogged_table"),
+    });
+  }
+
   // Config tuning (static GUC sanity, from pgSettings - both modes).
   out.push(...configTuningFindings(a));
   out.push(...lockForensicsFindings(a));
