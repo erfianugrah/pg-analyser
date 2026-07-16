@@ -490,9 +490,9 @@ describe("render", () => {
   test("findings deep-dive shows What/Why/Fix/Verify labels + evidence link", () => {
     const html = render(fixture());
     expect(html).toContain("for every row"); // consequence prose present
-    expect(html).toContain("<b class=flabel>Why it matters</b>"); // explicit why leg
-    expect(html).toContain("<b class=flabel>Fix</b>"); // remediation label
-    expect(html).toContain("<b class=flabel>Verify</b>"); // verification label
+    expect(html).toContain("<div class=flabel>Why it matters</div>"); // explicit why leg
+    expect(html).toContain("<div class=flabel>Fix</div>"); // remediation label
+    expect(html).toContain("<div class=flabel>Verify</div>"); // verification label
     expect(html).toContain("Evidence &#8595;"); // evidence jump link
   });
 
