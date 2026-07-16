@@ -236,8 +236,22 @@ export interface Heuristic {
    * to fill from the evidence. ASCII only. Omit when there is no single command.
    */
   sql?: string;
-  /** Canonical doc/source URL for the reader (and the narrate pass to cite). */
+  /**
+   * PRIMARY reference URL - the tier-1 "how do I fix this" link. Prefer a
+   * Supabase actionable doc (troubleshooting/* or platform/*) where one exists,
+   * because Supabase abstracts the AWS substrate and the reader acts in the
+   * dashboard, not the AWS console. Where no Supabase how-to exists, this is the
+   * canonical PostgreSQL manual page. The narrate pass cites this as the fix.
+   */
   docUrl: string;
+  /**
+   * Optional SUPPLEMENTARY references, rendered after the primary link. Use for
+   * the "why / mechanism" tier (PostgreSQL manual) and the "infra substrate"
+   * tier (AWS EBS/EC2 user guide) - the layer under Supabase that explains a
+   * burst-credit / IOPS / CPU-credit finding. Each MUST be a real, verified URL
+   * (check:docurls enforces this). Ordered fix -> mechanism -> infra.
+   */
+  refs?: DocRef[];
   /**
    * Optional Supabase changelog / known-issue URL documenting a platform change
    * behind this finding. Rendered as an extra "Changelog" reference and surfaced
@@ -248,7 +262,44 @@ export interface Heuristic {
   reviewed: string;
 }
 
+/**
+ * A supplementary documentation reference attached to a finding. `tier` orders
+ * and labels the reader's need: "mechanism" = why it happens (PostgreSQL manual),
+ * "infra" = the AWS substrate under Supabase (EBS/EC2). The tier-1 "fix" link is
+ * the Heuristic's primary `docUrl`, not a DocRef.
+ */
+export interface DocRef {
+  /**
+   * "fix" = a second Supabase actionable how-to (the primary is the Heuristic's
+   * docUrl); "mechanism" = why it happens (PostgreSQL manual); "infra" = the AWS
+   * substrate under Supabase (EBS/EC2).
+   */
+  tier: "fix" | "mechanism" | "infra";
+  /** Short human label rendered as the link text, e.g. "PostgreSQL manual". */
+  label: string;
+  url: string;
+}
+
 const R = HEURISTICS_REVIEWED;
+
+// Canonical layered-reference anchors, verified 200 (check:docurls enforces).
+// AWS = the infra substrate under Supabase (EBS/EC2); used as tier-"infra" refs
+// on burst-credit / IOPS / CPU-credit findings where the mechanism lives below
+// the Postgres layer. Supabase abstracts these, so they are supplementary, not
+// the primary fix link.
+const AWS_EBS_GP = "https://docs.aws.amazon.com/ebs/latest/userguide/general-purpose.html";
+const AWS_EBS_IO = "https://docs.aws.amazon.com/ebs/latest/userguide/ebs-io-characteristics.html";
+const AWS_EC2_BURST =
+  "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/burstable-performance-instances.html";
+// Supabase actionable how-tos reused as primary fix links across findings.
+const SB_DISK_IO = "https://supabase.com/docs/guides/troubleshooting/exhaust-disk-io";
+const SB_MEM_SWAP =
+  "https://supabase.com/docs/guides/troubleshooting/memory-and-swap-usage-explained-aPNgm0";
+const SB_COMPUTE_DISK = "https://supabase.com/docs/guides/platform/compute-and-disk";
+const SB_DEBUG_PERF = "https://supabase.com/docs/guides/database/debugging-performance";
+const SB_PG_REPACK = "https://supabase.com/docs/guides/database/extensions/pg_repack";
+// PostgreSQL manual (tier-"mechanism").
+const PG = "https://www.postgresql.org/docs/current/";
 
 /** Registry keyed by heuristic id. See docs/heuristics.md for the full grounding. */
 export const HEURISTICS: Record<string, Heuristic> = {
@@ -261,7 +312,14 @@ export const HEURISTICS: Record<string, Heuristic> = {
       "pg_cron does not prune its own run log - cron.job_run_details grows forever (per-minute jobs add ~2,880 rows/day). Left alone it bloats, dominates writes (its bookkeeping INSERTs become top-frequency statements and a large share of WAL), and slows the scheduler's own queries.",
     remediation:
       "Schedule a cleanup, e.g. a daily cron job: DELETE FROM cron.job_run_details WHERE end_time < now() - interval '7 days'. Keep only the retention you actually query.",
-    docUrl: "https://github.com/citusdata/pg_cron#viewing-job-run-details",
+    docUrl: "https://supabase.com/docs/guides/database/extensions/pg_cron",
+    refs: [
+      {
+        tier: "mechanism",
+        label: "pg_cron run-details",
+        url: "https://github.com/citusdata/pg_cron#viewing-job-run-details",
+      },
+    ],
     reviewed: R,
   },
   bloat_estimate_suspect: {
@@ -297,7 +355,8 @@ export const HEURISTICS: Record<string, Heuristic> = {
       "A scheduled job whose runtime meets or exceeds its own cadence overlaps itself - a new run starts (or queues) before the last finished, so copies pile up, compete for the same rows, and can dominate DB time. This is invisible to the failure count (the runs succeed), so it hides behind a green 'no failed runs'.",
     remediation:
       "Make the job cheaper (incremental refresh, indexes, batching) or lengthen its schedule so a run comfortably finishes before the next fires. For a materialized-view refresh, consider REFRESH ... CONCURRENTLY and a longer interval.",
-    docUrl: "https://github.com/citusdata/pg_cron",
+    docUrl: "https://supabase.com/docs/guides/database/extensions/pg_cron",
+    refs: [{ tier: "mechanism", label: "pg_cron", url: "https://github.com/citusdata/pg_cron" }],
     reviewed: R,
   },
   sequence_exhaustion: {
@@ -320,8 +379,15 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "pg_stat_statements hit its entry cap and is evicting statements (dealloc > 0). The top-N query list and the outlier/latency signals - and the stats-window confidence gating built on them - are then a lossy sample: a heavy query can be evicted between scrapes and never appear. Raising the cap restores a complete picture.",
     remediation:
-      "Raise pg_stat_statements.max (default 5000) if query-level accuracy matters; it costs a little shared memory. On Supabase this is a platform GUC - request the change if needed.",
+      "Raise pg_stat_statements.max (default 5000) if query-level accuracy matters; it costs a little shared memory. On Supabase set it self-serve via the Database custom Postgres config (CLI: supabase --config pg_stat_statements.max=10000, applied on restart) - it is no longer support-only.",
     docUrl: "https://www.postgresql.org/docs/current/pgstatstatements.html",
+    refs: [
+      {
+        tier: "fix",
+        label: "Supabase custom Postgres config",
+        url: "https://supabase.com/docs/guides/database/custom-postgres-config",
+      },
+    ],
     reviewed: R,
   },
   archiver_failing: {
@@ -356,8 +422,15 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "The volume was expanded during the window, so the used-% series straddles a step-change and cannot be trended for fill risk across it - and provisioned disk is billed per GB. After any cleanup/repack lands, right-size back down (a project upgrade to ~1.2x the database size) so you are not paying for idle headroom.",
     remediation:
-      "No immediate action - this notes the expansion so the used-% drop is not misread. Once storage work settles, right-size the volume to ~1.2x database size via a project upgrade.",
-    docUrl: "https://supabase.com/docs/guides/platform/database-size",
+      "No immediate action - this notes the expansion so the used-% drop is not misread. Once storage work settles, right-size the volume to ~1.2x database size in Project Settings > Compute and Disk (/dashboard/project/_/settings/compute-and-disk).",
+    docUrl: SB_COMPUTE_DISK,
+    refs: [
+      {
+        tier: "fix",
+        label: "Database size",
+        url: "https://supabase.com/docs/guides/platform/database-size",
+      },
+    ],
     reviewed: R,
   },
   stale_table_stats: {
@@ -424,6 +497,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
     remediation:
       "Add a btree index on the filtered/joined columns. Confirm with EXPLAIN (ANALYZE, BUFFERS) that the seq scan becomes an index scan.",
     docUrl: "https://supabase.com/docs/guides/database/query-optimization",
+    refs: [{ tier: "fix", label: "Debugging performance", url: SB_DEBUG_PERF }],
     reviewed: R,
   },
   query_temp_spill: {
@@ -462,6 +536,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
     remediation:
       "Look for the tail cause: a parameter-sensitive plan (consider a covering index so the fast plan is always chosen), lock contention (check blocking + idle-in-transaction), or cache misses (the query may be reading cold pages). Stabilising the plan usually collapses the variance.",
     docUrl: "https://supabase.com/docs/guides/database/query-optimization",
+    refs: [{ tier: "fix", label: "Debugging performance", url: SB_DEBUG_PERF }],
     reviewed: R,
   },
   unused_index: {
@@ -474,7 +549,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
       "An index never scanned is still maintained on every INSERT/UPDATE/DELETE - pure write amplification plus wasted storage you pay for, with zero read benefit.",
     remediation:
       "Confirm the index does not back an occasional feature, then DROP INDEX CONCURRENTLY IF EXISTS ... (no table lock). Each unused index is write overhead for zero read benefit.",
-    docUrl: "https://supabase.com/docs/guides/database/database-advisors",
+    docUrl: "https://supabase.com/docs/guides/database/database-advisors?lint=0005_unused_index",
     reviewed: R,
   },
   duplicate_index: {
@@ -486,8 +561,8 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "Identical indexes each pay full write-maintenance cost and consume storage for no additional read benefit - redundant compute and disk spend on every write.",
     remediation:
-      "Two+ indexes have an identical definition on the same table - each copy is maintained on every write for zero read benefit. Keep one and DROP INDEX CONCURRENTLY IF EXISTS the rest (no table lock).",
-    docUrl: "https://supabase.com/docs/guides/database/database-linter?lint=0009_duplicate_index",
+      "Keep one copy and DROP INDEX CONCURRENTLY IF EXISTS the redundant duplicate(s) (no table lock) - two+ indexes share an identical definition, so each extra copy is write overhead for zero read benefit.",
+    docUrl: "https://supabase.com/docs/guides/database/database-advisors?lint=0009_duplicate_index",
     reviewed: R,
   },
   rls_col_unindexed: {
@@ -499,7 +574,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "A policy-compared column with no covering index forces a seq scan on every row check (Supabase test: 171ms -> <0.1ms once indexed) - user-facing latency and needless CPU on every authenticated read.",
     remediation:
-      "A column compared in an RLS policy has no covering index, so each policy check seq-scans. Add a btree index on it: CREATE INDEX CONCURRENTLY ON <table> (<col>). Official test: 171ms -> <0.1ms once indexed.",
+      "Add a btree index on the policy-compared column: CREATE INDEX CONCURRENTLY ON <table> (<col>). Each RLS check then uses it instead of seq-scanning every row. Official test: 171ms -> <0.1ms once indexed.",
     docUrl: "https://supabase.com/docs/guides/database/postgres/row-level-security#add-indexes",
     reviewed: R,
   },
@@ -515,6 +590,13 @@ export const HEURISTICS: Record<string, Heuristic> = {
     remediation:
       "Route app traffic through the connection pooler (Supavisor). For serverless/edge use transaction mode (port 6543) with a small per-client pool (e.g. connection_limit=1-3 per function instance); reserve direct/session connections (5432) for migrations and long transactions. If the load is legitimate and already pooled, max_connections is bound to your compute tier - review the instance size (a larger tier raises both max_connections and the RAM those backends need) rather than only bumping the setting.",
     docUrl: "https://supabase.com/docs/guides/database/connecting-to-postgres",
+    refs: [
+      {
+        tier: "fix",
+        label: "Supabase connection management",
+        url: "https://supabase.com/docs/guides/database/connection-management",
+      },
+    ],
     changelogUrl:
       "https://supabase.com/changelog/32755-supabase-connection-pooler-deprecating-session-mode-on-port-6543-on-february-28",
     reviewed: R,
@@ -527,8 +609,15 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "This role is close to its own connection ceiling; hitting it fails that role's queries while the rest of the DB looks healthy - a silent, hard-to-diagnose partial outage.",
     remediation:
-      "This role is near its own connection limit - pool its connections or raise the role's limit if the load is legitimate.",
+      "Pool this role's connections through Supavisor, or raise its ceiling with ALTER ROLE <role> CONNECTION LIMIT <n> if the load is legitimate.",
     docUrl: "https://supabase.com/docs/guides/database/connecting-to-postgres",
+    refs: [
+      {
+        tier: "fix",
+        label: "Supabase connection management",
+        url: "https://supabase.com/docs/guides/database/connection-management",
+      },
+    ],
     reviewed: R,
   },
   pooler_clients_waiting: {
@@ -539,8 +628,15 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "Clients queued for a pooler slot wait before any query even runs, adding latency the DB-side metrics never show. Sustained queueing is a capacity signal.",
     remediation:
-      "Clients are queued for a pooler slot. Increase the pool size, shorten transactions, or reduce client connection_limit so slots free up faster.",
-    docUrl: "https://supabase.com/docs/guides/database/supavisor",
+      "Increase the Supavisor pool size (Database Settings > Connection pooling), shorten transactions, or lower client connection_limit so slots free up faster.",
+    docUrl: "https://supabase.com/docs/guides/database/connection-management",
+    refs: [
+      {
+        tier: "mechanism",
+        label: "Supavisor",
+        url: "https://supabase.com/docs/guides/database/supavisor",
+      },
+    ],
     reviewed: R,
   },
 
@@ -553,8 +649,15 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "Dead tuples past the autovacuum threshold accumulate as bloat: tables and indexes grow, cache hit drops, scans slow, and disk fills with dead space you pay for.",
     remediation:
-      "Dead tuples are past the autovacuum trigger. Lower autovacuum_vacuum_scale_factor per-table (e.g. 0.05 on big tables) and check for a long-running txn pinning the xmin horizon.",
+      "Lower autovacuum_vacuum_scale_factor for the table (e.g. 0.05 on big tables) so autovacuum fires sooner, and clear any long-running txn pinning the xmin horizon - dead tuples are past the trigger.",
     docUrl: "https://supabase.com/blog/postgres-bloat",
+    refs: [
+      {
+        tier: "mechanism",
+        label: "PostgreSQL routine vacuuming",
+        url: `${PG}routine-vacuuming.html`,
+      },
+    ],
     reviewed: R,
   },
   table_bloat: {
@@ -567,6 +670,14 @@ export const HEURISTICS: Record<string, Heuristic> = {
     remediation:
       "Reclaim online with pg_repack (brief final lock); VACUUM FULL needs an exclusive lock throughout. Run when no long-running transactions are open.",
     docUrl: "https://supabase.com/blog/postgres-bloat",
+    refs: [
+      { tier: "fix", label: "Supabase pg_repack", url: SB_PG_REPACK },
+      {
+        tier: "mechanism",
+        label: "PostgreSQL routine vacuuming",
+        url: `${PG}routine-vacuuming.html`,
+      },
+    ],
     reviewed: R,
   },
   storage_concentration: {
@@ -630,7 +741,14 @@ export const HEURISTICS: Record<string, Heuristic> = {
       "A foreign key with no index on its referencing columns forces a full sequential scan of the child table on every parent UPDATE/DELETE (to find referencing rows), and takes wider locks - so cascades are slow and contention spikes as the child grows. Postgres does NOT auto-create this index (unlike the one for a PRIMARY KEY).",
     remediation:
       "Add a btree index on the FK's referencing columns (leading columns matching the constraint) with CREATE INDEX CONCURRENTLY. This is the single most common missing-index class.",
-    docUrl: "https://www.postgresql.org/docs/current/ddl-constraints.html#DDL-CONSTRAINTS-FK",
+    docUrl: "https://supabase.com/docs/guides/database/query-optimization",
+    refs: [
+      {
+        tier: "mechanism",
+        label: "PostgreSQL foreign keys",
+        url: "https://www.postgresql.org/docs/current/ddl-constraints.html#DDL-CONSTRAINTS-FK",
+      },
+    ],
     reviewed: R,
   },
   invalid_index: {
@@ -694,7 +812,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "Transaction-ID age nearing the ~2B ceiling is existential: at the limit Postgres stops accepting writes until an unkillable anti-wraparound vacuum completes - a hard, self-inflicted outage.",
     remediation:
-      "Freeze autovacuum is falling behind. At ~2B unfrozen XIDs Postgres halts writes. Find the oldest table by age(relfrozenxid), clear any xmin-pinning txn, and let anti-wraparound vacuum complete (it cannot be killed).",
+      "VACUUM (FREEZE) the oldest tables by age(relfrozenxid) - freeze autovacuum is falling behind. At ~2B unfrozen XIDs Postgres halts writes, so clear any xmin-pinning txn and let the anti-wraparound vacuum complete (it cannot be killed).",
     docUrl: "https://www.postgresql.org/docs/current/routine-vacuuming.html",
     reviewed: R,
   },
@@ -735,6 +853,13 @@ export const HEURISTICS: Record<string, Heuristic> = {
       "Identify the affected relation, restore it from a known-good backup / PITR, and investigate the storage layer. Run amcheck (bt_index_check / verify_heapam) to scope the damage. Do not ignore even a single failure.",
     docUrl:
       "https://www.postgresql.org/docs/current/monitoring-stats.html#MONITORING-PG-STAT-DATABASE-VIEW",
+    refs: [
+      {
+        tier: "fix",
+        label: "Supabase backups / PITR",
+        url: "https://supabase.com/docs/guides/platform/backups",
+      },
+    ],
     reviewed: R,
   },
   index_corruption: {
@@ -748,6 +873,13 @@ export const HEURISTICS: Record<string, Heuristic> = {
     remediation:
       "REINDEX INDEX CONCURRENTLY the affected index to rebuild it from the heap. If verify_heapam also flags the table, restore from backup - a rebuild trusts a possibly-corrupt heap.",
     docUrl: "https://www.postgresql.org/docs/current/amcheck.html",
+    refs: [
+      {
+        tier: "fix",
+        label: "Supabase backups / PITR",
+        url: "https://supabase.com/docs/guides/platform/backups",
+      },
+    ],
     reviewed: R,
   },
   heap_corruption: {
@@ -759,6 +891,13 @@ export const HEURISTICS: Record<string, Heuristic> = {
     remediation:
       "Restore the affected relation from a known-good backup / PITR and investigate the storage layer. Capture the verify_heapam output (block/offset) before restoring for root-cause.",
     docUrl: "https://www.postgresql.org/docs/current/amcheck.html",
+    refs: [
+      {
+        tier: "fix",
+        label: "Supabase backups / PITR",
+        url: "https://supabase.com/docs/guides/platform/backups",
+      },
+    ],
     reviewed: R,
   },
   work_mem_blast: {
@@ -791,13 +930,13 @@ export const HEURISTICS: Record<string, Heuristic> = {
   checkpoint_completion_low: {
     id: "checkpoint_completion_low",
     plane: "Config",
-    sql: "ALTER SYSTEM SET checkpoint_completion_target = 0.9;  -- then reload",
+    sql: "-- self-hosted / --db-url only (hosted Supabase already defaults this to 0.9\n-- and restricts ALTER SYSTEM):\nALTER SYSTEM SET checkpoint_completion_target = 0.9;  -- then reload",
     howToVerify:
       "After the change, confirm checkpoint write I/O is smoother (pg_stat_bgwriter / checkpoint write time spread over the interval rather than spiking).",
     whyItMatters:
       "checkpoint_completion_target sets how much of the interval Postgres spreads checkpoint writes over. A low value bunches the flush into a short window, spiking disk I/O and latency. Modern Postgres defaults to 0.9 for this reason.",
     remediation:
-      "Set checkpoint_completion_target to 0.9 so checkpoint writes are paced across the interval instead of flushed in a burst.",
+      "Set checkpoint_completion_target to 0.9 so checkpoint writes are paced across the interval instead of flushed in a burst. On hosted Supabase it is already 0.9 and ALTER SYSTEM is restricted, so this applies to self-hosted / --db-url targets.",
     docUrl:
       "https://www.postgresql.org/docs/current/runtime-config-wal.html#GUC-CHECKPOINT-COMPLETION-TARGET",
     reviewed: R,
@@ -805,15 +944,22 @@ export const HEURISTICS: Record<string, Heuristic> = {
   track_io_timing_off: {
     id: "track_io_timing_off",
     plane: "Config",
-    sql: "ALTER SYSTEM SET track_io_timing = on;  -- then reload",
+    sql: "-- hosted Supabase (postgres is not a true superuser; supautils allows this at role level):\nALTER ROLE postgres SET track_io_timing = 'on';\n-- self-hosted / --db-url: ALTER SYSTEM SET track_io_timing = on;  -- then reload",
     howToVerify:
       "After enabling, confirm pg_stat_statements shows non-null blk_read_time/blk_write_time and EXPLAIN (ANALYZE, BUFFERS) reports I/O timings.",
     whyItMatters:
       "With track_io_timing off, Postgres cannot attribute time spent on disk I/O - pg_stat_statements I/O timings are null and EXPLAIN can't show read/write time. That blinds both this tool's I/O analysis and your own query tuning. The overhead is negligible on modern kernels.",
     remediation:
-      "Enable track_io_timing so per-query and per-statement I/O time is captured. Overhead is measured in nanoseconds on clocksource=tsc hosts.",
+      "Enable track_io_timing to capture per-query and per-statement I/O time. On hosted Supabase set it at role level (ALTER ROLE postgres SET track_io_timing = 'on') since ALTER SYSTEM is restricted; self-hosted can use ALTER SYSTEM. Overhead is nanoseconds on clocksource=tsc hosts.",
     docUrl:
       "https://www.postgresql.org/docs/current/runtime-config-statistics.html#GUC-TRACK-IO-TIMING",
+    refs: [
+      {
+        tier: "fix",
+        label: "Supabase custom Postgres config",
+        url: "https://supabase.com/docs/guides/database/custom-postgres-config",
+      },
+    ],
     reviewed: R,
   },
   lock_wave: {
@@ -835,8 +981,8 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "Lock incidents leave no forensic trail when log_lock_waits is off: a blocked ALTER that queues every reader for minutes produces zero log evidence, so the cascade is invisible after the fact. And without a session/role-scoped lock_timeout, a migration that cannot acquire its lock waits indefinitely, holding the queue open behind it - Postgres grants locks in queue order, so even non-conflicting readers pile up behind the waiting exclusive lock.",
     remediation:
-      "Enable lock-wait logging: ALTER SYSTEM SET log_lock_waits = on (with deadlock_timeout at 1s, each wait past 1s logs one line - negligible except during the incidents you want recorded). For the guardrail, set lock_timeout on the MIGRATION SESSION OR ROLE only (e.g. ALTER ROLE migrator SET lock_timeout = '3s'), never on the whole cluster - a global lock_timeout cancels legitimate long waits. Pair it with a retry loop so a blocked ALTER fails fast instead of queueing readers.",
-    sql: `-- enable lock-wait logging (superuser), then reload:\nALTER SYSTEM SET log_lock_waits = on;  -- SELECT pg_reload_conf();\n-- session-scoped migration guardrail (run INSIDE the migration, not globally):\nSET lock_timeout = '3s';`,
+      "Enable lock-wait logging: on hosted Supabase ALTER ROLE postgres SET log_lock_waits = 'on' (ALTER SYSTEM is restricted; supautils allows log_lock_waits + deadlock_timeout at role level), self-hosted can ALTER SYSTEM. With deadlock_timeout at 1s each wait past 1s logs one line - negligible except during the incidents you want recorded. For the guardrail, set lock_timeout on the MIGRATION SESSION OR ROLE only (e.g. ALTER ROLE migrator SET lock_timeout = '3s'), never on the whole cluster - a global lock_timeout cancels legitimate long waits. Pair it with a retry loop so a blocked ALTER fails fast instead of queueing readers.",
+    sql: `-- hosted Supabase (postgres is not a true superuser; supautils allows this at role level):\nALTER ROLE postgres SET log_lock_waits = 'on';  -- self-hosted: ALTER SYSTEM SET log_lock_waits = on; then SELECT pg_reload_conf();\n-- session-scoped migration guardrail (run INSIDE the migration, not globally):\nSET lock_timeout = '3s';`,
     howToVerify:
       "After enabling: SHOW log_lock_waits returns 'on'. After the next migration, confirm a blocked ALTER logs a 'still waiting for ...Lock' line and fails at the lock_timeout instead of stalling readers.",
     docUrl: "https://www.postgresql.org/docs/current/runtime-config-locks.html",
@@ -875,8 +1021,12 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "Sustained major page faults / swap-in mean the working set no longer fits in RAM, so the OS and Postgres keep reading pages back from disk. That is real query latency and disk I/O the instance cannot see as 'memory' - and a point-in-time MemAvailable reading can look perfectly healthy while it is happening (a swap-occupancy snapshot is NOT a reliable signal; the RATE over time is).",
     remediation:
-      "Give the working set more RAM: bump the compute tier (the most direct fix on a small instance), or cut memory demand - lower work_mem / max_connections, shrink the hot set, add indexes so scans touch fewer pages. Occupancy alone is not the trigger; a sustained swap-IN or major-fault rate is.",
-    docUrl: "https://supabase.com/docs/guides/platform/compute-and-disk",
+      "Give the working set more RAM: bump the compute tier in Project Settings > Compute and Disk (the most direct fix on a small instance), or cut memory demand - lower work_mem / max_connections, shrink the hot set, add indexes so scans touch fewer pages. Occupancy alone is not the trigger; a sustained swap-IN or major-fault rate is.",
+    docUrl: SB_MEM_SWAP,
+    refs: [
+      { tier: "fix", label: "Compute and Disk", url: SB_COMPUTE_DISK },
+      { tier: "infra", label: "AWS EBS gp3 burst", url: AWS_EBS_GP },
+    ],
     reviewed: R,
   },
   psi_saturation: {
@@ -887,8 +1037,12 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "Pressure Stall Information is the fraction of time runnable tasks were stalled waiting for CPU, memory, or I/O. Unlike a utilization snapshot (idle% / MemAvailable can read healthy at the instant you look), sustained PSI is direct evidence that work is queueing behind a saturated resource - i.e. real, ongoing latency.",
     remediation:
-      "Identify the stalled resource (CPU / memory / I/O) and relieve it: size up the compute tier, cut concurrency (max_connections / work_mem), or reduce I/O via indexing + cache hit. PSI names the bottleneck so you size the right axis instead of over-provisioning everything.",
-    docUrl: "https://supabase.com/docs/guides/platform/compute-and-disk",
+      "Identify the stalled resource (CPU / memory / I/O) and relieve it: size up the compute tier in Project Settings > Compute and Disk, cut concurrency (max_connections / work_mem), or reduce I/O via indexing + cache hit. PSI names the bottleneck so you size the right axis instead of over-provisioning everything.",
+    docUrl: SB_COMPUTE_DISK,
+    refs: [
+      { tier: "infra", label: "AWS EBS I/O characteristics", url: AWS_EBS_IO },
+      { tier: "infra", label: "AWS EC2 CPU credits", url: AWS_EC2_BURST },
+    ],
     reviewed: R,
   },
   oom_kill: {
@@ -899,8 +1053,9 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "The kernel OOM killer only fires when memory is genuinely exhausted - it terminates a process (often a Postgres backend) to survive. That is a far stronger signal than a high memory %: it means requests were killed, connections dropped, and possibly a crash-recovery cycle. Even a single event over the window is worth acting on.",
     remediation:
-      "Give the instance more memory headroom: bump the compute tier, and/or cut demand - lower work_mem and max_connections, shrink the hot working set, add indexes so scans touch fewer pages. Recurrent OOM kills almost always mean the tier is undersized for the workload.",
-    docUrl: "https://supabase.com/docs/guides/platform/compute-and-disk",
+      "Give the instance more memory headroom: bump the compute tier in Project Settings > Compute and Disk, and/or cut demand - lower work_mem and max_connections, shrink the hot working set, add indexes so scans touch fewer pages. Recurrent OOM kills almost always mean the tier is undersized for the workload.",
+    docUrl: SB_MEM_SWAP,
+    refs: [{ tier: "fix", label: "Compute and Disk", url: SB_COMPUTE_DISK }],
     reviewed: R,
   },
   ebs_balance_low: {
@@ -911,8 +1066,12 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "AWS gp2/gp3 volumes serve burst I/O from a credit balance. When the balance depletes, throughput and IOPS are throttled HARD to the baseline - a sudden latency cliff that in-guest disk metrics cannot explain (the disk isn't full or busy by its own numbers; the cloud is throttling it). A depleting balance is an early warning before the cliff hits.",
     remediation:
-      "Provision baseline IOPS/throughput to cover sustained demand (gp3 lets you buy IOPS/throughput independently of size), or reduce burst I/O via indexing, cache hit, and batching. Sizing to the sustained rate stops the credit balance from draining.",
-    docUrl: "https://supabase.com/docs/guides/platform/compute-and-disk",
+      "On Supabase this is the Disk IO Budget. Raise the baseline in Project Settings > Compute and Disk (/dashboard/project/_/settings/compute-and-disk): provision extra Disk IOPS/throughput (gp3 sells these independently of disk size), or move to a larger compute tier (4XL+ has a higher, more consistent disk-IO baseline). Or cut sustained I/O: raise cache-hit, add indexes to kill seq scans, batch writes. Monitor the budget at Database Health > Observability (/dashboard/project/_/observability/database).",
+    docUrl: SB_DISK_IO,
+    refs: [
+      { tier: "infra", label: "AWS EBS gp3 burst", url: AWS_EBS_GP },
+      { tier: "infra", label: "AWS EBS I/O characteristics", url: AWS_EBS_IO },
+    ],
     reviewed: R,
   },
   cpu_saturated: {
@@ -923,8 +1082,9 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "Sustained high CPU (not a brief spike) means queries are queueing for cores - latency rises and throughput plateaus. A point-in-time reading can miss it; the fraction of the window spent hot is the real signal.",
     remediation:
-      "Size up the compute tier, or cut CPU demand: fix the heaviest pg_stat_statements queries (missing indexes, seq scans), reduce connection churn, and offload read traffic. Compute Nano..2XL can burst; Large+ is predictable (no burst) - a sustained-hot small tier is running on burst credits.",
-    docUrl: "https://supabase.com/docs/guides/platform/compute-and-disk",
+      "Size up the compute tier in Project Settings > Compute and Disk (/dashboard/project/_/settings/compute-and-disk), or cut CPU demand: fix the heaviest pg_stat_statements queries (missing indexes, seq scans), reduce connection churn, and offload read traffic. Compute Nano..2XL can burst; Large+ is predictable (no burst) - a sustained-hot small tier is running on AWS CPU credits.",
+    docUrl: SB_COMPUTE_DISK,
+    refs: [{ tier: "infra", label: "AWS EC2 CPU credits", url: AWS_EC2_BURST }],
     reviewed: R,
   },
   cpu_oversized: {
@@ -935,8 +1095,9 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "A tier whose CPU sits near-idle for weeks is paying for headroom it never uses. Right-sizing down cuts cost with no performance loss - the counterpart to catching saturation.",
     remediation:
-      "Consider a smaller compute tier. Verify memory and I/O also have headroom first (downsizing compute usually cuts RAM too), and keep enough margin for known traffic peaks / batch jobs.",
-    docUrl: "https://supabase.com/docs/guides/platform/compute-and-disk",
+      "Consider a smaller compute tier in Project Settings > Compute and Disk (/dashboard/project/_/settings/compute-and-disk). Verify memory and I/O also have headroom first (downsizing compute usually cuts RAM too), and keep enough margin for known traffic peaks / batch jobs.",
+    docUrl: SB_COMPUTE_DISK,
+    refs: [{ tier: "infra", label: "AWS EC2 CPU credits", url: AWS_EC2_BURST }],
     reviewed: R,
   },
   mem_saturated: {
@@ -947,8 +1108,8 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "Memory sustained near the ceiling leaves no room for the page cache and pushes the working set toward swap - each spill becomes disk I/O and latency. Sustained high memory% is the leading indicator before the paging/OOM signals fire.",
     remediation:
-      "Size up the tier, or cut demand: lower work_mem and max_connections, shrink the hot working set, add indexes so scans touch fewer pages. Pair with the paging (mem_pressure_paging) and OOM (oom_kill) signals to confirm it's real pressure, not healthy cache use.",
-    docUrl: "https://supabase.com/docs/guides/platform/compute-and-disk",
+      "Size up the tier in Project Settings > Compute and Disk, or cut demand: lower work_mem and max_connections, shrink the hot working set, add indexes so scans touch fewer pages. Pair with the paging (mem_pressure_paging) and OOM (oom_kill) signals to confirm it's real pressure, not healthy cache use.",
+    docUrl: SB_MEM_SWAP,
     reviewed: R,
   },
   disk_fill_projection: {
@@ -960,7 +1121,8 @@ export const HEURISTICS: Record<string, Heuristic> = {
       "A disk that hits 100% takes the database read-only (or down). Projecting the current growth slope to full gives lead time to act before the cliff, instead of finding out at the wall. The projection is only made within the span the data supports - a short history won't claim a far-future date.",
     remediation:
       "Grow the disk ahead of the projected date (Supabase disk auto-scales, but with a cooldown - don't rely on it under fast growth), and attack the growth source: prune/rotate large tables, drop dead bloat (VACUUM FULL / pg_repack in a window), archive cold data, and check for runaway WAL or unvacuumed dead tuples.",
-    docUrl: "https://supabase.com/docs/guides/platform/compute-and-disk",
+    docUrl: "https://supabase.com/docs/guides/platform/database-size",
+    refs: [{ tier: "fix", label: "Compute and Disk", url: SB_COMPUTE_DISK }],
     reviewed: R,
   },
   checkpoint_pressure: {
@@ -971,8 +1133,8 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "A 'requested' checkpoint is forced because WAL filled before checkpoint_timeout. A high requested share means the DB is checkpointing under write pressure - each checkpoint is a burst of full-page writes and fsync, adding I/O and latency. Timed checkpoints (the interval) are the healthy case.",
     remediation:
-      "Raise max_wal_size so WAL can absorb writes between timed checkpoints (fewer forced checkpoints, smoother I/O). Confirm checkpoint_timeout and checkpoint_completion_target are sane. On a write-heavy workload this is one of the highest-leverage knobs.",
-    docUrl: "https://supabase.com/docs/guides/database/postgres/configuration",
+      "Raise max_wal_size so WAL can absorb writes between timed checkpoints (fewer forced checkpoints, smoother I/O). On hosted Supabase max_wal_size is CLI-only (supabase --config max_wal_size=2GB, applied on restart - ALTER SYSTEM is restricted); self-hosted can ALTER SYSTEM. On a write-heavy workload this is one of the highest-leverage knobs.",
+    docUrl: "https://supabase.com/docs/guides/database/custom-postgres-config",
     reviewed: R,
   },
   wal_archival_backlog: {
@@ -983,7 +1145,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "WAL files pending archival pile up when the archiver can't keep pace or the archive destination is unhealthy. Backlog means point-in-time recovery falls behind (you can't restore to recent moments) and WAL accumulates on the data disk - a stealth contributor to disk fill.",
     remediation:
-      "Check the archive command / destination health and network throughput; ensure the disk has headroom for the backlog. If it's a sustained rate problem, the write volume may be outrunning archival - raise instance/IO capacity or reduce WAL churn (fewer forced checkpoints, less bloat/churn).",
+      "On Supabase WAL archival is platform-managed - if the backlog doesn't self-clear, open a support ticket; meanwhile reduce WAL churn (fewer forced checkpoints, less bloat/churn) and ensure disk headroom. Self-hosted: fix the archive_command destination / network throughput.",
     docUrl: "https://supabase.com/docs/guides/platform/backups",
     reviewed: R,
   },
@@ -997,6 +1159,13 @@ export const HEURISTICS: Record<string, Heuristic> = {
     remediation:
       "Route clients through the pooler (Supavisor / PgBouncer) in transaction mode so many clients share few backends, cap application pool sizes, and only then consider raising max_connections (it trades RAM for headroom). On Supabase max_connections tracks the compute tier, so if pooled demand is genuinely high the durable fix is sizing up the instance (more connections AND more RAM), not just the setting. Long-lived idle connections are the usual culprit.",
     docUrl: "https://supabase.com/docs/guides/database/connecting-to-postgres",
+    refs: [
+      {
+        tier: "fix",
+        label: "Supabase connection management",
+        url: "https://supabase.com/docs/guides/database/connection-management",
+      },
+    ],
     changelogUrl:
       "https://supabase.com/changelog/32755-supabase-connection-pooler-deprecating-session-mode-on-port-6543-on-february-28",
     reviewed: R,
@@ -1009,8 +1178,9 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "Sustained IOPS near the ceiling throttles every query behind disk I/O, spiking latency. Effective IOPS is the min of compute and disk, so both must be sized - and over-provisioned IOPS is money spent on headroom you never use.",
     remediation:
-      "Reduce read/write IOPS via indexing + cache hit, or provision more IOPS. Effective IOPS = min(compute-supported, provisioned-disk).",
-    docUrl: "https://supabase.com/docs/guides/platform/compute-and-disk",
+      "Reduce read/write IOPS via indexing + cache hit, or provision more Disk IOPS in Project Settings > Compute and Disk (/dashboard/project/_/settings/compute-and-disk). Effective IOPS = min(compute-supported, provisioned-disk).",
+    docUrl: SB_DISK_IO,
+    refs: [{ tier: "infra", label: "AWS EBS I/O characteristics", url: AWS_EBS_IO }],
     reviewed: R,
   },
   wal_retained_inactive_slot: {
@@ -1022,7 +1192,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "An inactive replication slot pins WAL indefinitely and will fill the disk - an eventual write outage caused by a consumer that no longer exists.",
     remediation:
-      "An inactive replication slot pins WAL and will fill the disk. Drop it if the downstream consumer is gone: SELECT pg_drop_replication_slot('<name>').",
+      "Drop the abandoned slot if its consumer is gone: SELECT pg_drop_replication_slot('<name>'). An inactive slot pins WAL and will otherwise fill the disk.",
     docUrl: "https://www.postgresql.org/docs/current/warm-standby.html#STREAMING-REPLICATION-SLOTS",
     reviewed: R,
   },
@@ -1034,7 +1204,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "A large WAL backlog on an active slot means a slow downstream consumer; the retained WAL grows disk use and risks the same disk-full write outage.",
     remediation:
-      "An active slot is retaining a large amount of WAL - the downstream consumer is slow. Investigate the consumer's replay lag.",
+      "Speed up or fix the downstream consumer (Realtime / logical-replication subscriber) so the slot advances - retained WAL only frees once its restart_lsn moves. If the consumer is defunct, drop the slot.",
     docUrl: "https://www.postgresql.org/docs/current/warm-standby.html#STREAMING-REPLICATION-SLOTS",
     reviewed: R,
   },
@@ -1049,7 +1219,8 @@ export const HEURISTICS: Record<string, Heuristic> = {
       "Below the 99% target, reads fall through to disk - higher latency and IOPS, and a signal the working set no longer fits in RAM (a memory/compute sizing decision, not just a knob).",
     remediation:
       "Below the 99% target, reads hit disk. Aim for >= 99%: improve via better indexing on hot tables and more RAM (a compute-tier upgrade sizes shared_buffers/effective_cache_size for you) rather than only raising shared_buffers - a working set larger than RAM is a sizing decision, not a knob.",
-    docUrl: "https://supabase.com/docs/guides/platform/performance",
+    docUrl: "https://supabase.com/docs/guides/platform/performance#hit-rate",
+    refs: [{ tier: "fix", label: "Debugging performance", url: SB_DEBUG_PERF }],
     reviewed: R,
   },
   idle_in_txn_open: {
@@ -1113,8 +1284,9 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "Queries over 5 minutes hold resources and (in a transaction) block autovacuum; they usually signal a missing index or an unbounded scan that will only get slower.",
     remediation:
-      "Queries running over 5 minutes. Check pg_stat_activity, add missing indexes, or set a statement_timeout. Long transactions also block autovacuum.",
+      "Identify the statement in pg_stat_activity (query_start age), add the missing index or set a statement_timeout to bound it - a long transaction also blocks autovacuum.",
     docUrl: "https://www.postgresql.org/docs/current/monitoring-stats.html",
+    refs: [{ tier: "fix", label: "Debugging performance", url: SB_DEBUG_PERF }],
     reviewed: R,
   },
 
@@ -1126,8 +1298,8 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "Server errors are failed user requests - direct product impact. A sustained 5xx rate is an SLA-breach signal, not a cosmetic one.",
     remediation:
-      "Investigate the function logs for the 5xx cause. Track p95 latency > 1s and error rate > 1% as SLA triggers.",
-    docUrl: "https://supabase.com/docs/guides/functions",
+      "Investigate the function's logs for the 5xx cause (Edge Functions > your function > Logs, or the Logs Explorer). Track p95 latency > 1s and error rate > 1% as SLA triggers.",
+    docUrl: "https://supabase.com/docs/guides/functions/logging",
     reviewed: R,
   },
 
@@ -1140,7 +1312,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "Deadlocks abort a transaction outright, surfacing as errors to users. Recurring deadlocks mean inconsistent lock ordering that will keep failing writes until fixed.",
     remediation:
-      "Deadlocks have occurred (pg_stat_database_deadlocks). Order writes consistently across transactions, keep transactions short, and take row locks in a fixed order. Investigate the involved statements in the logs.",
+      "Order writes in a consistent sequence across transactions and take row locks in a fixed order; keep transactions short. Investigate the involved statements in the logs to find the conflicting lock order.",
     docUrl: "https://www.postgresql.org/docs/current/explicit-locking.html#LOCKING-DEADLOCKS",
     reviewed: R,
   },
@@ -1229,7 +1401,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
       "With email auto-confirm on, GoTrue issues a session without verifying the address, so anyone can sign up under an address they don't control - an account-farming and phishing-pretext surface, and it lets bogus emails accumulate.",
     remediation:
       "Turn OFF 'Confirm email' auto-confirm (Authentication > Providers > Email) unless you intentionally verify ownership another way, so new signups must confirm their address.",
-    docUrl: "https://supabase.com/docs/guides/auth/auth-email",
+    docUrl: "https://supabase.com/docs/guides/auth/passwords",
     reviewed: R,
   },
   auth_mfa_disabled: {
@@ -1264,7 +1436,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "Anonymous sign-ins are a legitimate feature but let anyone mint a real user row without any identity, so unbounded they enable row-spam and abuse. It only matters that RLS + rate limits are written with that in mind - flagged as awareness, not a defect.",
     remediation:
-      "Anonymous sign-ins are enabled. Confirm RLS policies and rate limits account for un-verified anon users, and disable it if the app doesn't use anonymous auth.",
+      "Confirm RLS policies and rate limits account for un-verified anon users. If the app doesn't use anonymous auth, disable it under Authentication > Sign In / Providers (Anonymous sign-ins).",
     docUrl: "https://supabase.com/docs/guides/auth/auth-anonymous",
     reviewed: R,
   },
@@ -1276,7 +1448,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "The access token can't be revoked before it expires, so a long jwt_exp widens the window a stolen token stays valid. The default 3600s (1h) balances that against refresh churn; much larger values extend the blast radius of a leak.",
     remediation:
-      "Lower the access-token expiry (jwt_exp) toward the 3600s (1h) default unless a longer session is a deliberate tradeoff; refresh tokens keep sessions alive without a long-lived access token.",
+      "Lower the access-token expiry under Authentication > Sessions (Access token expiry / jwt_exp) toward the 3600s (1h) default unless a longer session is a deliberate tradeoff; refresh tokens keep sessions alive without a long-lived access token.",
     docUrl: "https://supabase.com/docs/guides/auth/sessions",
     reviewed: R,
   },
@@ -1347,7 +1519,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "Running behind the platform version misses performance, security, and stability fixes; the upgrade is brief scheduled downtime now versus carrying known issues indefinitely.",
     remediation:
-      "A Postgres platform update is available. Schedule the upgrade (incurs brief downtime).",
+      "Schedule the platform upgrade in Infrastructure > Settings (Upgrade) - it incurs brief downtime.",
     docUrl: "https://supabase.com/docs/guides/platform/upgrading",
     reviewed: R,
   },
@@ -1361,6 +1533,7 @@ export function meta(id: string): {
   howToVerify?: string;
   sql?: string;
   docUrl?: string;
+  refs?: DocRef[];
   changelogUrl?: string;
 } {
   const h = HEURISTICS[id];
@@ -1372,6 +1545,7 @@ export function meta(id: string): {
     howToVerify: h.howToVerify,
     sql: h.sql,
     docUrl: h.docUrl,
+    refs: h.refs,
     changelogUrl: h.changelogUrl,
   };
 }

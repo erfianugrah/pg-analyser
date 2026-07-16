@@ -20,6 +20,7 @@
     "check:lints": "bun run scripts/check-lints-drift.ts",
     "check:pgversions": "bun run scripts/check-pgversions-drift.ts",
     "check:schemas": "bun run scripts/check-schemas-drift.ts",
+    "check:docurls": "bun run scripts/check-docurls.ts",
     "smoke": "bun run smoke.ts",
     "build": "bun build ./src/index.ts --compile --outfile sbperf"
   },

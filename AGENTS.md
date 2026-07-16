@@ -44,6 +44,7 @@ enumerates + serves API/metrics; matched projects upgrade to superuser SQL).
 | `bun run check:inspect` | warn when upstream CLI inspect SQL drifts from our derived baseline |
 | `bun run check:lints` | warn when splinter lints drift from the src/lints.ts fix catalog |
 | `bun run check:schemas` | warn when the app-schema denylist (src/appschema.ts) drifts from splinter.sql's unused_index exclusions |
+| `bun run check:docurls` | warn when a finding's layered doc references (Supabase docUrl + Postgres/AWS refs + changelogUrl) 404 or redirect to a renamed path |
 | `bun test` | run tests |
 | `bun run build` | compile a standalone `sbperf` binary |
 
