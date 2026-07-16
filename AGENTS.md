@@ -32,7 +32,7 @@ enumerates + serves API/metrics; matched projects upgrade to superuser SQL).
 | `bun run src/index.ts full --ref <ref>` | analyze + report + pdf |
 | `bun run src/index.ts full --ref <r1>,<r2> ...` / `--ref-file <f>` | audit a subset of projects -> combined org/project index (PAT-only). `--ref` repeatable + comma/space lists; `--ref-file` reads a .txt/.csv (ref-shaped tokens only) |
 | `bun run src/index.ts full --all [--org <slug>]` | audit every project -> `index.html`. Projects whose ref matches a connstring (`--db-config` / `--db-url` / `SBPERF_DB_URL` / auto-loaded `sbperf.databases.json`) are AUTO-UPGRADED to the superuser SQL tier (PAT still serves API planes + metrics) - the maximal-coverage fleet command: `full --all --db-config <json> [--amcheck]` |
-| `bun run src/index.ts full --profile <file.json>` | no-PAT sweep: force-no-PAT + per-region Grafana + target DBs, all in one gitignored JSON -> per-DB reports + index |
+| `bun run src/index.ts full --profile <file.json>` | no-PAT sweep: force-no-PAT + per-region Grafana + target DBs, all in one gitignored JSON -> per-DB reports + index. REPEATABLE: chain `--profile a.json --profile b.json` into ONE combined index, each DB keeping its own mode (PAT vs no-PAT) + Grafana + trend window |
 | `bun run src/index.ts full --db-url <connstr>` | superuser SQL tier (augments the PAT, or SOLE source in no-PAT mode); repeatable / `--db-config <file>` for a multi-DB sweep |
 | `bun run src/index.ts analyze --ref <ref> --db-url <c> --amcheck[ heap]` | opt-in data-integrity: `bt_index_check` on app B-tree indexes (light); `heap` adds `verify_heapam` (heavy). Superuser + amcheck-installed only; never CREATEs the extension |
 | `bun run src/index.ts snapshot --ref <ref>` | collect + append to the SQLite history store (cron this) |
@@ -158,7 +158,15 @@ sync guarantee the way `check:api` is for PAT mode.
 config in ONE gitignored JSON - `{ noPat, grafana: { hostTemplate, datasourceUid,
 matcher, regions: { <region>: { cookie, uid?, host? } } }, databases: [...] }`.
 `full --profile <f>` forces no-PAT (`profile.noPat`, default true), makes
-`databases[]` the sweep targets, and always routes through `doAllDbs`. Each
+`databases[]` the sweep targets, and always routes through `doAllDbs`.
+**`--profile` is REPEATABLE**: chaining several profiles produces ONE combined
+index, and each target carries its OWNING profile (`SweepTarget.profile`) so a
+chained DB keeps its own mode, regional Grafana, and trend window. In a mixed
+run (some PAT profiles, some no-PAT) the PAT still resolves for the PAT profiles
+while `doAllDbs` passes a `null` transport per-target for the no-PAT ones - the
+progress banner reads `mixed - PAT for N, no-PAT for M`. `SBPERF_NO_PAT` is
+forced globally ONLY when EVERY chained profile is no-PAT (otherwise the PAT
+profiles could not reach the Management API). Each
 regional Grafana is a separate ALB (per-region session cookie), so trends are
 resolved PER PROJECT: `regionFromConnstring` derives the region from the
 connstring, `resolveGrafana` maps it to that region's host/uid/cookie (host from
@@ -465,6 +473,9 @@ src/
                  per-region ALB cookie, + target databases). resolveGrafana maps
                  each project's region (from its connstring) to that region's
                  host/uid/cookie; full --profile sweeps databases[] via doAllDbs.
+                 --profile is REPEATABLE: chained profiles -> one combined
+                 index, each SweepTarget carrying its owning profile so per-DB
+                 mode (PAT/no-PAT) + Grafana + trendDays are preserved.
   promexport.ts  history store -> OpenMetrics (timestamped) for `export-prometheus`;
                  promtool backfills a Prometheus TSDB -> retroactive Grafana
   scraper.ts     generate a going-forward Prometheus+Grafana stack (alternate
