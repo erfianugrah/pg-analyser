@@ -60,6 +60,7 @@ export function buildNarrativeInput(a: Analysis) {
     whyItMatters: f.whyItMatters,
     remediation: f.remediation,
     doc: f.docUrl,
+    refs: f.refs?.map((r) => ({ label: r.label, url: r.url })),
     changelog: f.changelogUrl,
   }));
   const positives = derivePositives(a).map((p) => `${p.category}: ${p.title}`);
