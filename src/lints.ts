@@ -69,7 +69,7 @@ export const LINT_FIXES: Record<string, LintFix> = {
       "Re-run the Performance Advisor - the lint should clear once each role+action has a single permissive policy.",
   },
   auth_rls_initplan: {
-    plainTitle: "Security rules re-check the same value on every row",
+    plainTitle: "RLS policies re-evaluate auth.uid()/current_setting() per row",
     whatToDo:
       "Consider wrapping the auth call in a subselect so Postgres evaluates it once per query instead of once per row. The same applies to auth.jwt(), auth.role() and current_setting().",
     sql: "-- per row (slow):\nusing ( auth.uid() = user_id )\n-- once per query (fast):\nusing ( (select auth.uid()) = user_id )",
