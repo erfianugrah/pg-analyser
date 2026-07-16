@@ -233,6 +233,7 @@ export async function collect(
     topStatements,
     topByCalls,
     queryIoStats,
+    unloggedTables,
     biggestTables,
     indexStats,
     duplicateIndexes,
@@ -297,6 +298,8 @@ export async function collect(
     sql("topStatements"),
     sql("topByCalls"),
     sql("queryIoStats"),
+    // Unlogged tables (relpersistence='u') - core catalog, both tiers.
+    sql("unloggedTables"),
     sql("biggestTables"),
     sql("indexStats"),
     sql("duplicateIndexes"),
@@ -486,6 +489,20 @@ export async function collect(
   const bloatExact =
     hasPgstattuple && runner.source === "superuser"
       ? await safe("sql:bloatExact", () => runner.run(QUERIES.bloatExact), [])
+      : [];
+
+  // index_advisor CREATE INDEX recommendations - run ONLY on the superuser tier
+  // AND when index_advisor + its hypopg dependency are already installed. sbperf
+  // never CREATEs them (a write), and the read-only PAT user can't exec the
+  // advisor function. Runs index_advisor server-side via LATERAL over the top-N
+  // heavy statements (see QUERIES.indexAdvisor); safe() records a note on any
+  // error and findings simply omit the recommendation. Empty otherwise.
+  const hasIndexAdvisor =
+    extensions.some((r) => String(r.name) === "index_advisor") &&
+    extensions.some((r) => String(r.name) === "hypopg");
+  const indexAdvisor =
+    hasIndexAdvisor && runner.source === "superuser" && sqlServing
+      ? await safe("sql:indexAdvisor", () => runner.run(QUERIES.indexAdvisor), [])
       : [];
 
   // Scheduled-job health reads cron.job / cron.job_run_details directly, which
@@ -850,6 +867,8 @@ export async function collect(
       topStatements,
       topByCalls,
       queryIoStats,
+      indexAdvisor,
+      unloggedTables,
       biggestTables,
       bloatExact,
       indexStats,

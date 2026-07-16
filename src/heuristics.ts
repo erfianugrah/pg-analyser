@@ -1579,6 +1579,38 @@ export const HEURISTICS: Record<string, Heuristic> = {
     ],
     reviewed: R,
   },
+  index_advisor_rec: {
+    id: "index_advisor_rec",
+    plane: "Query",
+    howToVerify:
+      "EXPLAIN (ANALYZE, BUFFERS) the query before and after creating the index - total cost and runtime should drop (index_advisor's own total_cost_after is below total_cost_before). Re-running the advisor should then return no suggestion for it.",
+    whyItMatters:
+      "Supabase's own index_advisor (backed by hypopg hypothetical indexes) found concrete indexes that lower this heavy statement's planner cost. Unlike the generic 'add an index' guidance, this is the exact CREATE INDEX DDL, derived from the real query plan - the highest-confidence, lowest-effort tuning win.",
+    remediation:
+      "Review each suggested index and create it with CONCURRENTLY (index_advisor emits a plain CREATE INDEX; add CONCURRENTLY so it doesn't lock writes on a live table): CREATE INDEX CONCURRENTLY ON <table> (<col>). index_advisor only suggests single-column B-tree indexes - if several are suggested on one table, a single composite index ordered by selectivity is often better, so confirm with EXPLAIN before committing to all of them.",
+    docUrl: "https://supabase.com/docs/guides/database/extensions/index_advisor",
+    refs: [
+      { tier: "fix", label: "Debugging performance", url: SB_DEBUG_PERF },
+      {
+        tier: "mechanism",
+        label: "PostgreSQL CREATE INDEX",
+        url: `${PG}sql-createindex.html`,
+      },
+    ],
+    reviewed: R,
+  },
+  unlogged_table: {
+    id: "unlogged_table",
+    plane: "Storage",
+    howToVerify:
+      "Check pg_class.relpersistence for the table - 'u' is unlogged, 'p' is normal (logged). After ALTER TABLE ... SET LOGGED it should read 'p'.",
+    whyItMatters:
+      "An unlogged table is not written to the WAL, so it is NOT crash-safe: Postgres TRUNCATES it (empties it) after any unclean shutdown, crash, or failover, and it is absent from read replicas and PITR. On Supabase, restarts / failovers / upgrades do happen, so unlogged data WILL eventually be lost. This is correct for genuinely ephemeral scratch/cache data and a silent data-loss trap for anything you need to keep.",
+    remediation:
+      "If the table holds data that must survive a restart, convert it to logged: ALTER TABLE <table> SET LOGGED (this rewrites the table and takes an ACCESS EXCLUSIVE lock, so run it in a maintenance window). If it is genuinely ephemeral scratch/cache, leave it unlogged and document that intent so the data loss on failover is expected, not a surprise.",
+    docUrl: `${PG}sql-createtable.html`,
+    reviewed: R,
+  },
 };
 
 /** Attach heuristic metadata to a finding by id. Unknown ids return {} (safe). */

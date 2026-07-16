@@ -78,6 +78,8 @@ function base(): Analysis {
       lockWave: null,
       dbSizeBytes: null,
       bloatExact: [],
+      indexAdvisor: [],
+      unloggedTables: [],
       checksumFailures: [],
       walDirSize: [],
       amcheckIndex: [],

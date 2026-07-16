@@ -370,6 +370,13 @@ export const Analysis = z.object({
     topByCalls: SqlRows,
     // Per-query I/O + latency-stability depth. Defaulted for back-compat.
     queryIoStats: SqlRows.default([]),
+    // index_advisor CREATE INDEX recommendations for heavy statements. Populated
+    // ONLY when the superuser SQL tier is used AND index_advisor + hypopg are
+    // installed (sbperf never CREATEs them). Empty otherwise. Back-compat default.
+    indexAdvisor: SqlRows.default([]),
+    // Unlogged tables in app schemas (relpersistence='u') - not crash-safe,
+    // truncated on failover. Both tiers. Back-compat default.
+    unloggedTables: SqlRows.default([]),
     biggestTables: SqlRows,
     // Measured (pgstattuple_approx) reclaimable space on the biggest tables -
     // populated ONLY when the extension is installed + superuser SQL. Empty
