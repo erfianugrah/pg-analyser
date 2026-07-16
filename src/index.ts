@@ -45,10 +45,18 @@ const VERSION = pkg.version;
 // Report branding, resolved once at startup (Supabase default; --brand /
 // SBPERF_BRAND / ./sbperf.brand.json override). Read by the render call sites.
 let activeBrand: Brand = DEFAULT_BRAND;
-// The active audit profile (--profile <file.json>): force-no-PAT + region-mapped
+// The active audit profiles (--profile <file.json>, repeatable): force-no-PAT + region-mapped
 // Grafana creds + target databases, all in one gitignored JSON. Consulted by
 // doAllDbs to resolve each project's regional Grafana. Null unless --profile.
-let activeProfile: Profile | null = null;
+let activeProfiles: Profile[] = [];
+
+/**
+ * A sweep target carrying its owning profile (when it came from a --profile).
+ * doAllDbs uses it per-target so chained profiles keep their own mode (PAT vs
+ * no-PAT), regional Grafana, and trend window - one combined index, each DB in
+ * its correct mode. Bare --db-url targets carry no profile (profile undefined).
+ */
+type SweepTarget = DbTarget & { profile?: Profile };
 
 function usage(code = 1): never {
   console.log(`sbperf ${VERSION} - Supabase performance analysis
@@ -111,7 +119,11 @@ Flags:
                        no-PAT + region-mapped Grafana creds (per-region cookie)
                        + target databases. full --profile <file> sweeps them,
                        resolving each project's regional Grafana by the region
-                       derived from its connstring. See sbperf.profile.example.json.
+                       derived from its connstring. REPEATABLE: pass --profile
+                       more than once to chain profiles into ONE combined index
+                       - each DB keeps its own mode (a no-PAT profile's DBs skip
+                       the API planes; a PAT profile's use the token), Grafana,
+                       and trend window. See sbperf.profile.example.json.
   --trend-days <n>     trend query window in days (default 30; the store/Grafana
                        is a TSDB so 90 is fine). profile.trendDays wins for a
                        profile run. (env: SBPERF_TREND_DAYS)
@@ -170,7 +182,7 @@ type Flags = {
   prometheusCookie?: string;
   prometheusMatcher?: string;
   noPat?: boolean;
-  profile?: string;
+  profiles: string[];
   trendDays?: string;
   incidentScanDays?: string;
   store?: string;
@@ -193,7 +205,7 @@ type Flags = {
 /** Analytics-endpoint timeframe enum (verified live 2026-07; iso ranges are clamped). */
 const INTERVALS = ["15min", "30min", "1hr", "3hr", "1day", "3day", "7day"] as const;
 function parseFlags(argv: string[]): Flags {
-  const out: Flags = { _: [], dbUrls: [], refs: [], refFiles: [] };
+  const out: Flags = { _: [], dbUrls: [], refs: [], refFiles: [], profiles: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     // Consume the NEXT arg as this flag's value, failing loud if it is missing
@@ -232,7 +244,7 @@ function parseFlags(argv: string[]): Flags {
     else if (a === "--prometheus-cookie") out.prometheusCookie = need("--prometheus-cookie");
     else if (a === "--prometheus-matcher") out.prometheusMatcher = need("--prometheus-matcher");
     else if (a === "--no-pat") out.noPat = true;
-    else if (a === "--profile") out.profile = need("--profile");
+    else if (a === "--profile") out.profiles.push(need("--profile"));
     else if (a === "--trend-days") out.trendDays = need("--trend-days");
     else if (a === "--incident-scan-days") out.incidentScanDays = need("--incident-scan-days");
     else if (a === "--store") out.store = need("--store");
@@ -291,7 +303,7 @@ async function emitReport(
  * still serves each target's API planes + metrics (keyed by its ref).
  */
 async function doAllDbs(
-  targets: DbTarget[],
+  targets: SweepTarget[],
   outBase: string,
   prometheusUrl?: string,
   interval?: string,
@@ -299,8 +311,17 @@ async function doAllDbs(
   amcheck?: boolean | "heap",
 ): Promise<void> {
   const transport = resolveTransport();
+  // Per-target effective mode: a no-PAT profile's DBs always get a null
+  // transport (API planes skipped); the rest use the resolved PAT (if any).
+  const patN = transport ? targets.filter((t) => !t.profile?.noPat).length : 0;
+  const modeDesc =
+    patN === 0
+      ? "no PAT - db-url + Grafana only"
+      : patN === targets.length
+        ? "PAT for API + metrics"
+        : `mixed - PAT for ${patN}, no-PAT for ${targets.length - patN}`;
   console.error(
-    `> auditing ${targets.length} database${targets.length === 1 ? "" : "s"} (superuser --db-url; ${transport ? "PAT for API + metrics" : "no PAT - db-url + Grafana only"})`,
+    `> auditing ${targets.length} database${targets.length === 1 ? "" : "s"} (superuser --db-url; ${modeDesc})`,
   );
   const progress = makeProgress(targets.length);
   const sweepLog = sweepLogger();
@@ -314,18 +335,23 @@ async function doAllDbs(
   for (const t of targets) {
     const label = t.name ?? t.ref;
     const runner = new DirectSqlRunner(t.dbUrl);
-    // Per-project regional Grafana: a profile maps the project's region (derived
+    // Per-TARGET profile (chained --profile): each DB keeps its own mode +
+    // regional Grafana + trend window. A no-PAT profile's DB gets a null
+    // transport even in a mixed run; the rest use the resolved PAT.
+    const prof = t.profile;
+    const tp = prof?.noPat ? null : transport;
+    // Per-project regional Grafana: the target's profile maps its region (derived
     // from its connstring) to that region's host/uid/cookie. Falls back to the
     // global --prometheus / SBPERF_PROMETHEUS_* when there's no profile match.
-    const graf = activeProfile ? resolveGrafana(activeProfile, t.region) : null;
+    const graf = prof ? resolveGrafana(prof, t.region) : null;
     // A profile WITH a grafana block but no entry for this project's region =
     // trends can't be fetched; surface it in the report note + the done line
     // rather than a silently trend-less report.
     const grafanaGap =
-      activeProfile?.grafana && !graf
+      prof?.grafana && !graf
         ? (() => {
             const region = t.region ?? "(underivable from connstring)";
-            const have = Object.keys(activeProfile.grafana?.regions ?? {});
+            const have = Object.keys(prof.grafana?.regions ?? {});
             // List the region keys the profile DOES have, so a one-digit typo
             // (ap-northeast-1 vs -2) is obvious instead of a silent skip.
             const hint = have.length ? ` (profile maps: ${have.join(", ")})` : "";
@@ -334,11 +360,11 @@ async function doAllDbs(
         : null;
     progress.step(`${label} (${t.ref})`);
     try {
-      const analysis = await collect(t.ref, transport, VERSION, {
+      const analysis = await collect(t.ref, tp, VERSION, {
         prometheusUrl: graf?.url ?? prometheusUrl,
         prometheusCookie: graf?.cookie,
         prometheusMatcher: graf?.matcher,
-        trendDays: activeProfile?.trendDays,
+        trendDays: prof?.trendDays,
         interval,
         sqlRunner: runner,
         syncCheck,
@@ -1144,12 +1170,24 @@ async function main(): Promise<void> {
   // force-no-PAT + region-mapped Grafana creds + target databases. Loaded
   // before target resolution so its databases become the targets and noPat
   // forces the mode.
-  if (flags.profile) {
-    activeProfile = parseProfile(await Bun.file(flags.profile).text());
-    if (activeProfile.noPat) process.env.SBPERF_NO_PAT = "1";
-    console.error(
-      `> profile: ${flags.profile} (${activeProfile.databases.length} db${activeProfile.databases.length === 1 ? "" : "s"}${activeProfile.noPat ? ", forced no-PAT" : ""})`,
+  if (flags.profiles.length) {
+    activeProfiles = await Promise.all(
+      flags.profiles.map(async (f) => parseProfile(await Bun.file(f).text())),
     );
+    // Force no-PAT globally ONLY when EVERY chained profile is no-PAT. In a mixed
+    // run (some PAT, some no-PAT) the PAT must resolve for the PAT profiles;
+    // doAllDbs then passes a null transport per-target for the no-PAT ones.
+    if (activeProfiles.every((p) => p.noPat)) process.env.SBPERF_NO_PAT = "1";
+    flags.profiles.forEach((f, i) => {
+      const p = activeProfiles[i]!;
+      console.error(
+        `> profile: ${f} (${p.databases.length} db${p.databases.length === 1 ? "" : "s"}${p.noPat ? ", no-PAT" : ", PAT"})`,
+      );
+    });
+    if (activeProfiles.length > 1)
+      console.error(
+        `> chaining ${activeProfiles.length} profiles -> one combined index (${activeProfiles.reduce((n, p) => n + p.databases.length, 0)} dbs)`,
+      );
   }
 
   try {
@@ -1160,23 +1198,32 @@ async function main(): Promise<void> {
     //   2. --db-url / --db-config      (explicit; merged)
     //   3. SBPERF_DB_URL[_N] env vars  (numbered; each a full connstring)
     //   4. ./sbperf.databases.json     (auto-loaded if it exists)
-    let targets: DbTarget[] = [];
-    const raw: RawEntry[] = [];
-    if (activeProfile) {
-      raw.push(...profileEntries(activeProfile));
-    } else if (flags.dbUrls.length || flags.dbConfig) {
-      if (flags.dbConfig) raw.push(...parseDbConfig(await Bun.file(flags.dbConfig).text()));
-      for (const u of flags.dbUrls) raw.push({ dbUrl: u });
-    } else {
-      const envUrls = collectEnvDbUrls();
-      if (envUrls.length) {
-        for (const u of envUrls) raw.push({ dbUrl: u });
-      } else if (await Bun.file(DEFAULT_DB_CONFIG).exists()) {
-        raw.push(...parseDbConfig(await Bun.file(DEFAULT_DB_CONFIG).text()));
-        console.error(`> db targets: auto-loaded ${DEFAULT_DB_CONFIG} (${raw.length})`);
+    let targets: SweepTarget[] = [];
+    if (activeProfiles.length) {
+      // Each profile's databases resolve independently and carry that profile,
+      // so a chained run keeps per-DB mode + Grafana. Preserve the single-
+      // profile-single-db --ref fallback for ref derivation.
+      const single = activeProfiles.length === 1 && activeProfiles[0]!.databases.length === 1;
+      for (const p of activeProfiles) {
+        for (const t of resolveTargets(profileEntries(p), single ? flags.ref : undefined))
+          targets.push({ ...t, profile: p });
       }
+    } else {
+      const raw: RawEntry[] = [];
+      if (flags.dbUrls.length || flags.dbConfig) {
+        if (flags.dbConfig) raw.push(...parseDbConfig(await Bun.file(flags.dbConfig).text()));
+        for (const u of flags.dbUrls) raw.push({ dbUrl: u });
+      } else {
+        const envUrls = collectEnvDbUrls();
+        if (envUrls.length) {
+          for (const u of envUrls) raw.push({ dbUrl: u });
+        } else if (await Bun.file(DEFAULT_DB_CONFIG).exists()) {
+          raw.push(...parseDbConfig(await Bun.file(DEFAULT_DB_CONFIG).text()));
+          console.error(`> db targets: auto-loaded ${DEFAULT_DB_CONFIG} (${raw.length})`);
+        }
+      }
+      if (raw.length) targets = resolveTargets(raw, raw.length === 1 ? flags.ref : undefined);
     }
-    if (raw.length) targets = resolveTargets(raw, raw.length === 1 ? flags.ref : undefined);
 
     // Expand --ref-file(s) into refs[], then dedupe (a ref may repeat across
     // flags + files). The last file token also sets the single `ref`.
@@ -1326,7 +1373,7 @@ async function main(): Promise<void> {
         // A profile (>=1 db) always sweeps via doAllDbs, so per-project regional
         // Grafana resolution lives in one place. Bare --db-url with >1 target
         // does the same; a single bare --db-url falls through to doAnalyze.
-        if (activeProfile || targets.length > 1) {
+        if (activeProfiles.length || targets.length > 1) {
           const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
           await doAllDbs(
             targets,
