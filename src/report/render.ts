@@ -612,22 +612,57 @@ function auditFindings(findings: Finding[], degraded: boolean): string {
       // and its consequence read as one lede paragraph; only the two imperative
       // labels (Fix / Verify) survive - standard audit vocabulary, no per-item
       // "why it matters" mini-essay.
+      // Inline formatter: `backtick` spans -> <code>, and auto-monospace the
+      // API/endpoint/JSON/CLI tokens that otherwise read as noise in prose.
+      const inl = (t: string): string =>
+        t
+          .split(/`([^`]+)`/)
+          .map((s, i) => {
+            if (i % 2 === 1) return `<code>${esc(s)}</code>`;
+            return esc(s)
+              .replace(/((?:GET|POST|PUT|PATCH|DELETE) \/v1\/[^\s,;]+)/g, "<code>$1</code>")
+              .replace(/(supabase [a-z-]+(?: [a-z-]+)*(?: --[^\s]+)*)/g, "<code>$1</code>");
+          })
+          .join("");
       const leg = (label: string, text?: string) =>
-        text ? `<p class=fleg><b class=flabel>${label}</b> ${esc(text)}</p>` : "";
+        text ? `<p class=fleg><b class=flabel>${label}</b> ${inl(text)}</p>` : "";
       const lede = [f.evidence, f.whyItMatters]
         .filter(Boolean)
-        .map((t) => esc(t as string))
+        .map((t) => inl(t as string))
         .join(" ");
-      const doText = esc(
-        f.remediation ?? "See the linked evidence and the Supabase advisor detail.",
-      );
+      // Split trailing "UI:/API:/CLI:" instruction segments off the action prose
+      // into a compact labelled list so the fix isn't a wall of text with
+      // endpoints buried in it. No markers -> render as a single Fix paragraph.
+      const remediation =
+        f.remediation ?? "See the linked evidence and the Supabase advisor detail.";
+      const mk = remediation.match(/\s(?:UI|API|CLI):\s/);
+      let fixBlock: string;
+      if (mk) {
+        const action = remediation.slice(0, mk.index).trim();
+        const segs = [
+          ...remediation
+            .slice(mk.index)
+            .matchAll(/(UI|API|CLI):\s([\s\S]*?)(?=\s(?:UI|API|CLI):\s|$)/g),
+        ];
+        const items = segs
+          .map((s) => {
+            const label = s[1] as string;
+            const val = (s[2] as string).trim().replace(/\.$/, "");
+            const mono = label === "API" || label === "CLI";
+            return `<li><span class=fstep>${label}</span> ${mono ? `<code>${esc(val)}</code>` : inl(val)}</li>`;
+          })
+          .join("");
+        fixBlock = `<p class=fleg><b class=flabel>Fix</b> ${inl(action)}</p><ul class=fsteps>${items}</ul>`;
+      } else {
+        fixBlock = `<p class=fleg><b class=flabel>Fix</b> ${inl(remediation)}</p>`;
+      }
       const sqlBlock = f.sql ? `<pre class=fsql><code>${esc(f.sql)}</code></pre>` : "";
       const dashLink = f.dashUrl
-        ? `<p class=fadv><a href="${esc(f.dashUrl)}">Open in the ${esc(f.category)} Advisor: ${esc(f.dashUrl)}</a></p>`
+        ? `<p class=fadv><a href="${esc(f.dashUrl)}">Open in the ${esc(f.category)} Advisor &#8599;</a></p>`
         : "";
       const body =
         (lede ? `<p class=fleg>${lede}</p>` : "") +
-        `<p class=fleg><b class=flabel>Fix</b> ${doText}</p>${sqlBlock}${dashLink}` +
+        `${fixBlock}${sqlBlock}${dashLink}` +
         leg("Verify", f.howToVerify);
       return `<div class="finding ${SEV_CLASS[f.severity]}" id="${fid(i)}">
   <h3><span class="lvl ${SEV_CLASS[f.severity]}">${SEV_WORD[f.severity]}</span> <span class=fcat>${esc(f.category)}</span> ${esc(f.title)}</h3>
@@ -1094,6 +1129,11 @@ ${faviconTag(brand)}
   .fbody{font-size:13px;line-height:1.55}
   .fleg{margin:0 0 5px}
   .flabel{font-weight:700;color:var(--fg)}
+  ul.fsteps{margin:4px 0 6px;padding:0;list-style:none}
+  ul.fsteps li{margin:0 0 3px;padding-left:0;font-size:12.5px}
+  .fstep{display:inline-block;min-width:34px;font-weight:700;font-size:10.5px;letter-spacing:.04em;color:var(--mut);text-transform:uppercase;margin-right:4px}
+  .fbody code{background:var(--code);border:1px solid var(--line);border-radius:3px;padding:0 4px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  ul.fsteps code{border:none;background:none;padding:0;word-break:break-all}
   pre.fsql{background:var(--code);border:1px solid var(--line);border-radius:4px;padding:8px 10px;margin:6px 0 0;overflow-x:auto;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.45;white-space:pre;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   pre.fsql code{background:none;padding:0;white-space:inherit;font-family:inherit}
   .fadv{margin-top:6px;font-size:12px;word-break:break-all}
