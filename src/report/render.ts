@@ -626,10 +626,13 @@ function auditFindings(findings: Finding[], degraded: boolean): string {
           .join("");
       const leg = (label: string, text?: string) =>
         text ? `<p class=fleg><b class=flabel>${label}</b> ${inl(text)}</p>` : "";
-      const lede = [f.evidence, f.whyItMatters]
-        .filter(Boolean)
-        .map((t) => inl(t as string))
-        .join(" ");
+      // Explicit audit pyramid per card: the title is the headline (what);
+      // f.evidence is the observed specifics under it; whyItMatters is a labelled
+      // "Why it matters" leg; then Fix / Verify. (Previously What+Why were merged
+      // into one unlabelled lede - split out so a reader can scan consequence
+      // separately from observation.)
+      const whatLeg = f.evidence ? `<p class=fleg>${inl(f.evidence)}</p>` : "";
+      const whyLeg = leg("Why it matters", f.whyItMatters);
       // Split trailing "UI:/API:/CLI:" instruction segments off the action prose
       // into a compact labelled list so the fix isn't a wall of text with
       // endpoints buried in it. No markers -> render as a single Fix paragraph.
@@ -661,9 +664,7 @@ function auditFindings(findings: Finding[], degraded: boolean): string {
         ? `<p class=fadv><a href="${esc(f.dashUrl)}">Open in the ${esc(f.category)} Advisor &#8599;</a></p>`
         : "";
       const body =
-        (lede ? `<p class=fleg>${lede}</p>` : "") +
-        `${fixBlock}${sqlBlock}${dashLink}` +
-        leg("Verify", f.howToVerify);
+        whatLeg + whyLeg + `${fixBlock}${sqlBlock}${dashLink}` + leg("Verify", f.howToVerify);
       return `<div class="finding ${SEV_CLASS[f.severity]}" id="${fid(i)}">
   <h3><span class="lvl ${SEV_CLASS[f.severity]}">${SEV_WORD[f.severity]}</span> <span class=fcat>${esc(f.category)}</span> ${esc(f.title)}</h3>
   <div class=fbody>${body}</div>
