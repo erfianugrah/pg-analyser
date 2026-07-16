@@ -504,6 +504,19 @@ export async function collect(
     hasIndexAdvisor && runner.source === "superuser" && sqlServing
       ? await safe("sql:indexAdvisor", () => runner.run(QUERIES.indexAdvisor), [])
       : [];
+  // index_advisor is installed but yielded nothing: it recommends only single-
+  // column btree indexes and cannot type the generic $1 params that
+  // pg_stat_statements normalizes queries into, so batch analysis over the
+  // statement cache usually comes up empty. Record a note so a reader knows the
+  // right tool is the per-query dashboard advisor (which has real literals), not
+  // that the workload is provably well-indexed.
+  if (hasIndexAdvisor && runner.source === "superuser" && sqlServing && indexAdvisor.length === 0) {
+    errors.push({
+      source: "index_advisor",
+      message:
+        "index_advisor is installed but produced no index recommendations from the normalized pg_stat_statements queries - generic $1 parameters usually can't be typed for batch analysis. Run it per-query with real literal values via the dashboard Query Performance report (Advisors > Query Performance), or select * from index_advisor('<query with real values>'). This is an input limitation, not proof the workload is optimally indexed.",
+    });
+  }
 
   // Scheduled-job health reads cron.job / cron.job_run_details directly, which
   // ERROR if pg_cron isn't installed. Rather than fire-and-catch (a spurious

@@ -2124,6 +2124,23 @@ export function deriveFindings(a: Analysis): Finding[] {
       ...meta("index_advisor_rec"),
     });
   }
+  // Signpost: index_advisor is installed but batch analysis over the normalized
+  // statement cache produced nothing (it can't type generic $1 params). Point
+  // the reader at the per-query dashboard advisor, which has real literals -
+  // so a 0-result isn't misread as "provably well-indexed". Only when installed
+  // AND no recommendations came back.
+  const iaInstalled =
+    a.sql.extensions.some((e) => String(e.name) === "index_advisor") &&
+    a.sql.extensions.some((e) => String(e.name) === "hypopg");
+  if (iaInstalled && (a.sql.indexAdvisor ?? []).length === 0) {
+    out.push({
+      severity: "low",
+      category: "Performance",
+      title: "index_advisor found no automated recommendations - run it per-query",
+      anchor: "#outliers",
+      ...meta("index_advisor_signpost"),
+    });
+  }
 
   // Unlogged tables in app schemas (relpersistence='u', both tiers): not
   // crash-safe - truncated on crash/failover. Awareness-level durability finding

@@ -837,3 +837,31 @@ describe("trend source label + EBS caveat", () => {
     expect(html).not.toContain("Resource snapshot");
   });
 });
+
+describe("finding-card formatting", () => {
+  test("UI:/API: markers render as a labelled fsteps list, not inline prose", () => {
+    const a = fixture();
+    // network_restrictions_open carries trailing "UI: ... API: ..." markers.
+    a.security = {
+      auth: null,
+      networkRestrictions: { config: { dbAllowedCidrs: ["0.0.0.0/0"] } },
+      sslEnforcement: null,
+    } as unknown as typeof a.security;
+    const html = render(a);
+    expect(html).toContain("ul class=fsteps");
+    expect(html).toContain("<span class=fstep>UI</span>");
+    expect(html).toContain("<span class=fstep>API</span>");
+    // the API endpoint is monospaced inside the API step, not left inline in prose
+    expect(html).toMatch(/<span class=fstep>API<\/span> <code>[^<]*network-restrictions\/apply/);
+  });
+
+  test("backtick spans in finding text become <code>", () => {
+    const a = fixture();
+    // cache_hit_low remediation references `supabase inspect db cache` in howToVerify
+    a.sql.cacheHitPct = 50;
+    a.sql.cacheBlocksAccessed = 10_000_000;
+    a.sql.tableStatsResetAge = "30 days";
+    const html = render(a);
+    expect(html).toContain("<code>supabase inspect db cache</code>");
+  });
+});
