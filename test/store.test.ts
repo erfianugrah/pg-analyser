@@ -85,6 +85,8 @@ function makeAnalysis(opts: {
       lockWave: null,
       dbSizeBytes: null,
       bloatExact: [],
+      indexAdvisor: [],
+      unloggedTables: [],
       checksumFailures: [],
       walDirSize: [],
       amcheckIndex: [],

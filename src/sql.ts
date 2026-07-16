@@ -292,6 +292,55 @@ export const QUERIES = {
     order by temp_blks_written desc, shared_blks_read desc, stddev_exec_time desc
     limit 20`,
 
+  // index_advisor recommendations for the heaviest statements. Runs Supabase's
+  // own index_advisor (backed by hypopg) server-side via LATERAL over the top-N
+  // pg_stat_statements entries, so the (untruncated) query text never leaves
+  // Postgres - no client-side string embedding / escaping. index_advisor
+  // supports generic $1 params; when a param's type is indiscernible it returns
+  // a note in `errors` rather than raising, and we keep only rows that yielded
+  // at least one CREATE INDEX. GATED in collect.ts: superuser SQL tier AND both
+  // index_advisor + hypopg already installed (sbperf never CREATEs an extension).
+  // Same PLATFORM_NOISE / NOT_APP_STATEMENT scoping as the outliers view.
+  indexAdvisor: /* sql */ `
+    with cand as (
+      select queryid, query, total_exec_time
+      from extensions.pg_stat_statements
+      where query not ilike all (array[${PLATFORM_NOISE}])
+        and query !~* '${NOT_APP_STATEMENT}'
+        and calls >= 5
+      order by total_exec_time desc
+      limit 15
+    )
+    select
+      c.queryid::text as queryid,
+      ia.index_statements,
+      ia.errors,
+      round(c.total_exec_time::numeric, 1) as total_ms,
+      left(regexp_replace(c.query, '\\s+', ' ', 'g'), 200) as query
+    from cand c
+    cross join lateral index_advisor(c.query) ia
+    where coalesce(array_length(ia.index_statements, 1), 0) >= 1
+    order by c.total_exec_time desc`,
+
+  // Unlogged tables in application schemas (relpersistence='u'). An unlogged
+  // table is not WAL-logged, so it is NOT crash-safe: its contents are TRUNCATED
+  // after any unclean shutdown, crash, OR failover, and it is absent from read
+  // replicas / PITR. Legit for scratch/cache data, a silent data-loss trap
+  // otherwise. Core catalog only - runs in BOTH tiers (no superuser needed).
+  unloggedTables: /* sql */ `
+    select
+      n.nspname || '.' || c.relname as table,
+      pg_size_pretty(pg_total_relation_size(c.oid)) as size,
+      pg_total_relation_size(c.oid) as total_bytes,
+      c.reltuples::bigint as est_rows
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    where c.relkind = 'r'
+      and c.relpersistence = 'u'
+      and n.nspname not in (${NON_APP_SCHEMAS_SQL})
+    order by pg_total_relation_size(c.oid) desc
+    limit 20`,
+
   biggestTables: /* sql */ `
     select
       s.schemaname as schema,

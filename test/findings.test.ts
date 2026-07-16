@@ -85,6 +85,8 @@ function base(): Analysis {
       lockWave: null,
       dbSizeBytes: null,
       bloatExact: [],
+      indexAdvisor: [],
+      unloggedTables: [],
       checksumFailures: [],
       walDirSize: [],
       amcheckIndex: [],
@@ -2193,5 +2195,93 @@ describe("lock_wave (retrospective log cascade)", () => {
 
   test("no lockWave collected -> no finding", () => {
     expect(deriveFindings(base()).find((x) => x.heuristicId === "lock_wave")).toBeUndefined();
+  });
+});
+
+describe("new coverage findings (stage 2/3)", () => {
+  test("top_query_db_time: fires >= threshold; low unless expensive, escalates to med", () => {
+    const a = base();
+    // cheap hot path: big share but sub-50ms mean, < 3x threshold -> low
+    a.sql.topStatements = [{ queryid: "1", pct: 15, calls: 999, mean_ms: 2, query: "select 1" }];
+    const lo = deriveFindings(a).find((x) => x.heuristicId === "top_query_db_time");
+    expect(lo?.severity).toBe("low");
+    // expensive dominant query: slow mean -> med
+    a.sql.topStatements = [{ queryid: "1", pct: 15, calls: 10, mean_ms: 800, query: "select 1" }];
+    const hi = deriveFindings(a).find((x) => x.heuristicId === "top_query_db_time");
+    expect(hi?.severity).toBe("med");
+  });
+
+  test("top_query_db_time: below threshold -> no finding", () => {
+    const a = base();
+    a.sql.topStatements = [{ queryid: "1", pct: 5, calls: 10, mean_ms: 800, query: "q" }];
+    expect(deriveFindings(a).some((x) => x.heuristicId === "top_query_db_time")).toBe(false);
+  });
+
+  test("query_disk_reads_high: fires on high miss% + enough reads", () => {
+    const a = base();
+    a.sql.queryIoStats = [
+      { queryid: "1", calls: 50, mean_ms: 10, miss_pct: 60, shared_blks_read: 200000, query: "q" },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "query_disk_reads_high");
+    expect(f?.severity).toBe("med");
+  });
+
+  test("query_disk_reads_high: high miss% but trivially few reads -> no finding", () => {
+    const a = base();
+    a.sql.queryIoStats = [
+      { queryid: "1", calls: 50, mean_ms: 10, miss_pct: 90, shared_blks_read: 10, query: "q" },
+    ];
+    expect(deriveFindings(a).some((x) => x.heuristicId === "query_disk_reads_high")).toBe(false);
+  });
+
+  test("public_bucket: Security finding listing public buckets only", () => {
+    const a = base();
+    a.buckets = [
+      { name: "avatars", public: true },
+      { name: "private", public: false },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "public_bucket");
+    expect(f?.category).toBe("Security");
+    expect(f?.title).toContain("1 public storage bucket");
+    expect(f?.evidence).toBe("avatars");
+  });
+
+  test("unlogged_table: Capacity durability finding, aggregated", () => {
+    const a = base();
+    a.sql.unloggedTables = [
+      { table: "app.cache", total_bytes: 1000 },
+      { table: "app.scratch", total_bytes: 500 },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "unlogged_table");
+    expect(f?.category).toBe("Capacity");
+    expect(f?.title).toContain("2 unlogged tables");
+  });
+
+  test("index_advisor_rec: emits one finding per query with the CREATE INDEX DDL", () => {
+    const a = base();
+    a.sql.indexAdvisor = [
+      {
+        queryid: "1",
+        index_statements: ["CREATE INDEX ON public.book USING btree (title)"],
+        errors: [],
+        query: "select id from book where title = $1",
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "index_advisor_rec");
+    expect(f?.category).toBe("Performance");
+    expect(f?.evidence).toContain("CREATE INDEX ON public.book USING btree (title)");
+  });
+
+  test("index_advisor_rec: a row with no CREATE INDEX (only errors) -> no finding", () => {
+    const a = base();
+    a.sql.indexAdvisor = [
+      {
+        queryid: "1",
+        index_statements: [],
+        errors: ["could not determine type of $1"],
+        query: "q",
+      },
+    ];
+    expect(deriveFindings(a).some((x) => x.heuristicId === "index_advisor_rec")).toBe(false);
   });
 });
