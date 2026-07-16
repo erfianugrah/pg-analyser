@@ -624,22 +624,29 @@ function auditFindings(findings: Finding[], degraded: boolean): string {
               .replace(/(supabase [a-z-]+(?: [a-z-]+)*(?: --[^\s]+)*)/g, "<code>$1</code>");
           })
           .join("");
-      const leg = (label: string, text?: string) =>
-        text ? `<p class=fleg><b class=flabel>${label}</b> ${inl(text)}</p>` : "";
+      // Label-rail layout: every leg is a two-column grid row - an uppercase
+      // micro-label in a fixed left gutter, and the content in a column that
+      // fills the FULL remaining card width (a constrained measure wasted ~40%
+      // of the width; the rail gives the eye a scanning anchor instead). An
+      // empty label cell keeps the unlabelled observation aligned to the same
+      // content column as the labelled legs.
+      const leg = (label: string, contentHtml: string) =>
+        contentHtml
+          ? `<div class=fleg><div class=flabel>${label}</div><div class=ftext>${contentHtml}</div></div>`
+          : "";
+      const legText = (label: string, text?: string) => (text ? leg(label, inl(text)) : "");
       // Explicit audit pyramid per card: the title is the headline (what);
-      // f.evidence is the observed specifics under it; whyItMatters is a labelled
-      // "Why it matters" leg; then Fix / Verify. (Previously What+Why were merged
-      // into one unlabelled lede - split out so a reader can scan consequence
-      // separately from observation.)
-      const whatLeg = f.evidence ? `<p class=fleg>${inl(f.evidence)}</p>` : "";
-      const whyLeg = leg("Why it matters", f.whyItMatters);
+      // f.evidence is the observed specifics under it (unlabelled lede); then a
+      // labelled Why it matters / Fix / Verify.
+      const whatLeg = f.evidence ? leg("", inl(f.evidence)) : "";
+      const whyLeg = legText("Why it matters", f.whyItMatters);
       // Split trailing "UI:/API:/CLI:" instruction segments off the action prose
       // into a compact labelled list so the fix isn't a wall of text with
       // endpoints buried in it. No markers -> render as a single Fix paragraph.
       const remediation =
         f.remediation ?? "See the linked evidence and the Supabase advisor detail.";
       const mk = remediation.match(/\s(?:UI|API|CLI):\s/);
-      let fixBlock: string;
+      let fixContent: string;
       if (mk) {
         const action = remediation.slice(0, mk.index).trim();
         const segs = [
@@ -655,16 +662,19 @@ function auditFindings(findings: Finding[], degraded: boolean): string {
             return `<li><span class=fstep>${label}</span> ${mono ? `<code>${esc(val)}</code>` : inl(val)}</li>`;
           })
           .join("");
-        fixBlock = `<p class=fleg><b class=flabel>Fix</b> ${inl(action)}</p><ul class=fsteps>${items}</ul>`;
+        fixContent = `${inl(action)}<ul class=fsteps>${items}</ul>`;
       } else {
-        fixBlock = `<p class=fleg><b class=flabel>Fix</b> ${inl(remediation)}</p>`;
+        fixContent = inl(remediation);
       }
+      // SQL + the "Open in the Advisor" link belong to the fix - group them in
+      // the Fix content column so they align under the FIX label, not orphaned
+      // at the card's left edge.
       const sqlBlock = f.sql ? `<pre class=fsql><code>${esc(f.sql)}</code></pre>` : "";
       const dashLink = f.dashUrl
         ? `<p class=fadv><a href="${esc(f.dashUrl)}">Open in the ${esc(f.category)} Advisor &#8599;</a></p>`
         : "";
-      const body =
-        whatLeg + whyLeg + `${fixBlock}${sqlBlock}${dashLink}` + leg("Verify", f.howToVerify);
+      const fixLeg = leg("Fix", fixContent + sqlBlock + dashLink);
+      const body = whatLeg + whyLeg + fixLeg + legText("Verify", f.howToVerify);
       return `<div class="finding ${SEV_CLASS[f.severity]}" id="${fid(i)}">
   <h3><span class="lvl ${SEV_CLASS[f.severity]}">${SEV_WORD[f.severity]}</span> <span class=fcat>${esc(f.category)}</span> ${esc(f.title)}</h3>
   <div class=fbody>${body}</div>
@@ -1125,23 +1135,24 @@ ${faviconTag(brand)}
   .finding.ERROR{border-left-color:#d64545}.finding.WARN{border-left-color:#d9a400}.finding.INFO{border-left-color:#5a7fd6}
   .finding h3{font-size:14px;margin:0 0 8px;font-weight:700;display:flex;align-items:center;gap:8px;flex-wrap:wrap;line-height:1.35}
   .fcat{font-size:11px;font-weight:600;color:var(--mut);text-transform:uppercase;letter-spacing:.03em}
-  p.fix{margin:0;font-size:13px;line-height:1.5}
-  p.fix.empty{color:var(--mut)}
-  .fbody{font-size:13px;line-height:1.58}
-  /* Prose legs read on a constrained ~90ch measure so lines don't run the full
-     card width (a 150-char line is hard to track); code blocks, step lists and
-     the links row deliberately stay full-width below. */
-  .fleg{margin:0 0 9px;max-width:90ch}
+  .fbody{font-size:13px;line-height:1.6}
+  /* Label rail: each leg is [fixed label gutter | full-width content]. The
+     content column fills the whole card width; the uppercase label in the
+     gutter is the scanning anchor (replaces the old constrained-measure column
+     that wasted the right ~40% of the card). */
+  .fleg{display:grid;grid-template-columns:104px 1fr;gap:0 14px;margin:0 0 10px}
   .fleg:last-child{margin-bottom:0}
-  .flabel{display:inline-block;font-weight:700;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--fg);margin-right:6px}
-  ul.fsteps{margin:6px 0 9px;padding:0;list-style:none;max-width:90ch}
+  .flabel{font-weight:700;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--fg);line-height:1.5;padding-top:1px}
+  .ftext{min-width:0}
+  ul.fsteps{margin:6px 0 2px;padding:0;list-style:none}
   ul.fsteps li{margin:0 0 4px;padding-left:0;font-size:12.5px;line-height:1.5}
   .fstep{display:inline-block;min-width:34px;font-weight:700;font-size:10.5px;letter-spacing:.04em;color:var(--mut);text-transform:uppercase;margin-right:4px}
   .fbody code{background:var(--code);border:1px solid var(--line);border-radius:3px;padding:0 4px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   ul.fsteps code{border:none;background:none;padding:0;word-break:break-all}
-  pre.fsql{background:var(--code);border:1px solid var(--line);border-radius:4px;padding:8px 10px;margin:6px 0 0;overflow-x:auto;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.45;white-space:pre;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  pre.fsql{background:var(--code);border:1px solid var(--line);border-radius:4px;padding:8px 10px;margin:7px 0 2px;overflow-x:auto;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.45;white-space:pre;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   pre.fsql code{background:none;padding:0;white-space:inherit;font-family:inherit}
-  .fadv{margin-top:6px;font-size:12px;word-break:break-all}
+  .ftext p{margin:0 0 5px}.ftext>p:last-child{margin-bottom:0}
+  .fadv{margin:7px 0 0;font-size:12px;word-break:break-all}
   @keyframes sbflash{from{background:rgba(120,160,255,.30)}to{background:transparent}}
   :target{animation:sbflash 1.6s ease-out}
   h2:target,summary:target,.finding:target{box-shadow:-6px 0 0 0 var(--accent);border-radius:2px}
