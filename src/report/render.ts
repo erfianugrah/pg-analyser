@@ -1121,17 +1121,21 @@ ${faviconTag(brand)}
   table.vitals td:first-child{color:var(--mut);width:90px}
   .hbadges{margin:12px 0 0;line-height:2}
   /* --- per-finding deep dive --- */
-  .finding{border:1px solid var(--line);border-left-width:4px;border-radius:5px;padding:10px 14px;margin:10px 0;break-inside:avoid;page-break-inside:avoid}
+  .finding{border:1px solid var(--line);border-left-width:4px;border-radius:5px;padding:12px 16px 13px;margin:12px 0;break-inside:avoid;page-break-inside:avoid}
   .finding.ERROR{border-left-color:#d64545}.finding.WARN{border-left-color:#d9a400}.finding.INFO{border-left-color:#5a7fd6}
-  .finding h3{font-size:14px;margin:0 0 6px;font-weight:700;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .finding h3{font-size:14px;margin:0 0 8px;font-weight:700;display:flex;align-items:center;gap:8px;flex-wrap:wrap;line-height:1.35}
   .fcat{font-size:11px;font-weight:600;color:var(--mut);text-transform:uppercase;letter-spacing:.03em}
   p.fix{margin:0;font-size:13px;line-height:1.5}
   p.fix.empty{color:var(--mut)}
-  .fbody{font-size:13px;line-height:1.55}
-  .fleg{margin:0 0 5px}
-  .flabel{font-weight:700;color:var(--fg)}
-  ul.fsteps{margin:4px 0 6px;padding:0;list-style:none}
-  ul.fsteps li{margin:0 0 3px;padding-left:0;font-size:12.5px}
+  .fbody{font-size:13px;line-height:1.58}
+  /* Prose legs read on a constrained ~90ch measure so lines don't run the full
+     card width (a 150-char line is hard to track); code blocks, step lists and
+     the links row deliberately stay full-width below. */
+  .fleg{margin:0 0 9px;max-width:90ch}
+  .fleg:last-child{margin-bottom:0}
+  .flabel{display:inline-block;font-weight:700;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--fg);margin-right:6px}
+  ul.fsteps{margin:6px 0 9px;padding:0;list-style:none;max-width:90ch}
+  ul.fsteps li{margin:0 0 4px;padding-left:0;font-size:12.5px;line-height:1.5}
   .fstep{display:inline-block;min-width:34px;font-weight:700;font-size:10.5px;letter-spacing:.04em;color:var(--mut);text-transform:uppercase;margin-right:4px}
   .fbody code{background:var(--code);border:1px solid var(--line);border-radius:3px;padding:0 4px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   ul.fsteps code{border:none;background:none;padding:0;word-break:break-all}
