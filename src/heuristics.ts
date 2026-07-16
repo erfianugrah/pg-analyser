@@ -160,6 +160,10 @@ export const THRESHOLDS = {
   channelsPerConnCap: 100,
   /** A single pg_stat_statements query consuming >= this % of total DB time. */
   topQueryDbTimePct: 10,
+  /** Per-query disk-read miss % (shared_blks_read / (hit+read)) worth flagging. */
+  queryDiskMissPct: 40,
+  /** Min shared_blks_read for the disk-read finding (ignore trivially-small reads). */
+  queryDiskMinBlocksRead: 100_000,
   /** Dead tuples >= this multiple of live tuples => autovacuum not keeping up. */
   deadTupleLiveMultiple: 2,
   /** Auth password min length below which the policy is called out as weak. */
@@ -1521,6 +1525,58 @@ export const HEURISTICS: Record<string, Heuristic> = {
     remediation:
       "Schedule the platform upgrade in Infrastructure > Settings (Upgrade) - it incurs brief downtime.",
     docUrl: "https://supabase.com/docs/guides/platform/upgrading",
+    reviewed: R,
+  },
+
+  // --- Query workload headline (top of pg_stat_statements) ---
+  top_query_db_time: {
+    id: "top_query_db_time",
+    plane: "Query",
+    howToVerify:
+      "Re-check this query's share of total_exec_time in pg_stat_statements (or the Query Performance report) after tuning - it should drop as a fraction of the workload.",
+    whyItMatters:
+      "One statement accounting for a large share of all database time is the single highest-leverage tuning target: cutting it frees the most CPU and I/O for everything else. It is the headline the per-signal findings (spill, seq scan, variance) miss - they flag symptoms, this names the biggest time sink.",
+    remediation:
+      "Profile the statement with EXPLAIN (ANALYZE, BUFFERS): add the missing index, avoid SELECT * / de-TOAST, reduce call frequency (cache or batch an N+1), or rewrite the plan. Use the Query Performance report to track its share over time.",
+    docUrl: "https://supabase.com/docs/guides/database/debugging-performance",
+    refs: [
+      {
+        tier: "fix",
+        label: "Query performance report",
+        url: "https://supabase.com/docs/guides/platform/performance",
+      },
+    ],
+    reviewed: R,
+  },
+  query_disk_reads_high: {
+    id: "query_disk_reads_high",
+    plane: "Query",
+    howToVerify:
+      "After indexing / tuning, re-check the query's shared_blks_read and miss % in pg_stat_statements - reads served from disk should fall as the buffer cache serves more of them.",
+    whyItMatters:
+      "A query servicing most of its buffer reads from disk (low cache-hit for THIS statement) is the per-query complement to the global cache-hit ratio: even on a healthy overall ratio, one cold-reading query drives disk IOPS and tail latency. It usually means a seq scan over a table that doesn't fit in cache, or a missing index forcing wide heap reads.",
+    remediation:
+      "EXPLAIN (ANALYZE, BUFFERS) the query and cut the pages it touches: add a selective index so it reads an index instead of scanning the heap, narrow the columns to avoid de-TOASTing, or (if the hot set genuinely exceeds RAM) size up the compute tier for a larger shared_buffers.",
+    docUrl: "https://supabase.com/docs/guides/database/debugging-performance",
+    reviewed: R,
+  },
+  public_bucket: {
+    id: "public_bucket",
+    plane: "Storage",
+    howToVerify:
+      "Confirm in Storage > the bucket's settings whether Public is intended; a public bucket serves objects to anyone with the URL (no auth, no RLS on the object).",
+    whyItMatters:
+      "A public storage bucket serves every object to anyone with the URL - no authentication, and Storage RLS does not gate reads on a public bucket. That is correct for genuinely public assets (avatars, marketing images) but a data-exposure risk if private files landed there. Flagged as awareness, not a defect.",
+    remediation:
+      "Confirm the bucket is meant to be public. If it holds private/user data, set it private (Storage > bucket > Settings) and serve objects via signed URLs; keep only genuinely public assets in a public bucket.",
+    docUrl: "https://supabase.com/docs/guides/storage/buckets/fundamentals",
+    refs: [
+      {
+        tier: "fix",
+        label: "Storage access control",
+        url: "https://supabase.com/docs/guides/storage/security/access-control",
+      },
+    ],
     reviewed: R,
   },
 };

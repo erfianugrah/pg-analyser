@@ -912,6 +912,61 @@ export function deriveFindings(a: Analysis): Finding[] {
       ...meta("query_high_variance"),
     });
   }
+  // Headline: the single statement consuming the largest share of DB time. The
+  // per-signal query findings (spill, variance, seq scan) flag symptoms; this
+  // names the biggest time sink - the highest-leverage tuning target. Wires the
+  // topQueryDbTimePct threshold. topStatements is ordered by total_exec_time desc.
+  const topByTime = a.sql.topStatements[0];
+  if (topByTime && num(topByTime.pct) >= THRESHOLDS.topQueryDbTimePct) {
+    // Attribution by default (low) - a dominant query is often a normal hot
+    // path. Escalate to med only when it ALSO has real per-call cost (a slow
+    // mean), i.e. a plan/index problem rather than a cheap high-frequency query.
+    const expensive =
+      num(topByTime.mean_ms) >= 50 || num(topByTime.pct) >= 3 * THRESHOLDS.topQueryDbTimePct;
+    out.push({
+      severity: expensive ? "med" : "low",
+      category: "Performance",
+      title: `One query is ${topByTime.pct}% of total database time (${topByTime.calls} calls, ${topByTime.mean_ms}ms mean)`,
+      anchor: "#outliers",
+      evidence: String(topByTime.query ?? ""),
+      ...meta("top_query_db_time"),
+    });
+  }
+  // Per-query disk-read cold spot: a statement serving most of its buffer reads
+  // from disk (low per-query cache-hit) drives IOPS + tail latency even when the
+  // GLOBAL cache-hit ratio looks healthy. Complements cache_hit_low.
+  const diskCold = a.sql.queryIoStats.find(
+    (r) =>
+      num(r.miss_pct) >= THRESHOLDS.queryDiskMissPct &&
+      num(r.shared_blks_read) >= THRESHOLDS.queryDiskMinBlocksRead,
+  );
+  if (diskCold) {
+    out.push({
+      severity: "med",
+      category: "Performance",
+      title: `A query serves ${diskCold.miss_pct}% of its reads from disk (${diskCold.calls} calls, ${diskCold.mean_ms}ms mean)`,
+      anchor: "#queryio",
+      evidence: String(diskCold.query ?? ""),
+      ...meta("query_disk_reads_high"),
+    });
+  }
+  // Public storage buckets: awareness-level Security finding (no advisor/splinter
+  // equivalent). Sourced from a.buckets, which collect fills from the storage.
+  // buckets table in both PAT and no-PAT modes. public===true means objects are
+  // served without auth and Storage RLS does not gate reads.
+  const publicBuckets = a.buckets.filter((b) => b.public === true).map((b) => b.name);
+  if (publicBuckets.length > 0) {
+    const shown = publicBuckets.slice(0, 5).join(", ");
+    const more = publicBuckets.length > 5 ? ` (+${publicBuckets.length - 5} more)` : "";
+    out.push({
+      severity: "low",
+      category: "Security",
+      title: `${publicBuckets.length} public storage ${publicBuckets.length === 1 ? "bucket" : "buckets"} - objects served without auth`,
+      anchor: "#storage",
+      evidence: `${shown}${more}`,
+      ...meta("public_bucket"),
+    });
+  }
   // FALLBACK for the advisor's auth_rls_initplan perf lint (which detects the
   // same unwrapped-auth-per-row pattern). Suppress when the advisor already
   // fired it so a PAT run (or a superuser run with splinter) never
