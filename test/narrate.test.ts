@@ -67,6 +67,7 @@ function base(): Analysis {
       neverVacuumed: [],
       fkUnindexed: [],
       invalidIndexes: [],
+      managedNoPk: [],
       topByWal: [],
       visibilityMap: [],
       publicSchemaCreate: [],
