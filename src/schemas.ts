@@ -403,6 +403,9 @@ export const Analysis = z.object({
     fkUnindexed: SqlRows.default([]),
     // Invalid / not-ready indexes (failed CONCURRENTLY builds). Back-compat.
     invalidIndexes: SqlRows.default([]),
+    // Managed-schema (auth/storage) base tables missing a primary key - a
+    // schema-tamper / auth-takeover integrity signal. Back-compat default.
+    managedNoPk: SqlRows.default([]),
     // Top WAL-generating statements (pg_stat_statements.wal_bytes). Back-compat.
     topByWal: SqlRows.default([]),
     // Large app tables with a low all-visible page fraction (index-only-scan

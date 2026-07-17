@@ -866,6 +866,31 @@ export const HEURISTICS: Record<string, Heuristic> = {
     ],
     reviewed: R,
   },
+  managed_schema_no_pk: {
+    id: "managed_schema_no_pk",
+    plane: "Storage",
+    sql: "-- confirm the missing primary key, then rebuild it ONLINE (build the\n-- unique index concurrently first, then attach it as the PK):\nSELECT c.relname\nFROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace\nWHERE n.nspname = 'auth' AND c.relkind = 'r'\n  AND NOT EXISTS (SELECT 1 FROM pg_constraint k WHERE k.conrelid = c.oid AND k.contype = 'p');\n\nCREATE UNIQUE INDEX CONCURRENTLY users_pkey_rebuild ON auth.users (id);\nALTER TABLE auth.users ADD CONSTRAINT users_pkey PRIMARY KEY USING INDEX users_pkey_rebuild;",
+    howToVerify:
+      "Re-run the probe query (or \\d auth.<table> in psql) - each managed table should report a PRIMARY KEY. A CREATE UNIQUE INDEX CONCURRENTLY that finds duplicate rows fails and names the conflict; dedupe those rows before retrying (the unique key exists to prevent exactly that).",
+    whyItMatters:
+      "A Supabase-managed table (auth.*, storage.*) with no primary key means its constraints and indexes were dropped - a botched manual migration or the auth-schema-takeover privilege-escalation path. The advisor's no_primary_key lint is scoped to application schemas and never inspects managed ones, so this class is otherwise invisible. Consequences compound: GoTrue and Storage assume a unique id (a missing UNIQUE lets duplicate accounts / objects exist), logical replication of the table breaks without a replica identity, and every lookup that relied on the primary-key index degrades to a sequential scan - the CPU-under-scale symptom. auth.schema_migrations still marks migrations applied, so GoTrue will NOT recreate the objects on its own.",
+    remediation:
+      "Rebuild the dropped constraints, starting with the primary key / unique constraints (data integrity), then foreign keys, then secondary indexes. Do it ONLINE to avoid locking the auth tables for minutes: CREATE UNIQUE INDEX CONCURRENTLY, then ALTER TABLE ... ADD CONSTRAINT ... PRIMARY KEY/UNIQUE USING INDEX; add foreign keys as NOT VALID then VALIDATE CONSTRAINT separately; rebuild secondary indexes with REINDEX INDEX CONCURRENTLY or CREATE INDEX CONCURRENTLY. If a unique/FK will not validate, dedupe or repair the offending rows first. Rebuilding indexes is IO-heavy - raise maintenance_work_mem for the session and watch CPU/IOPS headroom. Alternatively, migrate to a fresh project and move data in.",
+    docUrl: "https://www.postgresql.org/docs/current/sql-altertable.html",
+    refs: [
+      {
+        tier: "mechanism",
+        label: "ADD table constraint (NOT VALID / VALIDATE)",
+        url: "https://www.postgresql.org/docs/current/sql-altertable.html#SQL-ALTERTABLE-DESC-ADD-TABLE-CONSTRAINT",
+      },
+      {
+        tier: "fix",
+        label: "CREATE INDEX CONCURRENTLY",
+        url: "https://www.postgresql.org/docs/current/sql-createindex.html#SQL-CREATEINDEX-CONCURRENTLY",
+      },
+    ],
+    reviewed: R,
+  },
   index_corruption: {
     id: "index_corruption",
     plane: "Storage",

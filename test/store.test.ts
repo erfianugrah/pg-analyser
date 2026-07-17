@@ -61,6 +61,7 @@ function makeAnalysis(opts: {
       neverVacuumed: [],
       fkUnindexed: [],
       invalidIndexes: [],
+      managedNoPk: [],
       topByWal: [],
       visibilityMap: [],
       publicSchemaCreate: [],
