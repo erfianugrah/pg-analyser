@@ -1042,6 +1042,33 @@ export const QUERIES = {
     order by 1
     limit 30`,
 
+  // Managed-schema integrity: base tables in the Supabase-MANAGED schemas
+  // (auth, storage) that have NO primary-key constraint. Every table GoTrue and
+  // Storage ship carries a PK, so any row here means the managed schema was
+  // tampered with - a botched manual migration, or the auth-schema-takeover
+  // privilege-escalation path (a role dropping constraints/indexes off the
+  // auth.* and storage.* tables). This is the deliberate INVERSE of every SQL
+  // finding, which EXCLUDES managed schemas via NON_APP_SCHEMAS: the advisor's
+  // no_primary_key lint is app-scoped and can never flag auth.users losing its
+  // PK, so nothing else catches this class. relkind='r' only (partitioned
+  // parents and views legitimately differ); catalog-only, both tiers, no
+  // extension. Returns [] on a non-Supabase Postgres (no auth/storage schema).
+  managedNoPk: /* sql */ `
+    select
+      n.nspname as schema,
+      n.nspname || '.' || c.relname as "table",
+      c.reltuples::bigint as est_rows
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    where c.relkind = 'r'
+      and n.nspname in ('auth', 'storage')
+      and not exists (
+        select 1 from pg_constraint k
+        where k.conrelid = c.oid and k.contype = 'p'
+      )
+    order by c.reltuples desc
+    limit 30`,
+
   // Multixact-ID wraparound: a SEPARATE 2B ceiling from txid (relminmxid), hit
   // by heavy row-locking (SELECT FOR SHARE/UPDATE, FK checks). The companion to
   // txidWraparound; a table can be safe on xid age yet aging on mxid.

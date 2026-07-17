@@ -61,6 +61,7 @@ function base(): Analysis {
       neverVacuumed: [],
       fkUnindexed: [],
       invalidIndexes: [],
+      managedNoPk: [],
       topByWal: [],
       visibilityMap: [],
       publicSchemaCreate: [],
@@ -2283,5 +2284,24 @@ describe("new coverage findings (stage 2/3)", () => {
       },
     ];
     expect(deriveFindings(a).some((x) => x.heuristicId === "index_advisor_rec")).toBe(false);
+  });
+
+  test("managed_schema_no_pk: high-severity integrity finding when auth/storage tables lost their PK", () => {
+    const a = base();
+    a.sql.managedNoPk = [
+      { schema: "auth", table: "auth.users", est_rows: 50000 },
+      { schema: "auth", table: "auth.identities", est_rows: 50000 },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "managed_schema_no_pk");
+    expect(f?.severity).toBe("high");
+    expect(f?.category).toBe("Security");
+    expect(f?.title).toContain("2 managed-schema tables");
+    expect(f?.evidence).toContain("auth.users");
+    expect(f?.anchor).toBe("#managednopk");
+  });
+
+  test("managed_schema_no_pk: no finding when managed schemas are intact", () => {
+    const a = base();
+    expect(deriveFindings(a).some((x) => x.heuristicId === "managed_schema_no_pk")).toBe(false);
   });
 });

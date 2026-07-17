@@ -76,6 +76,7 @@ function fixture(overrides: Partial<Analysis> = {}): Analysis {
       neverVacuumed: [],
       fkUnindexed: [],
       invalidIndexes: [],
+      managedNoPk: [],
       topByWal: [],
       visibilityMap: [],
       publicSchemaCreate: [],
@@ -215,6 +216,22 @@ describe("render", () => {
     // record while the "application" positive avoids contradicting it.
     expect(html).toContain("public.docs");
     expect(html).toContain("cron.job");
+  });
+
+  test("managed-schema missing-PK: renders the Security finding card AND the evidence drill", () => {
+    const a = fixture();
+    a.sql.managedNoPk = [
+      { schema: "auth", table: "auth.users", est_rows: 50000 },
+      { schema: "storage", table: "storage.objects", est_rows: 12000 },
+    ];
+    const html = render(a).replace(/<wbr>/g, "");
+    // Ranked finding card (title + online-rebuild remediation DDL).
+    expect(html).toContain("missing a primary key");
+    expect(html).toContain("CREATE UNIQUE INDEX CONCURRENTLY");
+    // Evidence drill section + its rows.
+    expect(html).toContain('id="managednopk"');
+    expect(html).toContain("auth.users");
+    expect(html).toContain("storage.objects");
   });
 
   test("capabilities strip: shows optional features either way (absent -> explicit, not hidden)", () => {
@@ -658,6 +675,7 @@ describe("renderSummary", () => {
         neverVacuumed: [],
         fkUnindexed: [],
         invalidIndexes: [],
+        managedNoPk: [],
         topByWal: [],
         visibilityMap: [],
         publicSchemaCreate: [],

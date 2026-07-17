@@ -2081,6 +2081,28 @@ export function deriveFindings(a: Analysis): Finding[] {
     });
   }
 
+  // Managed-schema integrity: a Supabase-managed table (auth.*, storage.*) with
+  // no primary key. Every managed table ships with a PK, so a row here means the
+  // schema's constraints/indexes were dropped (botched migration or the auth-
+  // schema-takeover privilege escalation). The advisor's no_primary_key lint is
+  // app-scoped and never inspects managed schemas, so this class is otherwise
+  // invisible - the deliberate inverse of every other SQL finding's scoping.
+  if (a.sql.managedNoPk.length > 0) {
+    const names = a.sql.managedNoPk
+      .slice(0, 4)
+      .map((r) => String(r.table))
+      .join(", ");
+    const n = a.sql.managedNoPk.length;
+    out.push({
+      severity: "high",
+      category: "Security",
+      title: `${n} managed-schema table${n === 1 ? "" : "s"} missing a primary key (auth/storage schema tampered with)`,
+      anchor: "#managednopk",
+      evidence: `Missing PK on: ${names}${n > 4 ? ", ..." : ""}. Managed tables always ship with a primary key - their constraints/indexes were dropped.`,
+      ...meta("managed_schema_no_pk"),
+    });
+  }
+
   // amcheck integrity findings (opt-in, superuser + extension gated in collect).
   // Each row from bt_index_check / verify_heapam is a corruption hit.
   for (const r of a.sql.amcheckIndex) {
