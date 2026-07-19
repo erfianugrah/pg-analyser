@@ -676,7 +676,7 @@ function auditFindings(findings: Finding[], degraded: boolean): string {
       const fixLeg = leg("Fix", fixContent + sqlBlock + dashLink);
       const body = whatLeg + whyLeg + fixLeg + legText("Verify", f.howToVerify);
       return `<div class="finding ${SEV_CLASS[f.severity]}" id="${fid(i)}">
-  <h3><span class="lvl ${SEV_CLASS[f.severity]}">${SEV_WORD[f.severity]}</span> <span class=fcat>${esc(f.category)}</span> ${esc(f.title)}</h3>
+  <div class=fhead><div class=fhtag><span class="lvl ${SEV_CLASS[f.severity]}">${SEV_WORD[f.severity]}</span><span class=fcat>${esc(f.category)}</span></div><h3>${esc(f.title)}</h3></div>
   <div class=fbody>${body}</div>
   ${links ? `<p class=flinks>${links}</p>` : ""}
 </div>`;
@@ -1134,8 +1134,13 @@ ${faviconTag(brand)}
   /* --- per-finding deep dive --- */
   .finding{border:1px solid var(--line);border-left-width:4px;border-radius:5px;padding:12px 16px 13px;margin:12px 0;break-inside:avoid;page-break-inside:avoid}
   .finding.ERROR{border-left-color:#d64545}.finding.WARN{border-left-color:#d9a400}.finding.INFO{border-left-color:#5a7fd6}
-  .finding h3{font-size:14px;margin:0 0 8px;font-weight:700;display:flex;align-items:center;gap:8px;flex-wrap:wrap;line-height:1.35}
-  .fcat{font-size:11px;font-weight:600;color:var(--mut);text-transform:uppercase;letter-spacing:.03em}
+  /* Header shares the body legs' [gutter | content] grid so the title lines up
+     with the evidence lede + Why/Fix/Verify content column, and the severity +
+     category read as the header's rail label instead of floating flush-left. */
+  .fhead{display:grid;grid-template-columns:104px 1fr;gap:0 14px;align-items:start;margin:0 0 9px}
+  .fhtag{display:flex;flex-direction:column;align-items:flex-start;gap:4px;padding-top:1px}
+  .finding h3{font-size:14px;margin:0;font-weight:700;line-height:1.35}
+  .fcat{font-size:10.5px;font-weight:700;color:var(--mut);text-transform:uppercase;letter-spacing:.05em;line-height:1.2}
   .fbody{font-size:13px;line-height:1.6}
   /* Label rail: each leg is [fixed label gutter | full-width content]. The
      content column fills the whole card width; the uppercase label in the
