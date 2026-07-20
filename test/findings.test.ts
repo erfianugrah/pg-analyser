@@ -64,6 +64,7 @@ function base(): Analysis {
       managedNoPk: [],
       topByWal: [],
       visibilityMap: [],
+      hotUpdates: [],
       publicSchemaCreate: [],
       replicationSlots: [],
       rlsPolicies: [],
@@ -189,6 +190,34 @@ describe("stale-stats contradiction finding", () => {
       { table: "public.tiny", total_size: "8 kB", total_bytes: 8192, live_rows: 0 },
     ];
     expect(deriveFindings(a).some((x) => x.heuristicId === "stale_table_stats")).toBe(false);
+  });
+});
+
+describe("low HOT-update ratio finding", () => {
+  test("a high-update app table with a low HOT ratio flags, naming the worst offender + fillfactor", () => {
+    const a = base();
+    a.sql.hotUpdates = [
+      {
+        schema: "public",
+        table: "public.sessions",
+        updates: 2_000_000,
+        hot_updates: 200_000,
+        hot_pct: 10,
+        fillfactor: "100",
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "low_hot_update_ratio");
+    expect(f?.severity).toBe("low");
+    expect(f?.category).toBe("Performance");
+    expect(f?.title).toContain("HOT-update ratio");
+    expect(f?.evidence).toContain("public.sessions");
+    expect(f?.evidence).toContain("10%");
+    expect(f?.evidence).toContain("fillfactor 100");
+  });
+  test("no hotUpdates rows => no finding", () => {
+    expect(deriveFindings(base()).some((x) => x.heuristicId === "low_hot_update_ratio")).toBe(
+      false,
+    );
   });
 });
 
@@ -599,6 +628,25 @@ describe("deriveFindings", () => {
     expect(f?.title).toBe("Foreign keys without a covering index");
     // the group count is surfaced as scale in "what's happening"
     expect(f?.evidence).toContain("Affects 2 objects");
+    // a description with no trailing punctuation is sentence-terminated before
+    // the object-count so it doesn't run on ("...row. Affects 2 objects").
+    a.advisors.performance = [
+      {
+        name: "auth_rls_initplan",
+        title: "Auth RLS Initialization Plan",
+        level: "WARN",
+        description: "Calls are re-evaluated for each row",
+      },
+      {
+        name: "auth_rls_initplan",
+        title: "Auth RLS Initialization Plan",
+        level: "WARN",
+        description: "Calls are re-evaluated for each row",
+      },
+    ];
+    const g = deriveFindings(a).find((x) => x.evidence?.includes("Affects 2 objects"));
+    expect(g?.evidence).toContain("each row. Affects 2 objects");
+    expect(g?.evidence).not.toContain("row Affects");
     // concrete, copy-pasteable fix instead of "open the advisor"
     expect(f?.sql).toContain("CREATE INDEX CONCURRENTLY");
     expect(f?.dashUrl).toContain("/advisors/performance");
