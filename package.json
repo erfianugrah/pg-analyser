@@ -1,6 +1,6 @@
 {
   "name": "sbperf",
-  "version": "0.9.1",
+  "version": "0.10.0",
   "description": "Supabase performance analysis tool - PAT-only, generates self-contained HTML + PDF reports",
   "license": "MIT",
   "author": "Erfi Anugrah",
