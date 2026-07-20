@@ -64,6 +64,7 @@ function makeAnalysis(opts: {
       managedNoPk: [],
       topByWal: [],
       visibilityMap: [],
+      hotUpdates: [],
       publicSchemaCreate: [],
       replicationSlots: opts.slots ?? [],
       rlsPolicies: [],

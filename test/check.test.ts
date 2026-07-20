@@ -57,6 +57,7 @@ function base(): Analysis {
       managedNoPk: [],
       topByWal: [],
       visibilityMap: [],
+      hotUpdates: [],
       publicSchemaCreate: [],
       replicationSlots: [],
       rlsPolicies: [],

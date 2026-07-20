@@ -441,7 +441,7 @@ function trendsSection(a: Analysis): string {
     !hasEbs && (a.meta.trendSource === "store" || a.meta.trendSource === "prometheus")
       ? `<p class=note>EBS burst-balance (IOPS / throughput) panels are shown only when a CloudWatch-scraping Prometheus feeds the trends - they are not exposed by the Supabase metrics endpoint or the history store, so their absence here is not a health signal.</p>`
       : "";
-  return `<h2 id="trends">Resource snapshot <span class=note>infra over time - read for headroom vs cost (over-provisioned = downsize, near-ceiling = upsize). Single-point series show a marker until more snapshots accrue</span>${srcNote}</h2>
+  return `<h2 id="trends">Resource snapshot <span class=note>infra over time - read for headroom vs cost (over-provisioned = downsize, near-ceiling = upsize). Single-point series show a marker until more snapshots accrue.</span>${srcNote}</h2>
 <div class=sparks>${a.trends.map(sparkline).join("")}</div>${ebsNote}`;
 }
 
@@ -1059,6 +1059,7 @@ ${drill("traffic", "Read/write profile", "per-table read-heavy vs write-heavy", 
 ${a.sql.tableIoStats.length ? drill("tableio", "Per-table I/O (cache hit)", "heap/index/TOAST blocks read-from-disk vs served-from-cache, per table (pg_statio); low TOAST hit% + high toast reads = de-toasting an out-of-line column from disk every scan", sec(a.sql.tableIoStats, "sql:tableIoStats", { mono: ["table"], hide: ["schema"] })) : ""}
 ${drill("deadtuples", "Dead tuples / autovacuum", "overdue = dead tuples past the table's autovacuum threshold", sec(a.sql.deadTuples, "sql:deadTuples", { mono: ["table"], hide: ["schema"] }))}
 ${a.sql.neverVacuumed.length ? drill("nevervacuumed", "Never vacuumed", "tables autovacuum has never touched (>=10k rows) - no visibility map, stale planner stats", sqlTable(a.sql.neverVacuumed, { mono: ["table"], hide: ["schema"] })) : ""}
+${a.sql.hotUpdates.length ? drill("hotupdates", "Low HOT-update ratio", "high-update tables where few UPDATEs were HOT (heap-only) - each non-HOT update adds an entry to every index and leaves a dead heap tuple; caused by an updated column that is indexed, or full pages (fillfactor)", sqlTable(a.sql.hotUpdates, { mono: ["table"], hide: ["schema"] })) : ""}
 ${show.roles ? drill("roles", "Role connection usage", "active connections vs each role's limit (shown when a role nears its limit)", sec(a.sql.roleStats, "sql:roleStats", { mono: ["role"] })) : ""}
 ${show.txid ? drill("txid", "Transaction-ID wraparound", "age(relfrozenxid) vs 2B ceiling; shown when a table approaches the wraparound threshold", sec(a.sql.txidWraparound, "sql:txidWraparound", { mono: ["table"], hide: ["schema"] })) : ""}
 ${a.sql.multixactWraparound.length ? drill("multixact", "Multixact-ID wraparound", "mxid_age(relminmxid) vs its own 2B ceiling - consumed by heavy row locking, separate from txid", sqlTable(a.sql.multixactWraparound, { mono: ["table"], hide: ["schema"] })) : ""}
