@@ -79,6 +79,7 @@ function fixture(overrides: Partial<Analysis> = {}): Analysis {
       managedNoPk: [],
       topByWal: [],
       visibilityMap: [],
+      hotUpdates: [],
       publicSchemaCreate: [],
       replicationSlots: [],
       rlsPolicies: [
@@ -678,6 +679,7 @@ describe("renderSummary", () => {
         managedNoPk: [],
         topByWal: [],
         visibilityMap: [],
+        hotUpdates: [],
         publicSchemaCreate: [],
         replicationSlots: [],
         rlsPolicies: [],

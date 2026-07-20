@@ -284,6 +284,13 @@ export const QUERIES = {
       shared_blks_read,
       round((shared_blks_read * 100.0
         / nullif(shared_blks_hit + shared_blks_read, 0))::numeric, 1) as miss_pct,
+      -- cache-pollution weight: reads x miss-fraction. Ranks a query by the
+      -- VOLUME of cold reads it pulls in and evicts, not just its miss %; a
+      -- high value is a query reading a lot into shared_buffers that doesn't
+      -- stay cached (the "cache bully" the global hit ratio can't localise).
+      round(shared_blks_read
+        * (shared_blks_read::numeric
+           / nullif(shared_blks_hit + shared_blks_read, 0)))::bigint as eviction_impact,
       left(regexp_replace(query, '\\s+', ' ', 'g'), 160) as query
     from extensions.pg_stat_statements
     where query not ilike all (array[${PLATFORM_NOISE}])
@@ -1144,6 +1151,36 @@ export const QUERIES = {
       and n.nspname not in (${NON_APP_SCHEMAS_SQL})
       and (c.relallvisible::numeric / nullif(c.relpages, 0)) < 0.8
     order by c.relpages desc
+    limit 20`,
+
+  // Low HOT-update ratio: high-update app tables where few UPDATEs were HOT
+  // (heap-only tuple). HOT ratio = n_tup_hot_upd / n_tup_upd; a non-HOT update
+  // adds a new entry to EVERY index on the table (index write-amplification +
+  // bloat) and leaves a dead heap tuple for vacuum. HOT is skipped when an
+  // updated column is covered by a non-summarizing index OR the page had no
+  // free room (fillfactor). Both
+  // columns exist since PG8.3 (portable across every audited version; the
+  // PG16+ n_tup_newpage_upd disambiguator is deliberately omitted to avoid a
+  // version floor). App-scoped; a 50k-update churn floor keeps low-write tables
+  // out, and the <0.5 cut surfaces only genuine offenders. fillfactor is read
+  // from reloptions (default 100 when unset) to steer the remediation.
+  hotUpdates: /* sql */ `
+    select
+      n.nspname as schema,
+      n.nspname || '.' || c.relname as "table",
+      s.n_tup_upd as updates,
+      s.n_tup_hot_upd as hot_updates,
+      round(100.0 * s.n_tup_hot_upd / nullif(s.n_tup_upd, 0), 1) as hot_pct,
+      coalesce(
+        substring(array_to_string(c.reloptions, ',') from 'fillfactor=([0-9]+)'),
+        '100') as fillfactor
+    from pg_stat_user_tables s
+    join pg_class c on c.oid = s.relid
+    join pg_namespace n on n.oid = c.relnamespace
+    where s.n_tup_upd >= 50000
+      and (s.n_tup_hot_upd::numeric / nullif(s.n_tup_upd, 0)) < 0.5
+      and n.nspname not in (${NON_APP_SCHEMAS_SQL})
+    order by s.n_tup_upd desc
     limit 20`,
 
   // Whether the PUBLIC pseudo-role can CREATE objects in schema public. grantee

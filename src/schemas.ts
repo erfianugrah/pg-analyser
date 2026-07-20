@@ -411,6 +411,9 @@ export const Analysis = z.object({
     // Large app tables with a low all-visible page fraction (index-only-scan
     // readiness / vacuum lag). Back-compat default.
     visibilityMap: SqlRows.default([]),
+    // High-update app tables with a low HOT-update ratio (index write-
+    // amplification + bloat). Back-compat default.
+    hotUpdates: SqlRows.default([]),
     // Whether the PUBLIC role can CREATE in schema public. Back-compat default.
     publicSchemaCreate: SqlRows.default([]),
     replicationSlots: SqlRows,

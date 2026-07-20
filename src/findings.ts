@@ -196,7 +196,11 @@ function groupAdvisors(
     // What's happening: the lint's own description + the affected-object scale.
     // Splinter text backslash-escapes quotes/backticks for markdown; unescape so
     // it doesn't render as literal \'role\'.
-    const desc = g.description?.replace(/\\(['"`])/g, "$1");
+    const descRaw = g.description?.replace(/\\(['"`])/g, "$1")?.trim();
+    // Splinter descriptions don't always end with punctuation; terminate the
+    // sentence so it doesn't run into the object-count ("...for each row Affects
+    // 8 objects" -> "...for each row. Affects 8 objects.").
+    const desc = descRaw ? (/[.!?]$/.test(descRaw) ? descRaw : `${descRaw}.`) : "";
     const scale = g.count > 1 ? `Affects ${g.count} objects.` : "";
     const caveat = winCaveat && COUNTER_DERIVED_ADVISOR_LINTS.has(g.name) ? winCaveat : "";
     const evidence = [desc, scale, caveat].filter(Boolean).join(" ") || undefined;
@@ -208,6 +212,7 @@ function groupAdvisors(
       evidence,
       dashUrl,
       ...base,
+      whyItMatters: fix?.whyItMatters ?? base.whyItMatters,
       remediation: fix?.whatToDo ?? base.remediation,
       sql: fix?.sql,
       howToVerify: fix?.howToVerify ?? base.howToVerify,
@@ -914,7 +919,7 @@ export function deriveFindings(a: Analysis): Finding[] {
   }
   // Headline: the single statement consuming the largest share of DB time. The
   // per-signal query findings (spill, variance, seq scan) flag symptoms; this
-  // names the biggest time sink - the highest-leverage tuning target. Wires the
+  // names the biggest time sink - the biggest single tuning target. Wires the
   // topQueryDbTimePct threshold. topStatements is ordered by total_exec_time desc.
   const topByTime = a.sql.topStatements[0];
   if (topByTime && num(topByTime.pct) >= THRESHOLDS.topQueryDbTimePct) {
@@ -1047,6 +1052,23 @@ export function deriveFindings(a: Analysis): Finding[] {
       title: `${countCapped(a.sql.visibilityMap.length, lowVis)} large ${lowVis === 1 ? "table has" : "tables have"} a low all-visible ratio (index-only scans limited; vacuum behind)`,
       anchor: "#visibilitymap",
       ...meta("visibility_map_low"),
+    });
+  }
+  // High-update tables with a low HOT-update ratio: non-HOT updates add a new
+  // entry to every index (write-amplification + index bloat) and leave dead heap
+  // tuples. Attribution/low - the cause (an indexed hot column vs full pages)
+  // needs a human, so we name the worst offender + its fillfactor, not a blind
+  // "lower fillfactor". App-scoped; hotUpdates already surfaces only offenders.
+  const hotRows = appRows(a.sql.hotUpdates);
+  if (hotRows.length > 0) {
+    const worst = hotRows[0] ?? {};
+    out.push({
+      severity: "low",
+      category: "Performance",
+      title: `${countCapped(a.sql.hotUpdates.length, hotRows.length)} high-update ${hotRows.length === 1 ? "table has" : "tables have"} a low HOT-update ratio (index write-amplification + bloat)`,
+      anchor: "#hotupdates",
+      evidence: `${String(worst.table ?? "")}: only ${worst.hot_pct}% of ${Number(worst.updates ?? 0).toLocaleString()} updates were HOT (fillfactor ${worst.fillfactor ?? "100"}). Each non-HOT update adds an entry to every index on the table and leaves a dead heap tuple for vacuum.`,
+      ...meta("low_hot_update_ratio"),
     });
   }
   // PUBLIC can CREATE in schema public (privilege-escalation surface).

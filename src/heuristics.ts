@@ -457,7 +457,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
     howToVerify:
       "Re-open the Performance Advisor after the change - the lint should drop off the list.",
     whyItMatters:
-      "Performance lints flag concrete slow-path issues (missing/unindexed FKs, RLS re-evaluation). Left alone they inflate query latency and CPU, pushing you toward a bigger, costlier compute tier.",
+      "The Performance Advisor runs Postgres's own lint set. Each entry is a concrete cost already in the query plan - an unindexed foreign key, a per-row RLS re-evaluation, the write overhead of an unused index - that stays until the named object changes.",
     remediation: "Open the Performance Advisor for the full finding + affected objects.",
     docUrl: "https://supabase.com/docs/guides/database/database-advisors",
     reviewed: R,
@@ -467,7 +467,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
     plane: "Advisor",
     howToVerify: "Re-open the Security Advisor - the lint should clear once the object is fixed.",
     whyItMatters:
-      "Security lints (exposed data, weak RLS/auth config) are direct exposure risk. A leak or unauthorized access is far costlier - in trust and remediation - than the fix.",
+      "The Security Advisor flags objects reachable in a way you probably didn't intend - a table with no RLS policy, a function with a mutable search_path, an extension in a public schema. Each is an access path, not a style nit, and it stays open until the object is changed.",
     remediation: "Open the Security Advisor for the full finding + affected objects.",
     docUrl: "https://supabase.com/docs/guides/database/database-advisors",
     reviewed: R,
@@ -690,7 +690,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
     howToVerify:
       "Confirm with pg_total_relation_size on the named table; the share of pg_database_size should match.",
     whyItMatters:
-      "One or two tables usually account for most of the disk you pay for. Knowing which - and how much of it is indexes vs heap - is where capacity work (archival, partitioning, dropping indexes, reclaiming bloat) has the most leverage.",
+      "One or two tables usually account for most of the disk you pay for. Knowing which - and how much of it is indexes vs heap - is where capacity work (archival, partitioning, dropping indexes, reclaiming bloat) pays off most.",
     remediation:
       "Attribution, not a defect: this is where the disk goes. If it is growing, consider archiving cold rows, partitioning by time, dropping unused indexes on it, or reclaiming bloat (pg_repack) before sizing up.",
     docUrl: "https://supabase.com/docs/guides/platform/database-size",
@@ -805,6 +805,26 @@ export const HEURISTICS: Record<string, Heuristic> = {
     remediation:
       "Reduce write volume for the hot statement: batch or debounce high-frequency updates, avoid rewriting unchanged columns, and consider HOT-update-friendly fill factor. For bulk loads, group into fewer larger transactions.",
     docUrl: "https://www.postgresql.org/docs/current/wal-configuration.html",
+    reviewed: R,
+  },
+  low_hot_update_ratio: {
+    id: "low_hot_update_ratio",
+    plane: "Vacuum",
+    sql: "-- inspect the HOT ratio + fillfactor for the table:\nSELECT relname, n_tup_upd, n_tup_hot_upd,\n  round(100.0*n_tup_hot_upd/nullif(n_tup_upd,0),1) AS hot_pct\nFROM pg_stat_user_tables WHERE relname='<table>';\n-- if pages are simply full (write-heavy table only), reserve in-page room:\nALTER TABLE <schema>.<table> SET (fillfactor=90);",
+    howToVerify:
+      "Reset the table's counters with pg_stat_reset_single_table_counters('<schema>.<table>'::regclass), let the workload run, then re-check n_tup_hot_upd / n_tup_upd in pg_stat_user_tables - the HOT-update ratio should climb toward the workload's ceiling.",
+    whyItMatters:
+      "A high-update table where few updates are HOT (heap-only tuple) pays twice: every non-HOT update adds a fresh entry to EVERY index on the table - even indexes whose columns did not change, because the new row version lands at a new heap location each index must point to (index write-amplification and index bloat) - and leaves a dead heap tuple for vacuum to reclaim. Postgres can only skip that index work (HOT) when BOTH conditions hold: no updated column is covered by a non-summarizing index (a BRIN index does not block HOT), AND the page has free room for the new row version. The result is more WAL, more bloat, and heavier autovacuum on exactly the tables that churn the most.",
+    remediation:
+      "Attribution, not a blind fix - identify which HOT condition is failing. If a frequently-updated column is covered by a B-tree/hash index (a summarizing BRIN index does not block HOT), weigh that index's read value against its per-update write cost and drop it if it is low-value. If instead the pages are just full (default fillfactor 100 on a write-heavy table), reserve in-page room: ALTER TABLE <schema>.<table> SET (fillfactor=90). The new fillfactor applies to pages written from then on and HOT recovers as rows migrate; run VACUUM FULL or pg_repack once only if you want it applied to existing rows immediately. Leave read-mostly tables at 100.",
+    docUrl: "https://www.postgresql.org/docs/current/storage-hot.html",
+    refs: [
+      {
+        tier: "mechanism",
+        label: "PostgreSQL: fillfactor storage parameter",
+        url: "https://www.postgresql.org/docs/current/sql-createtable.html",
+      },
+    ],
     reviewed: R,
   },
   txid_wraparound: {
@@ -1163,7 +1183,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "A 'requested' checkpoint is forced because WAL filled before checkpoint_timeout. A high requested share means the DB is checkpointing under write pressure - each checkpoint is a burst of full-page writes and fsync, adding I/O and latency. Timed checkpoints (the interval) are the healthy case.",
     remediation:
-      "Raise max_wal_size so WAL can absorb writes between timed checkpoints (fewer forced checkpoints, smoother I/O). On hosted Supabase set it via the Database custom Postgres config - CLI: supabase postgres-config update --config max_wal_size=2GB --project-ref {ref} --experimental (applied on restart), or API PUT /v1/projects/{ref}/config/database/postgres; self-hosted can ALTER SYSTEM. On a write-heavy workload this is one of the highest-leverage knobs.",
+      "Raise max_wal_size so WAL can absorb writes between timed checkpoints (fewer forced checkpoints, smoother I/O). On hosted Supabase set it via the Database custom Postgres config - CLI: supabase postgres-config update --config max_wal_size=2GB --project-ref {ref} --experimental (applied on restart), or API PUT /v1/projects/{ref}/config/database/postgres; self-hosted can ALTER SYSTEM. On a write-heavy workload this is one of the biggest knobs to turn.",
     docUrl: "https://supabase.com/docs/guides/database/custom-postgres-config",
     reviewed: R,
   },
@@ -1564,7 +1584,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
     howToVerify:
       "Re-check this query's share of total_exec_time in pg_stat_statements (or the Query Performance report) after tuning - it should drop as a fraction of the workload.",
     whyItMatters:
-      "One statement accounting for a large share of all database time is the single highest-leverage tuning target: cutting it frees the most CPU and I/O for everything else. It is the headline the per-signal findings (spill, seq scan, variance) miss - they flag symptoms, this names the biggest time sink.",
+      "One statement accounting for a large share of all database time is the single biggest tuning win: cutting it frees the most CPU and I/O for everything else. It is the headline the per-signal findings (spill, seq scan, variance) miss - they flag symptoms, this names the biggest time sink.",
     remediation:
       "Profile the statement with EXPLAIN (ANALYZE, BUFFERS): add the missing index, avoid SELECT * / de-TOAST, reduce call frequency (cache or batch an N+1), or rewrite the plan. Use the Query Performance report (Advisors > Query Performance) to track its share over time.",
     docUrl: "https://supabase.com/docs/guides/database/debugging-performance",
