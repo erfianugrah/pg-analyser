@@ -18,6 +18,32 @@ https://www.postgresql.org/docs/current/pgbench.html
   unacceptable anywhere else. Prefer your own test table when in doubt.
 - pgbench hammers the database by design. On a small Supabase compute size a
   high `-c` will saturate CPU/connections; start small (`-c 4`) and scale up.
+  On shared or small compute this cuts both ways: your run degrades co-tenants
+  (noisy neighbor), and their load taints your numbers. Pick a quiet window
+  and expect results on shared infrastructure to be noisier.
+
+## What pgbench can and cannot tell you
+
+Read this before drawing conclusions from any number pgbench prints.
+
+- **The built-in suite is an obsolete benchmark.** The default tpcb-like
+  script is based on TPC-B, which the TPC itself declared obsolete in 1995.
+  Treat built-in-suite numbers as an infra/software comparison only: same
+  software on different hardware, or different software versions on the same
+  hardware. Do not infer anything about *your* workload from tpcb-like TPS.
+- **There is no better benchmark than your own.** Representative means your
+  schema, your queries, your concurrency profile - i.e. custom `-f` scripts
+  against a copy of your data shape. That is why the worked example below
+  matters more than the built-in suite.
+- **The client machine is part of the benchmark.** Run pgbench in the same
+  region as the database, on a quiet machine with enough cores (`-j` threads)
+  and no competing workload. A multi-tasking or resource-starved client
+  bottlenecks before the database does, and every number from that point on is
+  fiction. Comparing your laptop against a managed database flatters the
+  laptop: direct access, no network latency, no shared I/O. Compare like with
+  like.
+- **Change one variable at a time.** Two changes between runs and you no
+  longer know what moved the number.
 
 ## Connecting to Supabase
 
@@ -292,6 +318,24 @@ VACUUM ANALYZE bench_users;
    ILIKE was ~3.7x slower here - the kind of result that justifies an index or
    a `lower(email)` functional index, which you can then verify with the same
    two scripts.
+
+## Tuning workflow: where pgbench fits
+
+The productive use of pgbench is config validation, not config discovery:
+
+1. Start from a sane baseline for the instance size (PGTune is the usual
+   starting point for `shared_buffers`, `work_mem`, `max_connections`).
+2. Change ONE GUC.
+3. Benchmark with the same script, same scale, same duration, same seed if you
+   must reproduce exactly.
+4. Keep or revert, then iterate.
+
+Prefer scoped GUC changes over system-wide ones while experimenting:
+`ALTER ROLE ... SET work_mem = '64MB'` or `ALTER DATABASE ... SET ...` (or a
+session-level `SET` inside the pgbench script itself) is reversible and has no
+blast radius; `ALTER SYSTEM` touches every connection. Many Supabase GUCs are
+settable per role/database - sbperf's config-tuning findings flag the ones
+worth looking at (work_mem blast radius, timeouts, checkpoint completion).
 
 ## Beyond the basics (what most pgbench tutorials miss)
 
