@@ -650,6 +650,8 @@ src/
 
 ## See also
 
+- `docs/pgbench.md` - tested pgbench verification companion (benchmark a fix,
+  then `sbperf diff` to see it land in pg_stat_statements)
 - `~/.pi/agent/skills/supabase-postgres-best-practices` - source of the perf queries
 - `~/.pi/agent/skills/supabase` - API/CLI/auth reference
 - `~/.pi/agent/skills/design-utilitarian` - report visual ethos
