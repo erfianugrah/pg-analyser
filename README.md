@@ -247,10 +247,24 @@ matches upstream `supabase/splinter`; it skips silently when offline so runs sta
 reproducible (`--no-sync-check` to disable). Live advisor lints are fetched per
 run and are always current.
 
-To *prove* a fix worked (not just that the finding disappeared),
-[`docs/pgbench.md`](docs/pgbench.md) is the verification companion: a tested
-pgbench guide (Supabase connection endpoints, custom scripts, tail-latency
-percentiles, and the snapshot -> benchmark -> `sbperf diff` loop).
+To *prove* a fix worked (not just that the finding disappeared), `sbperf bench`
+wraps pgbench with methodology guardrails - client-saturation checks, warmup +
+repetition with stability detection, exact p50/p95/p99 from the per-transaction
+log, a pg_settings snapshot per run, and a run history you can `--compare`
+(the perf delta sits next to the config delta):
+
+```bash
+bun run src/index.ts bench --db-url "$C" -b tpcb-like --init --yes   # one-time table setup
+bun run src/index.ts bench --db-url "$C" -f myquery.sql --name baseline
+# change one GUC, then:
+bun run src/index.ts bench --db-url "$C" -f myquery.sql --name work_mem-64MB
+bun run src/index.ts bench --compare 1 2   # tps/p95/p99 delta + pg_settings diff
+bun run src/index.ts bench --list          # run history
+```
+
+[`docs/pgbench.md`](docs/pgbench.md) is the companion guide (methodology,
+Supabase connection endpoints, custom scripts, what pgbench can and can't
+tell you); [`docs/bench-design.md`](docs/bench-design.md) is the design note.
 
 ## Choosing a timeframe
 
