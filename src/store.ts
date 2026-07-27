@@ -38,7 +38,76 @@ CREATE TABLE IF NOT EXISTS sql_scalars (
   value       REAL    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_ss_snap ON sql_scalars(snapshot_id);
+
+-- sbperf bench: pgbench run history (see bench.ts / docs/bench-design.md).
+-- Independent of snapshots (no FK): a benchmark is a point-in-time event, not
+-- part of the collected Analysis corpus. Keyed by (ref, script_hash) so a
+-- script's runs form a comparable series. Connstrings are never stored.
+CREATE TABLE IF NOT EXISTS bench_runs (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  ref             TEXT    NOT NULL,
+  ts              INTEGER NOT NULL,
+  name            TEXT,
+  script_hash     TEXT    NOT NULL,
+  script_text     TEXT,
+  scale           INTEGER NOT NULL,
+  clients         INTEGER NOT NULL,
+  threads         INTEGER NOT NULL,
+  time_s          INTEGER NOT NULL,
+  protocol        TEXT    NOT NULL,
+  rate            INTEGER,
+  runs_json       TEXT    NOT NULL,
+  tps_median      REAL    NOT NULL,
+  p50_us          INTEGER NOT NULL,
+  p95_us          INTEGER NOT NULL,
+  p99_us          INTEGER NOT NULL,
+  failed_tx       INTEGER NOT NULL,
+  guc_json        TEXT,
+  client_cores    INTEGER NOT NULL,
+  client_load_max REAL    NOT NULL,
+  tainted         INTEGER NOT NULL DEFAULT 0,
+  unstable        INTEGER NOT NULL DEFAULT 0,
+  pgbench_version TEXT    NOT NULL,
+  server_version  TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_bench_ref_script ON bench_runs(ref, script_hash, ts);
 `;
+
+/** One bench_runs row as inserted (id assigned by sqlite). */
+export type BenchRunInput = {
+  ref: string;
+  ts: number;
+  name: string | null;
+  script_hash: string;
+  script_text: string | null;
+  scale: number;
+  clients: number;
+  threads: number;
+  time_s: number;
+  protocol: string;
+  rate: number | null;
+  runs_json: string;
+  tps_median: number;
+  p50_us: number;
+  p95_us: number;
+  p99_us: number;
+  failed_tx: number;
+  guc_json: string | null;
+  client_cores: number;
+  client_load_max: number;
+  tainted: boolean;
+  unstable: boolean;
+  pgbench_version: string;
+  server_version: string;
+};
+
+/** A hydrated bench_runs row (booleans + parsed pg_settings map). */
+export type BenchRunRow = Omit<BenchRunInput, "tainted" | "unstable" | "guc_json"> & {
+  id: number;
+  tainted: boolean;
+  unstable: boolean;
+  guc: Record<string, string> | null;
+};
 
 /** SQL scalars we trend (SQL-derived numbers not present as metric samples). */
 const SCALAR_KEYS: Array<{ key: string; pick: (a: Analysis) => number | null }> = [
@@ -58,6 +127,19 @@ const SCALAR_KEYS: Array<{ key: string; pick: (a: Analysis) => number | null }> 
 ];
 
 export const DEFAULT_STORE = `${process.env.HOME ?? "."}/.sbperf/history.db`;
+
+/** sqlite row -> BenchRunRow: booleans from ints, guc_json parsed. */
+function hydrateBenchRow(r: Record<string, unknown>): BenchRunRow {
+  const { guc_json, tainted, unstable, ...rest } = r;
+  return {
+    ...(rest as unknown as Omit<BenchRunRow, "id" | "tainted" | "unstable" | "guc"> & {
+      id: number;
+    }),
+    tainted: Number(tainted) === 1,
+    unstable: Number(unstable) === 1,
+    guc: guc_json ? (JSON.parse(String(guc_json)) as Record<string, string>) : null,
+  };
+}
 
 export class HistoryStore {
   private constructor(private db: Database) {}
@@ -170,6 +252,66 @@ export class HistoryStore {
       .query("DELETE FROM snapshots WHERE ref = ? AND collected_ts < ?")
       .run(ref, cutoff);
     return Number(res.changes);
+  }
+
+  /** Append one bench run; returns its row id. */
+  recordBenchRun(r: BenchRunInput): number {
+    const res = this.db
+      .query(
+        `INSERT INTO bench_runs (ref, ts, name, script_hash, script_text, scale, clients,
+          threads, time_s, protocol, rate, runs_json, tps_median, p50_us, p95_us, p99_us,
+          failed_tx, guc_json, client_cores, client_load_max, tainted, unstable,
+          pgbench_version, server_version)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        r.ref,
+        r.ts,
+        r.name,
+        r.script_hash,
+        r.script_text,
+        r.scale,
+        r.clients,
+        r.threads,
+        r.time_s,
+        r.protocol,
+        r.rate,
+        r.runs_json,
+        r.tps_median,
+        r.p50_us,
+        r.p95_us,
+        r.p99_us,
+        r.failed_tx,
+        r.guc_json,
+        r.client_cores,
+        r.client_load_max,
+        r.tainted ? 1 : 0,
+        r.unstable ? 1 : 0,
+        r.pgbench_version,
+        r.server_version,
+      );
+    return Number(res.lastInsertRowid);
+  }
+
+  /** Bench runs, newest first; optionally scoped to a ref and/or script. */
+  benchRuns(ref?: string, scriptHash?: string): BenchRunRow[] {
+    const where = [ref ? "ref = ?" : null, scriptHash ? "script_hash = ?" : null]
+      .filter(Boolean)
+      .join(" AND ");
+    const params = [ref, scriptHash].filter((x) => x != null);
+    const rows = this.db
+      .query(`SELECT * FROM bench_runs${where ? ` WHERE ${where}` : ""} ORDER BY ts DESC`)
+      .all(...params) as Array<Record<string, unknown>>;
+    return rows.map(hydrateBenchRow);
+  }
+
+  /** One bench run by id, or null. */
+  benchRun(id: number): BenchRunRow | null {
+    const row = this.db.query("SELECT * FROM bench_runs WHERE id = ?").get(id) as Record<
+      string,
+      unknown
+    > | null;
+    return row ? hydrateBenchRow(row) : null;
   }
 
   /** Test helper: count child rows with no parent snapshot (should always be 0). */
