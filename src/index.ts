@@ -2,6 +2,15 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import pkg from "../package.json" with { type: "json" };
+import {
+  BENCH_BUILTINS,
+  BENCH_PROTOCOLS,
+  renderBenchText,
+  renderCompareText,
+  renderListText,
+  renderShowText,
+  runBench,
+} from "./bench.ts";
 import { type Brand, DEFAULT_BRAND, loadBrand } from "./brand.ts";
 import { evaluateGate, type GateOptions, renderGateText } from "./check.ts";
 import { collect } from "./collect.ts";
@@ -79,6 +88,10 @@ Usage:
   sbperf diff     <oldDir> <newDir>            compare two analysis.json runs (findings delta + query regressions)
   sbperf diff     --ref <ref> [--store <db>]   compare the two most recent store snapshots
   sbperf check    <dir> [--fail-on <sev>]      CI gate: exit nonzero if findings breach the threshold
+  sbperf bench    --db-url <c> [-f x.sql|-b tpcb-like]  pgbench with guardrails -> history store
+  sbperf bench    --list [--ref <r>]           stored bench runs
+  sbperf bench    --show <id>                  one stored run, per-run detail
+  sbperf bench    --compare <idA> <idB>        perf delta + pg_settings diff between two runs
   sbperf export-prometheus <dir> [--ref <ref>] history store -> OpenMetrics for promtool backfill
   sbperf scrape-init --ref <ref> [--dir <d>]   write the Prometheus+Grafana stack
 
@@ -133,6 +146,21 @@ Flags:
   --fail-on <sev>      check: gate severity - high|med|low (default high); exit 1 if breached
   --category <cat>     check/diff: restrict the gate to Performance|Security|Capacity
   --new-since <dir>    check: gate only on findings NEW vs the baseline dir's analysis.json
+  -f, --file <x.sql>   bench: custom pgbench script (repeatable, @weight allowed)
+  -b, --builtin <name> bench: builtin script: tpcb-like|simple-update|select-only (default tpcb-like)
+  --scale <n>          bench: scale factor - 100k account rows per unit (default 1)
+  --init               bench: run pgbench -i first (DROPS pgbench_* tables; needs --yes)
+  -c, --clients <n>    bench: concurrent connections (default 4)
+  -j, --threads <n>    bench: pgbench worker threads (default min(cores, clients))
+  -T, --time <s>       bench: seconds per measured run (default 60; <30 warns)
+  --warmup <s>         bench: unmeasured warmup run (default 10)
+  --runs <n>           bench: measured repetitions (default 3; median + spread reported)
+  --protocol <mode>    bench: simple|extended|prepared (default extended)
+  --rate <n>           bench: target TPS instead of max speed (pgbench -R)
+  --reset-stats        bench: pg_stat_statements_reset() before measuring (superuser)
+  --name <label>       bench: free-text label stored with the run
+  --json               bench: machine-readable stdout
+  -y, --yes            bench: skip confirmations (--init drop warning, busy client)
   --no-sync-check      skip the on-by-default upstream sync check (offline runs)
   --narrative          report/pdf: embed the narrative summary (run 'narrate' first)
   --print-prompt       narrate: write the grounded prompt to prompt.md for copy-paste
@@ -201,12 +229,30 @@ type Flags = {
   brand?: string;
   overlay?: string;
   amcheck?: boolean | "heap";
+  benchScripts: string[];
+  builtin?: string;
+  scale?: number;
+  init?: boolean;
+  yes?: boolean;
+  clients?: number;
+  threads?: number;
+  time?: number;
+  warmup?: number;
+  runs?: number;
+  protocol?: string;
+  rate?: number;
+  resetStats?: boolean;
+  name?: string;
+  json?: boolean;
+  list?: boolean;
+  show?: string;
+  compare?: string[];
 };
 
 /** Analytics-endpoint timeframe enum (verified live 2026-07; iso ranges are clamped). */
 const INTERVALS = ["15min", "30min", "1hr", "3hr", "1day", "3day", "7day"] as const;
 export function parseFlags(argv: string[]): Flags {
-  const out: Flags = { _: [], dbUrls: [], refs: [], refFiles: [], profiles: [] };
+  const out: Flags = { _: [], dbUrls: [], refs: [], refFiles: [], profiles: [], benchScripts: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     // Consume the NEXT arg as this flag's value, failing loud if it is missing
@@ -281,6 +327,27 @@ export function parseFlags(argv: string[]): Flags {
     else if (a === "--narrative") out.narrative = true;
     else if (a === "--print-prompt") out.printPrompt = true;
     else if (a === "--import") out.import = need("--import");
+    // bench (pgbench wrapper; docs/bench-design.md). Short forms mirror
+    // pgbench's own flags where they exist (-f -b -c -j -T -s would clash
+    // with --store's semantics, so scale stays long-only).
+    else if (a === "-f" || a === "--file") out.benchScripts.push(need(a));
+    else if (a === "-b" || a === "--builtin") out.builtin = need(a);
+    else if (a === "--scale") out.scale = Number(need("--scale"));
+    else if (a === "--init") out.init = true;
+    else if (a === "-c" || a === "--clients") out.clients = Number(need(a));
+    else if (a === "-j" || a === "--threads") out.threads = Number(need(a));
+    else if (a === "-T" || a === "--time") out.time = Number(need(a));
+    else if (a === "--warmup") out.warmup = Number(need("--warmup"));
+    else if (a === "--runs") out.runs = Number(need("--runs"));
+    else if (a === "--protocol") out.protocol = need("--protocol");
+    else if (a === "--rate") out.rate = Number(need("--rate"));
+    else if (a === "--reset-stats") out.resetStats = true;
+    else if (a === "--name") out.name = need("--name");
+    else if (a === "--json") out.json = true;
+    else if (a === "--list") out.list = true;
+    else if (a === "--show") out.show = need("--show");
+    else if (a === "--compare") out.compare = [need("--compare"), need("--compare (second id)")];
+    else if (a === "-y" || a === "--yes") out.yes = true;
     else if (a?.startsWith("--")) usage();
     else if (a) out._.push(a);
   }
@@ -890,6 +957,85 @@ async function doCheck(dir: string, flags: Flags): Promise<void> {
   if (!result.pass) process.exit(1);
 }
 
+/**
+ * pgbench with methodology guardrails (docs/bench-design.md). Sub-modes:
+ * --list / --show / --compare read the history store; the default runs a
+ * benchmark against ONE --db-url and stores the result. Inherently no-PAT:
+ * pgbench speaks the wire protocol, so a connstring is required.
+ */
+async function doBench(flags: Flags, targets: SweepTarget[]): Promise<void> {
+  const storePath = flags.store ?? DEFAULT_STORE;
+
+  if (flags.list || flags.show || flags.compare) {
+    const store = HistoryStore.open(storePath);
+    try {
+      if (flags.list) {
+        console.log(renderListText(store.benchRuns(flags.ref)));
+      } else if (flags.show) {
+        const row = store.benchRun(Number(flags.show));
+        if (!row) throw new Error(`no bench run #${flags.show} in ${storePath}`);
+        console.log(renderShowText(row));
+      } else if (flags.compare) {
+        const [a, b] = flags.compare.map((x) => store.benchRun(Number(x)));
+        if (!a || !b)
+          throw new Error(
+            `compare needs two stored run ids (${flags.compare.join(", ")}) - see 'sbperf bench --list'`,
+          );
+        console.log(renderCompareText(a, b));
+      }
+    } finally {
+      store.close();
+    }
+    return;
+  }
+
+  if (targets.length > 1)
+    throw new Error("bench runs against ONE database - pass a single --db-url");
+  const target = targets[0];
+  if (!target)
+    throw new Error(
+      "bench needs a --db-url connstring (or SBPERF_DB_URL / sbperf.databases.json with one entry) - pgbench speaks the wire protocol",
+    );
+  const protocol = (flags.protocol ?? "extended") as (typeof BENCH_PROTOCOLS)[number];
+  if (!BENCH_PROTOCOLS.includes(protocol))
+    throw new Error(`--protocol must be one of: ${BENCH_PROTOCOLS.join(" | ")}`);
+  const builtin = flags.builtin ?? "tpcb-like";
+  if (
+    !flags.benchScripts.length &&
+    !BENCH_BUILTINS.includes(builtin as (typeof BENCH_BUILTINS)[number])
+  )
+    throw new Error(`--builtin must be one of: ${BENCH_BUILTINS.join(" | ")}`);
+
+  const store = HistoryStore.open(storePath);
+  try {
+    const res = await runBench(
+      {
+        dbUrl: target.dbUrl,
+        ref: flags.ref ?? target.ref,
+        scripts: flags.benchScripts,
+        builtin,
+        scale: flags.scale ?? 1,
+        init: flags.init ?? false,
+        yes: flags.yes ?? false,
+        clients: flags.clients ?? 4,
+        threads: flags.threads,
+        timeS: flags.time ?? 60,
+        warmupS: flags.warmup ?? 10,
+        runs: flags.runs ?? 3,
+        protocol,
+        rate: flags.rate,
+        resetStats: flags.resetStats ?? false,
+        name: flags.name,
+        json: flags.json ?? false,
+      },
+      store,
+    );
+    console.log(flags.json ? JSON.stringify(res, null, 2) : renderBenchText(res));
+  } finally {
+    store.close();
+  }
+}
+
 async function loadAnalysis(dir: string) {
   const { Analysis } = await import("./schemas.ts");
   const path = join(dir, "analysis.json");
@@ -1339,6 +1485,10 @@ async function main(): Promise<void> {
         const dir = flags._[0];
         if (!dir) usage();
         await doCheck(dir, flags);
+        break;
+      }
+      case "bench": {
+        await doBench(flags, targets);
         break;
       }
       case "pdf": {

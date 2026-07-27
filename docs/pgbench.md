@@ -22,6 +22,12 @@ https://www.postgresql.org/docs/current/pgbench.html
   (noisy neighbor), and their load taints your numbers. Pick a quiet window
   and expect results on shared infrastructure to be noisier.
 
+> **Shortcut:** `sbperf bench --db-url <c>` wraps pgbench and enforces the
+> mechanizable half of this doc by construction (client-saturation checks,
+> warmup + repetition with spread detection, exact p50/p95/p99 from the `-l`
+> log, a pg_settings snapshot per run, run history + `--compare`). The manual
+> flags below are still the reference for what it does and why.
+
 ## What pgbench can and cannot tell you
 
 Read this before drawing conclusions from any number pgbench prints.
@@ -364,6 +370,9 @@ mode, a real optimization lever for chatty transactions. Requires the extended
 query protocol (`--protocol=extended`).
 
 ### Percentiles: the summary hides the tail
+
+(`sbperf bench` does this for you - every measured run logs per-transaction
+data and reports p50/p95/p99. This is the manual equivalent.)
 
 The stdout report gives mean and stddev only - no p95/p99. For tail latency,
 log per-transaction data and compute percentiles from the log:

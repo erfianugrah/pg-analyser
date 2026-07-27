@@ -29,6 +29,7 @@ enumerates + serves API/metrics; matched projects upgrade to superuser SQL).
 | `bun run src/index.ts diff <dirA> <dirB>` | findings delta + per-query (queryid) regressions between two runs |
 | `bun run src/index.ts diff --ref <ref>` | same, over the two most recent history-store snapshots |
 | `bun run src/index.ts check <dir> --fail-on <sev>` | CI gate: exit nonzero if findings breach the threshold (`--category`, `--new-since`) |
+| `bun run src/index.ts bench --db-url <c> [-f x.sql\|-b tpcb-like]` | pgbench with methodology guardrails (client-saturation check, warmup + N runs, exact percentiles from `-l`, pg_settings snapshot) -> bench_runs in the history store. `--list` / `--show <id>` / `--compare <a> <b>` read it. Docs: docs/bench-design.md |
 | `bun run src/index.ts full --ref <ref>` | analyze + report + pdf |
 | `bun run src/index.ts full --ref <r1>,<r2> ...` / `--ref-file <f>` | audit a subset of projects -> combined org/project index (PAT-only). `--ref` repeatable + comma/space lists; `--ref-file` reads a .txt/.csv (ref-shaped tokens only) |
 | `bun run src/index.ts full --all [--org <slug>]` | audit every project -> `index.html`. Projects whose ref matches a connstring (`--db-config` / `--db-url` / `SBPERF_DB_URL` / auto-loaded `sbperf.databases.json`) are AUTO-UPGRADED to the superuser SQL tier (PAT still serves API planes + metrics) - the maximal-coverage fleet command: `full --all --db-config <json> [--amcheck]` |
@@ -457,7 +458,18 @@ src/
                  rendered in the report footer. --no-sync-check to skip.
   store.ts       SQLite history store (bun:sqlite): `snapshot` appends full
                  Analysis + denormalized metric_samples/sql_scalars; keyed by
-                 ref at ~/.sbperf/history.db; prune to retention
+                 ref at ~/.sbperf/history.db; prune to retention. Also holds
+                 bench_runs (sbperf bench history; independent of snapshots)
+  bench.ts       `bench` - pgbench wrapper with methodology guardrails: binary
+                 discovery via SBPERF_PGBENCH/PATH (findChrome-style), client
+                 load preflight + mid-run taint detection, warmup + N measured
+                 runs with tps-spread stability check, exact p50/p95/p99 parsed
+                 from the -l per-transaction log (field 3 = microseconds;
+                 skipped/failed counted separately), pg_settings snapshot per
+                 run (--compare diffs GUCs next to the perf delta), optional
+                 --reset-stats (superuser, soft-fail). Pure helpers (log
+                 parser, percentiles, spread, guc diff) unit-tested; live
+                 pgbench runs are manual-verification only, like Chromium PDF
   trends.ts      pure computeTrends: gauges (1 pt/snapshot) + counter-derived
                  rates (CPU util %, IOPS, throughput) across >=2 snapshots, with
                  read-time downsampling to ~300 pts/panel (Grafana-style). The
