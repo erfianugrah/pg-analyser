@@ -247,6 +247,11 @@ matches upstream `supabase/splinter`; it skips silently when offline so runs sta
 reproducible (`--no-sync-check` to disable). Live advisor lints are fetched per
 run and are always current.
 
+To *prove* a fix worked (not just that the finding disappeared),
+[`docs/pgbench.md`](docs/pgbench.md) is the verification companion: a tested
+pgbench guide (Supabase connection endpoints, custom scripts, tail-latency
+percentiles, and the snapshot -> benchmark -> `sbperf diff` loop).
+
 ## Choosing a timeframe
 
 Supabase only lets you pick a window for the **analytics** endpoints (API
