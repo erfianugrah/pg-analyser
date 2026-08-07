@@ -71,6 +71,7 @@ function makeAnalysis(opts: {
       preparedXacts: [],
       xminHolders: [],
       replicationXmin: [],
+      antiWraparoundVacuums: [],
       rlsPolicies: [],
       connections: [],
       roleStats: [],

@@ -1366,11 +1366,17 @@ export function deriveFindings(a: Analysis): Finding[] {
             .map((h) => `${h.type} ${h.name} (${h.age.toLocaleString()} XIDs)`)
             .join("; ")}.`
         : "";
+    // A forced anti-wraparound autovacuum in flight means the freeze mechanism
+    // is ALREADY running (Postgres launches these even with autovacuum off), so
+    // an age that is still climbing is a pinned horizon, not a lazy autovacuum.
+    const forced = a.sql.antiWraparoundVacuums.length
+      ? `Postgres is already running ${a.sql.antiWraparoundVacuums.length} forced anti-wraparound autovacuum worker(s); the freeze cannot advance past a pinned horizon, so clear the holder rather than waiting.`
+      : "";
     out.push({
       severity: isStopping || isWarning || hasBlocker ? "high" : "med",
       category: "Capacity",
       title: `Transaction-ID wraparound at ${maxAge.toLocaleString()} age, ${bestRemaining.toLocaleString()} remaining ${attribution} ${titleSuffix}`,
-      evidence: [text, evidenceLines].filter(Boolean).join(" "),
+      evidence: [text, evidenceLines, forced].filter(Boolean).join(" "),
       anchor: "#txid",
       ...meta("txid_wraparound"),
     });

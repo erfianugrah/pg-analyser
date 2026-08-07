@@ -64,6 +64,7 @@ function base(): Analysis {
       preparedXacts: [],
       xminHolders: [],
       replicationXmin: [],
+      antiWraparoundVacuums: [],
       rlsPolicies: [],
       connections: [],
       roleStats: [],
