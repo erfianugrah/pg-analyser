@@ -22,7 +22,8 @@
     "check:schemas": "bun run scripts/check-schemas-drift.ts",
     "check:docurls": "bun run scripts/check-docurls.ts",
     "smoke": "bun run smoke.ts",
-    "build": "bun build ./src/index.ts --compile --outfile sbperf"
+    "build": "bun build ./src/index.ts --compile --outfile sbperf",
+    "test:live": "bun acceptance/live-sql.ts && bun acceptance/live-catalogue-sql.ts"
   },
   "dependencies": {
     "zod": "4.4.3"
