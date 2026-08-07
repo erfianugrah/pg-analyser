@@ -2,6 +2,7 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import pkg from "../package.json" with { type: "json" };
+import { buildAlertRules, renderAlertsYaml, renderExclusions } from "./alerts.ts";
 import {
   BENCH_BUILTINS,
   BENCH_PROTOCOLS,
@@ -12,6 +13,7 @@ import {
   runBench,
 } from "./bench.ts";
 import { type Brand, DEFAULT_BRAND, loadBrand } from "./brand.ts";
+
 import { evaluateGate, type GateOptions, renderGateText } from "./check.ts";
 import { collect } from "./collect.ts";
 import { ConfigError, loadConfig, loadConfigOptional } from "./config.ts";
@@ -93,6 +95,7 @@ Usage:
   sbperf bench    --show <id>                  one stored run, per-run detail
   sbperf bench    --compare <idA> <idB>        perf delta + pg_settings diff between two runs
   sbperf export-prometheus <dir> [--ref <ref>] history store -> OpenMetrics for promtool backfill
+  sbperf alerts-init [--ref <ref>] [--dir <d>] write the Prometheus alerting-rule pack
   sbperf scrape-init --ref <ref> [--dir <d>]   write the Prometheus+Grafana stack
 
 Flags:
@@ -1375,6 +1378,32 @@ async function doNarrate(
   return embedNarrative(dir, analysis, md);
 }
 
+/**
+ * Write the Prometheus alerting-rule pack. Pure generation from the heuristics
+ * catalogue - no PAT, no DB, no network. --ref scopes every expression to one
+ * project via the supabase_project_ref label the metrics endpoint emits itself;
+ * omit it for a single-project scraper.
+ */
+async function doAlertsInit(ref: string | undefined, dir: string): Promise<void> {
+  const rules = buildAlertRules({ refMatcher: ref ? `supabase_project_ref="${ref}"` : "" });
+  await mkdir(dir, { recursive: true });
+  const yamlPath = join(dir, "alerts.yml");
+  await Bun.write(yamlPath, renderAlertsYaml(rules, ref ? `sbperf-${ref}` : "sbperf"));
+  await Bun.write(
+    join(dir, "EXCLUSIONS.md"),
+    `# Findings deliberately NOT alerted on\n\n${renderExclusions()}\n`,
+  );
+  console.error(`> ${yamlPath} (${rules.length} rules)`);
+  console.error(`> ${join(dir, "EXCLUSIONS.md")} - what is left out, and why`);
+  console.error("");
+  console.error("Load it into the scrape-init stack (or any Prometheus):");
+  console.error("");
+  console.error(`  cp ${yamlPath} scraper-live/alerts.yml`);
+  console.error("  # prometheus.yml:  rule_files: [ /etc/prometheus/alerts.yml ]");
+  console.error("  # compose.yml:     ./alerts.yml:/etc/prometheus/alerts.yml:ro");
+  console.error("  (cd scraper-live && docker compose restart prometheus)");
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const cmd = argv[0];
@@ -1650,6 +1679,10 @@ async function main(): Promise<void> {
         await doReport(dir, undefined, undefined, flags.overlay);
         await doPdf(dir, undefined, undefined, flags.overlay);
         console.error(`> done: ${dir}`);
+        break;
+      }
+      case "alerts-init": {
+        await doAlertsInit(flags.ref, flags.dir ?? "alerts-pack");
         break;
       }
       case "scrape-init": {

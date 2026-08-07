@@ -49,5 +49,8 @@ sbperf.work.env
 # local scrape-init scratch stack (embeds a service_role credential)
 /scraper/
 
+# local alerts-init output (generated; no credential, just noise in the tree)
+/alerts-pack/
+
 # self-correcting-loop harness scratch (manifest + run report)
 .pi/
