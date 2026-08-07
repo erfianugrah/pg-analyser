@@ -459,11 +459,44 @@ async function doAllDbs(
         projDir = `${slugify(projName) || t.ref}-${t.ref.slice(0, 8)}-${date}`;
       usedDirs.add(projDir);
       const counts = await emitReport(analysis, join(outBase, projDir));
+      // Extract txid headroom: from the database row if present, else from the trend.
+      let txidRemaining: number | undefined;
+      let txidEtaDays: number | undefined;
+      if (analysis.sql.databaseFreezeAge.length) {
+        const dbRow = analysis.sql.databaseFreezeAge[0];
+        // Bun.SQL may return int8 as strings, so coerce for the check.
+        const remaining = dbRow?.remaining;
+        txidRemaining =
+          typeof remaining === "number"
+            ? remaining
+            : typeof remaining === "string"
+              ? Number(remaining)
+              : undefined;
+      }
+      if (!txidRemaining) {
+        const trend = analysis.trends.find((t) => t.title === "Transaction-ID age (max)");
+        const recent = trend?.points.at(-1);
+        if (recent) {
+          // Simple linear projection: remaining = XID_CEILING - current age
+          const ceiling = 2 ** 31 - 1_000_000;
+          txidRemaining = Math.max(0, ceiling - recent.v);
+        }
+      }
+      // Projection: find the wraparound_projected finding if it fired.
+      const projFinding = deriveFindings(analysis).find(
+        (f) => f.heuristicId === "wraparound_projected",
+      );
+      if (projFinding?.title) {
+        const match = projFinding.title.match(/~(\d+)\s+days/);
+        if (match?.[1]) txidEtaDays = Number(match[1]);
+      }
       rows.push({
         name: t.name ?? analysis.meta.name,
         ref: t.ref,
         status: analysis.meta.status,
         ...counts,
+        txidRemaining,
+        txidEtaDays,
         dir: projDir,
       });
       const n = counts.high + counts.med + counts.low;
@@ -479,6 +512,8 @@ async function doAllDbs(
         high: 0,
         med: 0,
         low: 0,
+        txidRemaining: undefined,
+        txidEtaDays: undefined,
         dir: t.ref,
         error: msg,
       });
@@ -677,7 +712,44 @@ async function doAll(
           region: dbUrl ? (regionFromConnstring(dbUrl) ?? undefined) : undefined,
         }).finally(() => runner?.close());
         const counts = await emitReport(analysis, join(outBase, orgDir, projDir));
-        rows.push({ name: p.name, ref: p.id, status: p.status, ...counts, dir: projDir });
+        // Extract txid headroom for the fleet index column.
+        let txidRemaining: number | undefined;
+        let txidEtaDays: number | undefined;
+        if (analysis.sql.databaseFreezeAge.length) {
+          const dbRow = analysis.sql.databaseFreezeAge[0];
+          // Bun.SQL may return int8 as strings, so coerce for the check.
+          const remaining = dbRow?.remaining;
+          txidRemaining =
+            typeof remaining === "number"
+              ? remaining
+              : typeof remaining === "string"
+                ? Number(remaining)
+                : undefined;
+        }
+        if (!txidRemaining) {
+          const trend = analysis.trends.find((t) => t.title === "Transaction-ID age (max)");
+          const recent = trend?.points.at(-1);
+          if (recent) {
+            const ceiling = 2 ** 31 - 1_000_000;
+            txidRemaining = Math.max(0, ceiling - recent.v);
+          }
+        }
+        const projFinding = deriveFindings(analysis).find(
+          (f) => f.heuristicId === "wraparound_projected",
+        );
+        if (projFinding?.title) {
+          const match = projFinding.title.match(/~(\d+)\s+days/);
+          if (match?.[1]) txidEtaDays = Number(match[1]);
+        }
+        rows.push({
+          name: p.name,
+          ref: p.id,
+          status: p.status,
+          ...counts,
+          txidRemaining,
+          txidEtaDays,
+          dir: projDir,
+        });
         high += counts.high;
         med += counts.med;
         low += counts.low;
@@ -693,6 +765,8 @@ async function doAll(
           high: 0,
           med: 0,
           low: 0,
+          txidRemaining: undefined,
+          txidEtaDays: undefined,
           dir: projDir,
           error: msg,
         });

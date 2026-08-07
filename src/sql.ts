@@ -127,7 +127,14 @@ export const QUERIES = {
       'data_checksums',
       -- lock-observability posture (lock_forensics finding): whether lock waits
       -- are logged at all, and the wait threshold before one is logged.
-      'log_lock_waits', 'deadlock_timeout'
+      'log_lock_waits', 'deadlock_timeout',
+      -- transaction-ID freeze tuning (autovacuum_freeze_tuning finding):
+      -- autovacuum on/off and max_age thresholds for both txid and multixact.
+      'autovacuum', 'autovacuum_freeze_max_age', 'autovacuum_multixact_freeze_max_age',
+      'vacuum_freeze_min_age', 'vacuum_freeze_table_age',
+      'autovacuum_max_workers', 'autovacuum_naptime', 'autovacuum_vacuum_cost_delay',
+      'autovacuum_vacuum_cost_limit',
+      'hot_standby_feedback'
     )
     order by name`,
 
@@ -763,18 +770,24 @@ export const QUERIES = {
   // means autovacuum is falling behind on freezing; at the ceiling the DB force-
   // stops writes. Scoped to non-system schemas (user-actionable); pct is against
   // a 2B practical ceiling (autovacuum_freeze_max_age escalates well before).
+  // Ranks on greatest(main_table_age, toast_age) since a TOAST relation can be
+  // the oldest and block the main table's freeze. remaining = transactions left
+  // before the 2^31 - 1000000 wraparound ceiling (the operator runbook's denominator).
   txidWraparound: /* sql */ `
     select
       n.nspname as schema,
       n.nspname || '.' || c.relname as table,
-      age(c.relfrozenxid) as xid_age,
-      round(100 * age(c.relfrozenxid)::numeric / 2000000000, 1) as pct_wraparound
+      greatest(age(c.relfrozenxid), age(t.relfrozenxid)) as xid_age,
+      age(t.relfrozenxid) as toast_age,
+      (2146483648 - greatest(age(c.relfrozenxid), age(t.relfrozenxid)))::bigint as remaining,
+      round(100 * greatest(age(c.relfrozenxid), age(t.relfrozenxid))::numeric / 2000000000, 1) as pct_wraparound
     from pg_class c
+    left join pg_class t on c.reltoastrelid = t.oid
     join pg_namespace n on n.oid = c.relnamespace
     where c.relkind in ('r', 'm')
       and n.nspname not in ('pg_catalog', 'information_schema', 'pg_toast')
-      and age(c.relfrozenxid) > 0
-    order by age(c.relfrozenxid) desc
+      and greatest(age(c.relfrozenxid), age(t.relfrozenxid)) > 0
+    order by greatest(age(c.relfrozenxid), age(t.relfrozenxid)) desc
     limit 20`,
 
   // Sequence exhaustion: sequences approaching their max value. int4/serial
@@ -798,18 +811,42 @@ export const QUERIES = {
     order by (last_value::numeric / nullif(max_value, 0)) desc
     limit 20`,
 
-  // Replication slots + retained WAL. An INACTIVE slot pins WAL forever and can
-  // fill the disk; a lagging active slot signals a slow downstream consumer.
+  // Database-level transaction-ID wraparound: the authoritative measure because
+  // it includes catalogs (pg_catalog tables vacuum'd by autovacuum on behalf of
+  // the whole database, driving datfrozenxid forward). Per-table freeze age is
+  // actionable (vacuum that table) but per-table rows can't see catalog-age,
+  // which is why a logical slot's catalog_xmin ages FIRST. remaining =
+  // transactions left before the 2^31 - 1000000 wraparound ceiling.
+  databaseFreezeAge: /* sql */ `
+    select
+      datname,
+      age(datfrozenxid) as xid_age,
+      mxid_age(datminmxid) as mxid_age,
+      (2146483648 - age(datfrozenxid))::bigint as remaining
+    from pg_database
+    order by age(datfrozenxid) desc`,
+
+  // Replication slots + retained WAL + xmin holders. An INACTIVE slot pins WAL
+  // forever and can fill the disk; a lagging active slot signals a slow
+  // downstream consumer. Physical slots hold xmin/catalog_xmin (proxies for
+  // unconfirmed snapshots); logical slots hold catalog_xmin (needed to confirm
+  // logical decoding progress). wal_status = reserved/extended/unreserved/lost.
   // Empty on projects with no logical replication / read replicas / CDC.
   replicationSlots: /* sql */ `
     select
       slot_name,
       slot_type,
       active,
+      active_pid,
+      wal_status,
       coalesce(pg_size_pretty(
         pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)
       ), '-') as retained_wal,
-      pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn) as retained_wal_bytes
+      pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn) as retained_wal_bytes,
+      xmin,
+      catalog_xmin,
+      age(xmin) as xmin_age,
+      age(catalog_xmin) as catalog_xmin_age
     from pg_replication_slots
     order by pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn) desc nulls last`,
 
@@ -1079,20 +1116,73 @@ export const QUERIES = {
   // Multixact-ID wraparound: a SEPARATE 2B ceiling from txid (relminmxid), hit
   // by heavy row-locking (SELECT FOR SHARE/UPDATE, FK checks). The companion to
   // txidWraparound; a table can be safe on xid age yet aging on mxid.
+  // Ranks on greatest(main_table_mxid_age, toast_mxid_age) for the same reason
+  // as txidWraparound. remaining = transactions left before the 2^31 - 1000000
+  // wraparound ceiling.
   multixactWraparound: /* sql */ `
     select
       n.nspname as schema,
       n.nspname || '.' || c.relname as "table",
-      mxid_age(c.relminmxid) as mxid_age,
-      round(100 * mxid_age(c.relminmxid)::numeric / 2000000000, 1) as pct_wraparound
+      greatest(mxid_age(c.relminmxid), mxid_age(t.relminmxid)) as mxid_age,
+      mxid_age(t.relminmxid) as toast_mxid_age,
+      (2146483648 - greatest(mxid_age(c.relminmxid), mxid_age(t.relminmxid)))::bigint as remaining,
+      round(100 * greatest(mxid_age(c.relminmxid), mxid_age(t.relminmxid))::numeric / 2000000000, 1) as pct_wraparound
     from pg_class c
+    left join pg_class t on c.reltoastrelid = t.oid and t.relminmxid <> '0'::xid
     join pg_namespace n on n.oid = c.relnamespace
     where c.relkind in ('r', 'm')
       and n.nspname not in ('pg_catalog', 'information_schema', 'pg_toast')
       and c.relminmxid <> '0'::xid
-      and mxid_age(c.relminmxid) > 0
-    order by mxid_age(c.relminmxid) desc
+      and greatest(mxid_age(c.relminmxid), mxid_age(t.relminmxid)) > 0
+    order by greatest(mxid_age(c.relminmxid), mxid_age(t.relminmxid)) desc
     limit 20`,
+
+  // Prepared transactions: 2PC transactions that remain after the coordinator
+  // crashes or abandons them. Each holds an XID and can block freeze. Usually
+  // empty (Supabase projects rarely use 2PC); any row here is stale/orphaned.
+  preparedXacts: /* sql */ `
+    select
+      gid,
+      database,
+      owner,
+      prepared::text as prepared,
+      age(transaction) as xid_age
+    from pg_prepared_xacts
+    order by age(transaction) desc
+    limit 20`,
+
+  // Backends holding old xmin or xid (snapshot/transaction-blocking holders).
+  // Not narrowed to active clients - a WALSENDER or idle-in-transaction backend
+  // holding an ancient xmin is exactly the thing we're looking for. The
+  // collecting session is excluded so the query doesn't report itself at age 0.
+  xminHolders: /* sql */ `
+    select
+      pid,
+      datname,
+      usename,
+      state,
+      backend_type,
+      age(backend_xmin) as xmin_age,
+      age(backend_xid) as xid_age,
+      extract(epoch from (now() - xact_start))::bigint as xact_age_s,
+      left(regexp_replace(query, '\\s+', ' ', 'g'), 120) as query
+    from pg_stat_activity
+    where (backend_xmin is not null or backend_xid is not null)
+      and pid <> pg_backend_pid()
+    order by greatest(age(backend_xmin), age(backend_xid)) desc nulls last
+    limit 10`,
+
+  // Standby replicas via hot_standby_feedback (holding backend_xmin on the
+  // primary). Empty when no replication or hot_standby_feedback is off.
+  replicationXmin: /* sql */ `
+    select
+      application_name,
+      state,
+      sync_state,
+      age(backend_xmin) as xmin_age
+    from pg_stat_replication
+    where backend_xmin is not null
+    order by age(backend_xmin) desc nulls last`,
 
   // Tables never autovacuumed AND never manually vacuumed, with meaningful row
   // counts. A table autovacuum has never touched has never had its visibility
