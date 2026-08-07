@@ -15,6 +15,7 @@
     "lint": "biome check .",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
+    "check:alerts": "bun run scripts/check-alerts-drift.ts",
     "check:api": "bun run scripts/check-api-drift.ts",
     "check:inspect": "bun run scripts/check-inspect-drift.ts",
     "check:lints": "bun run scripts/check-lints-drift.ts",
@@ -23,7 +24,7 @@
     "check:docurls": "bun run scripts/check-docurls.ts",
     "smoke": "bun run smoke.ts",
     "build": "bun build ./src/index.ts --compile --outfile sbperf",
-    "test:live": "bun acceptance/live-sql.ts && bun acceptance/live-catalogue-sql.ts"
+    "test:live": "bun acceptance/live-sql.ts && bun acceptance/live-catalogue-sql.ts && bun acceptance/live-promtool.ts"
   },
   "dependencies": {
     "zod": "4.4.3"

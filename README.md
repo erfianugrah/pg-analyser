@@ -557,6 +557,22 @@ commands) is documented in detail in
 [`docs/grafana-prometheus.md`](docs/grafana-prometheus.md).
 
 `--prometheus` trends take precedence over the history store when both exist.
+
+### Alerting rules from the same thresholds
+
+Supabase serves the metrics endpoint but no in-product alerting. `alerts-init`
+emits the heuristics catalogue as a Prometheus alerting-rule pack - every
+expression is a trend-panel query and every number a `THRESHOLDS` constant, so a
+rule and the report card behind it cannot disagree:
+
+```bash
+bun run src/index.ts alerts-init --ref <ref>   # writes alerts-pack/alerts.yml + EXCLUSIONS.md
+```
+
+No PAT and no database - it is pure generation. `scrape-init` ships the same
+pack already mounted. Findings with no metric behind them (bloat, unused
+indexes, advisors) are NOT emitted as rules; `EXCLUSIONS.md` lists every one and
+why. See [`docs/alerts.md`](docs/alerts.md).
 For an **auth'd** datasource - e.g. a Grafana datasource-proxy path
 (`.../api/datasources/proxy/uid/<uid>`) - add auth: `--prometheus-token <t>` (a
 service-account bearer) or, when Grafana sits behind an SSO proxy that a

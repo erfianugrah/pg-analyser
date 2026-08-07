@@ -190,7 +190,10 @@ render "No data" against a pure self-scrape:
   (a separate `cloudwatch_exporter` job); the metrics endpoint carries none.
 
 The report labels which source fed the Resource snapshot and, when EBS is absent
-from an infra source, says so - a missing panel is not a health signal.
+from an infra source, says so - a missing panel is not a health signal. The
+alerting-rule pack ([`docs/alerts.md`](alerts.md)) applies the same rule: PSI and
+EBS rules go in a separate `-optional` group with a `requires` label, so an
+inert rule is never read as coverage.
 
 ---
 
