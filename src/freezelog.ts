@@ -34,6 +34,11 @@ export function parseFreezeLog(text: string): FreezeSummary | null {
   const relations = new Set<string>();
   const samples: string[] = [];
   const maxSamples = 10;
+  // Measured: a single forced-autovacuum pass over a real cluster logged 320
+  // anti-wraparound lines naming ~160 distinct relations. Unbounded, that set
+  // lands verbatim in analysis.json and the report, so cap it - the point is
+  // "which tables, roughly", not a complete inventory.
+  const maxRelations = 20;
 
   // Pattern 1: "must be vacuumed within N transactions" - the worst is the smallest N.
   const mustVacuumPattern =
@@ -66,7 +71,7 @@ export function parseFreezeLog(text: string): FreezeSummary | null {
     const antiMatch = line.match(antiVacuumPattern);
     if (antiMatch) {
       antiWraparoundVacuums++;
-      relations.add(antiMatch[1]!);
+      if (relations.size < maxRelations) relations.add(antiMatch[1]!);
       if (samples.length < maxSamples) {
         samples.push(line);
       }

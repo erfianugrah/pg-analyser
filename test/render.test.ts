@@ -86,6 +86,7 @@ function fixture(overrides: Partial<Analysis> = {}): Analysis {
       preparedXacts: [],
       xminHolders: [],
       replicationXmin: [],
+      antiWraparoundVacuums: [],
       rlsPolicies: [
         { table: "public.pastes", policyname: "view own", cmd: "SELECT", unwrapped_auth: true },
       ],
@@ -691,6 +692,7 @@ describe("renderSummary", () => {
         preparedXacts: [],
         xminHolders: [],
         replicationXmin: [],
+        antiWraparoundVacuums: [],
         rlsPolicies: [],
         connections: [],
         roleStats: [],
