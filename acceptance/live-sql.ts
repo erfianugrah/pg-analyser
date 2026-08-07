@@ -9,6 +9,11 @@
  * suite can only assume:  xid_age + remaining == 2^31 - 1000000.
  *
  * Usage: SBPERF_TEST_DB_URL=postgres://... bun acceptance/live-sql.ts
+ *
+ * Any Postgres will do - a throwaway cluster is enough:
+ *   initdb -D /tmp/pg -U postgres --auth=trust
+ *   pg_ctl -D /tmp/pg -o "-h 127.0.0.1 -p 55433 -c wal_level=logical \
+ *     -c max_prepared_transactions=4" -l /tmp/pg.log start
  * Exits 0 on success, 1 with a diagnosis on failure.
  */
 import { SQL } from "bun";
