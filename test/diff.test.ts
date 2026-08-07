@@ -64,6 +64,7 @@ function base(ref = "r", collectedAt = "2026-01-01T00:00:00Z"): Analysis {
       preparedXacts: [],
       xminHolders: [],
       replicationXmin: [],
+      antiWraparoundVacuums: [],
       rlsPolicies: [],
       connections: [],
       roleStats: [],

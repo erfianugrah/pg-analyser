@@ -148,3 +148,14 @@ describe("log-tail / relation-name query builders (sanitized inlining)", () => {
     expect(empty).toContain("array[0]::oid[]");
   });
 });
+
+describe("anti-wraparound autovacuum detection", () => {
+  test("filters pg_stat_activity to autovacuum workers doing wraparound work", () => {
+    const q = QUERIES.antiWraparoundVacuums.toLowerCase();
+    expect(q).toContain("pg_stat_activity");
+    expect(q).toContain("autovacuum worker");
+    // Measured on PostgreSQL 18.4: an anti-wraparound worker's query text ends
+    // with "(to prevent wraparound)".
+    expect(q).toContain("to prevent wraparound");
+  });
+});

@@ -71,6 +71,7 @@ function base(): Analysis {
       preparedXacts: [],
       xminHolders: [],
       replicationXmin: [],
+      antiWraparoundVacuums: [],
       rlsPolicies: [],
       connections: [],
       roleStats: [],
@@ -2356,5 +2357,34 @@ describe("new coverage findings (stage 2/3)", () => {
   test("managed_schema_no_pk: no finding when managed schemas are intact", () => {
     const a = base();
     expect(deriveFindings(a).some((x) => x.heuristicId === "managed_schema_no_pk")).toBe(false);
+  });
+});
+
+describe("anti-wraparound autovacuum in flight", () => {
+  test("annotates the freeze finding: the mechanism is already running", () => {
+    const a = base();
+    a.sql.txidWraparound = [
+      { schema: "public", table: "public.t", xid_age: 250_000_000, remaining: 1_896_483_648 },
+    ];
+    a.sql.antiWraparoundVacuums = [
+      {
+        pid: 4242,
+        datname: "postgres",
+        running_s: 900,
+        query: "autovacuum: VACUUM public.t (to prevent wraparound)",
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "txid_wraparound");
+    expect(f).toBeDefined();
+    expect(f?.evidence ?? "").toContain("forced anti-wraparound autovacuum");
+  });
+
+  test("says nothing when no forced worker is running", () => {
+    const a = base();
+    a.sql.txidWraparound = [
+      { schema: "public", table: "public.t", xid_age: 250_000_000, remaining: 1_896_483_648 },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "txid_wraparound");
+    expect(f?.evidence ?? "").not.toContain("forced anti-wraparound");
   });
 });

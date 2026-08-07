@@ -52,3 +52,19 @@ describe("parseFreezeLog", () => {
     expect((r?.samples ?? []).length).toBeLessThanOrEqual(20);
   });
 });
+
+describe("bounded output", () => {
+  test("relations are capped so a wide anti-wraparound sweep cannot bloat the report", () => {
+    // Measured: one forced-autovacuum pass on a real cluster logged 320 lines
+    // naming ~160 distinct relations.
+    const log = Array.from(
+      { length: 300 },
+      (_, i) =>
+        `2026-08-07 10:17:50 UTC [1] LOG:  automatic aggressive vacuum to prevent wraparound of table "db.public.t${i}": index scans: 0`,
+    ).join("\n");
+    const r = parseFreezeLog(log);
+    expect(r?.antiWraparoundVacuums).toBe(300);
+    expect((r?.relations ?? []).length).toBeLessThanOrEqual(20);
+    expect((r?.samples ?? []).length).toBeLessThanOrEqual(20);
+  });
+});
