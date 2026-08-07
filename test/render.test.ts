@@ -897,3 +897,23 @@ describe("finding-card formatting", () => {
     expect(html).toContain("<code>supabase inspect db cache</code>");
   });
 });
+
+describe("horizon-blocker section is about blockers", () => {
+  test("a backend at xmin_age 0 does not conjure the section", () => {
+    // Measured on a live fleet: every healthy project has active backends whose
+    // snapshot xmin equals the current XID. They hold nothing back.
+    const a = fixture();
+    a.sql.xminHolders = [
+      { pid: 3039111, backend_type: "client backend", state: "active", xmin_age: 0, xid_age: null },
+    ];
+    expect(render(a)).not.toContain('id="xmin"');
+  });
+
+  test("a backend with a real hold does", () => {
+    const a = fixture();
+    a.sql.xminHolders = [{ pid: 42, xmin_age: 300_000_000, xid_age: null }];
+    const html = render(a);
+    expect(html).toContain('id="xmin"');
+    expect(html).toContain("42");
+  });
+});

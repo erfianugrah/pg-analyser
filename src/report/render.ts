@@ -906,8 +906,8 @@ export function render(
         (r) => Number(r.xmin_age) > 0 || Number(r.catalog_xmin_age) > 0,
       ) ||
       a.sql.preparedXacts.length > 0 ||
-      a.sql.xminHolders.length > 0 ||
-      a.sql.replicationXmin.length > 0 ||
+      a.sql.xminHolders.some((r) => Number(r.xmin_age) > 0 || Number(r.xid_age) > 0) ||
+      a.sql.replicationXmin.some((r) => Number(r.xmin_age) > 0) ||
       a.sql.antiWraparoundVacuums.length > 0,
     walarchiving: a.sql.walArchiving.length > 0,
     longrunning: a.sql.longRunning.length > 0,
@@ -1477,9 +1477,14 @@ function xminHoldersSection(a: Analysis): string {
     );
   }
 
-  // Backends holding xmin/xid
-  if (a.sql.xminHolders.length) {
-    const body = a.sql.xminHolders
+  // Backends holding xmin/xid. A backend at age 0 holds nothing back - its
+  // snapshot is current - so listing it under "horizon blockers" is noise that
+  // showed up on every healthy project in a live fleet run. Only real holds.
+  const backendHolders = a.sql.xminHolders.filter(
+    (r) => Number(r.xmin_age) > 0 || Number(r.xid_age) > 0,
+  );
+  if (backendHolders.length) {
+    const body = backendHolders
       .map(
         (r) =>
           `<tr><td class=mono>${esc(r.pid)}</td><td>${esc(r.xmin_age ?? "-")}</td><td>${esc(r.xid_age ?? "-")}</td></tr>`,
@@ -1491,8 +1496,9 @@ function xminHoldersSection(a: Analysis): string {
   }
 
   // Standby feedback
-  if (a.sql.replicationXmin.length) {
-    const body = a.sql.replicationXmin
+  const standbyHolders = a.sql.replicationXmin.filter((r) => Number(r.xmin_age) > 0);
+  if (standbyHolders.length) {
+    const body = standbyHolders
       .map(
         (r) =>
           `<tr><td class=mono>${esc(r.application_name)}</td><td>${esc(r.xmin_age ?? "-")}</td></tr>`,
