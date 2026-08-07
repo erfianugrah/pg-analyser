@@ -1,5 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { buildAlertRules, renderAlertsYaml } from "./alerts.ts";
 import type { Config } from "./config.ts";
 import { Management } from "./management.ts";
 import { buildPanels } from "./prometheus.ts";
@@ -18,6 +19,11 @@ export async function writeScraper(ref: string, config: Config, dir: string): Pr
 global:
   scrape_interval: 60s
   scrape_timeout: 30s
+
+# Alerting rules generated from the sbperf heuristics catalogue (alerts.ts).
+# Regenerate with 'sbperf alerts-init --ref <ref>'; do not hand-edit.
+rule_files:
+  - /etc/prometheus/alerts.yml
 
 scrape_configs:
   - job_name: supabase
@@ -39,6 +45,7 @@ services:
       - --storage.tsdb.retention.time=90d
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus-data:/prometheus
     ports:
       - "9090:9090"
@@ -91,6 +98,13 @@ providers:
 
   await Promise.all([
     Bun.write(join(dir, "prometheus.yml"), prometheusYml),
+    Bun.write(
+      join(dir, "alerts.yml"),
+      renderAlertsYaml(
+        buildAlertRules({ refMatcher: `supabase_project_ref="${ref}"` }),
+        `sbperf-${ref}`,
+      ),
+    ),
     Bun.write(join(dir, "compose.yml"), composeYml),
     Bun.write(join(dir, "grafana/provisioning/datasources/prometheus.yml"), datasourceYml),
     Bun.write(join(dir, "grafana/provisioning/dashboards/dashboards.yml"), dashProviderYml),

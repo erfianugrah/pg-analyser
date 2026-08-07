@@ -41,6 +41,7 @@ enumerates + serves API/metrics; matched projects upgrade to superuser SQL).
 | `bun run src/index.ts scrape-init --ref <ref>` | write the (alternate) Prometheus+Grafana stack |
 | `bun run check` | biome format + lint (write) |
 | `bun run typecheck` | `tsc --noEmit` |
+| `bun run check:alerts` | assert every heuristic is alerted-or-excluded, and every alert metric is corpus-confirmed or declared |
 | `bun run check:api` | assert endpoints still exist in the upstream OpenAPI spec |
 | `bun run check:inspect` | warn when upstream CLI inspect SQL drifts from our derived baseline |
 | `bun run check:lints` | warn when splinter lints drift from the src/lints.ts fix catalog |
@@ -513,7 +514,15 @@ src/
   promexport.ts  history store -> OpenMetrics (timestamped) for `export-prometheus`;
                  promtool backfills a Prometheus TSDB -> retroactive Grafana
   scraper.ts     generate a going-forward Prometheus+Grafana stack (alternate
-                 trend source; `report` prefers --prometheus over the store)
+                 trend source; `report` prefers --prometheus over the store);
+                 also emits + mounts the alerts.ts rule pack
+  alerts.ts      Prometheus alerting rules generated from the SAME catalogue that
+                 ranks findings. A finding earns a rule only if its signal is
+                 already a buildPanels() panel AND its threshold survives a
+                 PromQL range window; everything else is in EXCLUSIONS /
+                 PLANE_EXCLUSIONS with the failing clause named, and
+                 unclassifiedHeuristics() must stay empty. Pure - the file
+                 writing lives in index.ts doAlertsInit. Docs: docs/alerts.md
   importtrends.ts vendor-neutral trend import: parse external CSV (wide: time +
                  series columns, "Title [unit]" headers) / JSON (TrendSeries[] or
                  {t,v}/[t,v] points; ISO or epoch s/ms) -> merge into
