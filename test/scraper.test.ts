@@ -61,5 +61,18 @@ describe("writeScraper", () => {
     expect(await readFile(join(dir, "compose.yml"), "utf8")).toContain("prometheus-data:");
     // credentials must not be committed
     expect(await readFile(join(dir, ".gitignore"), "utf8")).toContain("prometheus.yml");
+    // the alerting-rule pack ships with the stack and is actually loaded - a rule
+    // file nobody mounts is a rule file that never fires
+    const promYml = await readFile(join(dir, "prometheus.yml"), "utf8");
+    expect(promYml).toContain("rule_files:");
+    expect(promYml).toContain("- /etc/prometheus/alerts.yml");
+    expect(await readFile(join(dir, "compose.yml"), "utf8")).toContain(
+      "./alerts.yml:/etc/prometheus/alerts.yml:ro",
+    );
+    const alerts = await readFile(join(dir, "alerts.yml"), "utf8");
+    expect(alerts).toContain("- name: sbperf-myref");
+    expect(alerts).toContain('supabase_project_ref="myref"');
+    // alerts.yml carries no credential, so it is NOT gitignored
+    expect(await readFile(join(dir, ".gitignore"), "utf8")).not.toContain("alerts.yml");
   });
 });
