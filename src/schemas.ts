@@ -395,6 +395,8 @@ export const Analysis = z.object({
     tableIoStats: SqlRows.default([]),
     deadTuples: SqlRows,
     txidWraparound: SqlRows,
+    // Database-level transaction-ID age (includes catalogs). Back-compat default.
+    databaseFreezeAge: SqlRows.default([]),
     // Multixact-ID wraparound (separate 2B ceiling from txid). Back-compat default.
     multixactWraparound: SqlRows.default([]),
     // Tables never (auto)vacuumed with meaningful rows. Back-compat default.
@@ -417,6 +419,12 @@ export const Analysis = z.object({
     // Whether the PUBLIC role can CREATE in schema public. Back-compat default.
     publicSchemaCreate: SqlRows.default([]),
     replicationSlots: SqlRows,
+    // Prepared transactions holding XIDs. Back-compat default.
+    preparedXacts: SqlRows.default([]),
+    // Backends holding old xmin or xid. Back-compat default.
+    xminHolders: SqlRows.default([]),
+    // Standby replicas via hot_standby_feedback. Back-compat default.
+    replicationXmin: SqlRows.default([]),
     rlsPolicies: SqlRows,
     connections: SqlRows,
     roleStats: SqlRows,
@@ -489,6 +497,16 @@ export const Analysis = z.object({
         topRelations: z.array(
           z.object({ relid: z.number(), name: z.string().nullable(), hits: z.number() }),
         ),
+        samples: z.array(z.string()),
+      })
+      .nullable()
+      .default(null),
+    freezeLog: z
+      .object({
+        mustVacuumWithin: z.number().nullable(),
+        oldestXminWarnings: z.number(),
+        antiWraparoundVacuums: z.number(),
+        relations: z.array(z.string()),
         samples: z.array(z.string()),
       })
       .nullable()

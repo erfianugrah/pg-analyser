@@ -1,4 +1,5 @@
 import { detectEpisodes } from "./contention.ts";
+import { parseFreezeLog } from "./freezelog.ts";
 import { parseLockLog } from "./locklog.ts";
 import { type Logger, log } from "./log.ts";
 import { Management } from "./management.ts";
@@ -244,6 +245,7 @@ export async function collect(
     tableIoStats,
     deadTuples,
     txidWraparound,
+    databaseFreezeAge,
     multixactWraparound,
     sequenceExhaustion,
     neverVacuumed,
@@ -255,6 +257,9 @@ export async function collect(
     hotUpdates,
     publicSchemaCreate,
     replicationSlots,
+    preparedXacts,
+    xminHolders,
+    replicationXmin,
     rlsPolicies,
     connections,
     roleStats,
@@ -312,6 +317,7 @@ export async function collect(
     sql("tableIoStats"),
     sql("deadTuples"),
     sql("txidWraparound"),
+    sql("databaseFreezeAge"),
     sql("multixactWraparound"),
     sql("sequenceExhaustion"),
     sql("neverVacuumed"),
@@ -323,6 +329,9 @@ export async function collect(
     sql("hotUpdates"),
     sql("publicSchemaCreate"),
     sql("replicationSlots"),
+    sql("preparedXacts"),
+    sql("xminHolders"),
+    sql("replicationXmin"),
     sql("rlsPolicies"),
     sql("connections"),
     sql("roleStats"),
@@ -760,6 +769,7 @@ export async function collect(
   // the raw log text lives only in this local scope; only the parsed,
   // literal-free LockWaveSummary is stored in analysis.json.
   let lockWave: Analysis["sql"]["lockWave"] = null;
+  let freezeLog: Analysis["sql"]["freezeLog"] = null;
   if (logProbe?.readable && probeRows.length > 0) {
     const CHUNK = 4_000_000;
     const RUN_BUDGET = 20_000_000;
@@ -780,7 +790,8 @@ export async function collect(
         }
       }
       if (chunks.length > 0) {
-        const summary = parseLockLog(chunks.join("\n"), {
+        const text = chunks.join("\n");
+        const summary = parseLockLog(text, {
           from: null,
           to: null,
           files: chunks.length,
@@ -808,9 +819,10 @@ export async function collect(
           }
         }
         lockWave = summary;
+        freezeLog = parseFreezeLog(text);
       }
     } catch (err) {
-      clog.debug("lock-wave log read failed", { error: String(err) });
+      clog.debug("log read failed", { error: String(err) });
     }
   }
 
@@ -897,6 +909,7 @@ export async function collect(
       tableIoStats,
       deadTuples,
       txidWraparound,
+      databaseFreezeAge,
       multixactWraparound,
       sequenceExhaustion,
       neverVacuumed,
@@ -908,6 +921,9 @@ export async function collect(
       hotUpdates,
       publicSchemaCreate,
       replicationSlots,
+      preparedXacts,
+      xminHolders,
+      replicationXmin,
       rlsPolicies: rlsClassified,
       connections,
       roleStats,
@@ -929,6 +945,7 @@ export async function collect(
       cronJobs,
       waitSamples,
       lockWave,
+      freezeLog,
     },
     metrics: { available: metricsText != null, samples },
     trends,

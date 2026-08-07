@@ -730,6 +730,8 @@ export interface IndexRow {
   low: number;
   dir: string;
   error?: string;
+  txidRemaining?: number;
+  txidEtaDays?: number;
 }
 
 /** Org-level index page linking every project report. */
@@ -762,12 +764,19 @@ export function renderIndex(
             : r.med > 0
               ? '<span class="lvl WARN">med</span>'
               : '<span class="lvl INFO">low</span>';
+      const headroom = (() => {
+        if (r.txidRemaining === undefined) return "-";
+        if (r.txidRemaining <= 3_000_000) return `${r.txidRemaining.toLocaleString()} (critical)`;
+        if (r.txidEtaDays !== undefined && r.txidEtaDays > 0) return `${r.txidEtaDays} days`;
+        return r.txidRemaining.toLocaleString();
+      })();
       return `<tr>
       <td><a href="${esc(r.dir)}/report.html">${esc(r.name)}</a></td>
       <td class=mono>${esc(r.ref)}</td>
       <td>${statusCell}</td>
       <td>${r.error ? esc(r.error) : `${r.high} / ${r.med} / ${r.low}`}</td>
       <td>${sev}</td>
+      <td class=mono>${headroom}</td>
     </tr>`;
     })
     .join("");
@@ -789,7 +798,7 @@ export function renderIndex(
 </style></head><body>
 ${brandHead(brand, "Supabase performance - org report")}
 <div class=meta>${rows.length} projects &middot; collected ${esc(collectedAt)} &middot; findings shown as high / med / low</div>
-<table><thead><tr><th>project</th><th>ref</th><th>status</th><th>findings</th><th>top sev</th></tr></thead><tbody>${body}</tbody></table>
+<table><thead><tr><th>project</th><th>ref</th><th>status</th><th>findings</th><th>top sev</th><th>txid headroom</th></tr></thead><tbody>${body}</tbody></table>
 </body></html>`;
 }
 
@@ -885,8 +894,20 @@ export function render(
       }),
     txid:
       errored.has("sql:txidWraparound") ||
-      a.sql.txidWraparound.some((r) => (Number(r.pct_wraparound) || 0) >= THRESHOLDS.txidWarnPct),
+      a.sql.txidWraparound.some(
+        (r) =>
+          Number(r.xid_age) >= THRESHOLDS.freezeBlockedAge ||
+          (Number(r.pct_wraparound) || 0) >= THRESHOLDS.txidWarnPct,
+      ) ||
+      a.sql.databaseFreezeAge.some((r) => Number(r.xid_age) >= THRESHOLDS.freezeBlockedAge),
     slots: a.sql.replicationSlots.length > 0,
+    xmin:
+      a.sql.replicationSlots.some(
+        (r) => Number(r.xmin_age) > 0 || Number(r.catalog_xmin_age) > 0,
+      ) ||
+      a.sql.preparedXacts.length > 0 ||
+      a.sql.xminHolders.length > 0 ||
+      a.sql.replicationXmin.length > 0,
     walarchiving: a.sql.walArchiving.length > 0,
     longrunning: a.sql.longRunning.length > 0,
     locks: a.sql.locks.length > 0,
@@ -1061,10 +1082,49 @@ ${drill("deadtuples", "Dead tuples / autovacuum", "overdue = dead tuples past th
 ${a.sql.neverVacuumed.length ? drill("nevervacuumed", "Never vacuumed", "tables autovacuum has never touched (>=10k rows) - no visibility map, stale planner stats", sqlTable(a.sql.neverVacuumed, { mono: ["table"], hide: ["schema"] })) : ""}
 ${a.sql.hotUpdates.length ? drill("hotupdates", "Low HOT-update ratio", "high-update tables where few UPDATEs were HOT (heap-only) - each non-HOT update adds an entry to every index and leaves a dead heap tuple; caused by an updated column that is indexed, or full pages (fillfactor)", sqlTable(a.sql.hotUpdates, { mono: ["table"], hide: ["schema"] })) : ""}
 ${show.roles ? drill("roles", "Role connection usage", "active connections vs each role's limit (shown when a role nears its limit)", sec(a.sql.roleStats, "sql:roleStats", { mono: ["role"] })) : ""}
-${show.txid ? drill("txid", "Transaction-ID wraparound", "age(relfrozenxid) vs 2B ceiling; shown when a table approaches the wraparound threshold", sec(a.sql.txidWraparound, "sql:txidWraparound", { mono: ["table"], hide: ["schema"] })) : ""}
+${
+  show.txid
+    ? drill(
+        "txid",
+        "Transaction-ID wraparound",
+        "age(relfrozenxid) and datfrozenxid vs 2B ceiling; shown when a table or the database approaches the wraparound threshold",
+        errored.has("sql:txidWraparound") || errored.has("sql:databaseFreezeAge")
+          ? `<p class="empty warn-text">not collected - see notes</p>`
+          : (() => {
+              const parts: string[] = [];
+              if (a.sql.databaseFreezeAge.length) {
+                const body = a.sql.databaseFreezeAge
+                  .map(
+                    (r) =>
+                      `<tr><td class=mono>${esc(r.datname)}</td><td class=mono>${esc(r.xid_age ?? "-")}</td><td class=mono>${esc(r.remaining ?? "-")}</td><td class=mono>${esc(r.mxid_age ?? "-")}</td></tr>`,
+                  )
+                  .join("");
+                parts.push(
+                  `<p class=lead>Database freeze age</p><table><thead><tr><th>database</th><th>xid_age</th><th>remaining</th><th>mxid_age</th></tr></thead><tbody>${body}</tbody></table>`,
+                );
+              }
+              if (a.sql.txidWraparound.length) {
+                const body = a.sql.txidWraparound
+                  .map(
+                    (r) =>
+                      `<tr><td class=mono>${esc(r.table)}</td><td class=mono>${esc(r.xid_age ?? "-")}</td><td class=mono>${esc(r.remaining ?? "-")}</td><td class=mono>${esc(r.toast_age ?? "-")}</td></tr>`,
+                  )
+                  .join("");
+                parts.push(
+                  `<p class=lead>Table wraparound ages</p><table><thead><tr><th>table</th><th>xid_age</th><th>remaining</th><th>toast_age</th></tr></thead><tbody>${body}</tbody></table>`,
+                );
+              }
+              return parts.length
+                ? parts.join("\n")
+                : `<p class=empty>no tables or database approaching wraparound</p>`;
+            })(),
+      )
+    : ""
+}
 ${a.sql.multixactWraparound.length ? drill("multixact", "Multixact-ID wraparound", "mxid_age(relminmxid) vs its own 2B ceiling - consumed by heavy row locking, separate from txid", sqlTable(a.sql.multixactWraparound, { mono: ["table"], hide: ["schema"] })) : ""}
 ${a.sql.sequenceExhaustion.length ? drill("sequences", "Sequence exhaustion", "int4/serial sequences approaching their 2^31 ceiling - a hard INSERT failure when full", sqlTable(a.sql.sequenceExhaustion, { mono: ["sequence"], hide: ["schema"] })) : ""}
 ${show.slots ? drill("slots", "Replication slots", "retained WAL; inactive slots pin disk", sqlTable(a.sql.replicationSlots, { mono: ["slot_name"], hide: ["retained_wal_bytes"] })) : ""}
+${show.xmin ? drill("xmin", "Transaction-ID horizon blockers", "replication slots, prepared transactions, active backends, standby feedback holding old xmin/xid - must be cleared before the freeze horizon advances", xminHoldersSection(a)) : ""}
 ${show.walarchiving ? drill("walarchiving", "WAL archiving", "pg_stat_archiver + archive_mode (superuser SQL); continuous WAL shipping is the mechanism PITR relies on - inferred here, not the platform add-on flag", sqlTable(a.sql.walArchiving, { mono: ["last_archived_wal"] })) : ""}
 ${a.sql.queryIoStats.length ? drill("queryio", "Query I/O + latency stability", "per-query temp-file spill (work_mem), disk-read miss %, and latency variation (stddev/mean) - the depth top-by-time misses", sqlTable(a.sql.queryIoStats, { mono: ["query"], hide: ["queryid", "temp_blks_written", "shared_blks_read"] })) : ""}
 ${a.sql.topByWal.length ? drill("walbystatement", "WAL by statement", "top WAL-generating statements (pg_stat_statements.wal_bytes) - write-amplification attribution", sqlTable(a.sql.topByWal, { mono: ["query"], hide: ["queryid", "wal_bytes"] })) : ""}
@@ -1377,6 +1437,74 @@ function poolerSection(a: Analysis): string {
     )
     .join("");
   return `<table><thead><tr><th>database</th><th>port</th><th>pool mode</th><th>default pool size</th><th>max client conn</th></tr></thead><tbody>${body}</tbody></table>`;
+}
+
+/**
+ * Render xmin-holding transactions (replication slots, prepared transactions,
+ * backends, standby feedback) that block the freeze horizon. Each holder class
+ * is shown in its own mini-table when present.
+ */
+function xminHoldersSection(a: Analysis): string {
+  const parts: string[] = [];
+
+  // Replication slots with xmin ages
+  const slotHolders = a.sql.replicationSlots.filter(
+    (r) => Number(r.xmin_age) > 0 || Number(r.catalog_xmin_age) > 0,
+  );
+  if (slotHolders.length) {
+    const body = slotHolders
+      .map(
+        (r) =>
+          `<tr><td class=mono>${esc(r.slot_name)}</td><td>${esc(r.slot_type)}</td><td>${esc(r.xmin_age ?? "-")}</td><td>${esc(r.catalog_xmin_age ?? "-")}</td><td>${esc(r.wal_status ?? "-")}</td></tr>`,
+      )
+      .join("");
+    parts.push(
+      `<p class=lead>Replication slots</p><table><thead><tr><th>slot</th><th>type</th><th>xmin_age</th><th>catalog_xmin_age</th><th>wal_status</th></tr></thead><tbody>${body}</tbody></table>`,
+    );
+  }
+
+  // Prepared transactions
+  if (a.sql.preparedXacts.length) {
+    const body = a.sql.preparedXacts
+      .map(
+        (r) =>
+          `<tr><td class=mono>${esc(r.gid)}</td><td>${esc(r.database)}</td><td>${esc(r.xid_age ?? "-")}</td></tr>`,
+      )
+      .join("");
+    parts.push(
+      `<p class=lead>Prepared transactions</p><table><thead><tr><th>gid</th><th>database</th><th>xid_age</th></tr></thead><tbody>${body}</tbody></table>`,
+    );
+  }
+
+  // Backends holding xmin/xid
+  if (a.sql.xminHolders.length) {
+    const body = a.sql.xminHolders
+      .map(
+        (r) =>
+          `<tr><td class=mono>${esc(r.pid)}</td><td>${esc(r.xmin_age ?? "-")}</td><td>${esc(r.xid_age ?? "-")}</td></tr>`,
+      )
+      .join("");
+    parts.push(
+      `<p class=lead>Active backends</p><table><thead><tr><th>pid</th><th>xmin_age</th><th>xid_age</th></tr></thead><tbody>${body}</tbody></table>`,
+    );
+  }
+
+  // Standby feedback
+  if (a.sql.replicationXmin.length) {
+    const body = a.sql.replicationXmin
+      .map(
+        (r) =>
+          `<tr><td class=mono>${esc(r.application_name)}</td><td>${esc(r.xmin_age ?? "-")}</td></tr>`,
+      )
+      .join("");
+    parts.push(
+      `<p class=lead>Standby hot_standby_feedback</p><table><thead><tr><th>application</th><th>xmin_age</th></tr></thead><tbody>${body}</tbody></table>`,
+    );
+  }
+
+  return parts.length
+    ? parts.join("\n")
+    : `<p class=empty>no xmin holders blocking the freeze horizon</p>`;
 }
 
 /**

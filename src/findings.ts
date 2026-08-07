@@ -318,6 +318,29 @@ export function configTuningFindings(a: Analysis): Finding[] {
     });
   }
 
+  // autovacuum freeze tuning: either autovacuum is off (nothing will ever freeze)
+  // or freeze_max_age is too high (freeze waits too long before starting).
+  const autovac = set.get("autovacuum");
+  const freezeMaxAge = num(set.get("autovacuum_freeze_max_age"));
+  if (autovac === "off") {
+    out.push({
+      severity: "high",
+      category: "Capacity",
+      title:
+        "autovacuum is off - tables will never be frozen, transaction-ID wraparound is inevitable",
+      anchor,
+      ...meta("autovacuum_freeze_tuning"),
+    });
+  } else if (freezeMaxAge != null && freezeMaxAge > THRESHOLDS.freezeBlockedAge) {
+    out.push({
+      severity: "med",
+      category: "Capacity",
+      title: `autovacuum_freeze_max_age is ${freezeMaxAge} (above the ${THRESHOLDS.freezeBlockedAge} default) - tables age before freeze autovacuum starts`,
+      anchor,
+      ...meta("autovacuum_freeze_tuning"),
+    });
+  }
+
   return out;
 }
 
@@ -844,6 +867,10 @@ export function countDepletionEpisodes(points: { v: number }[], threshold: numbe
 export function deriveFindings(a: Analysis): Finding[] {
   const out: Finding[] = [];
   const set = settingsMap(a.sql.pgSettings);
+  // Track which SQL planes errored (were not collected). Used later to gate
+  // findings that depend on having non-error data (e.g. freeze_blocked_no_holder
+  // only fires if the holder planes actually ran, not if they errored).
+  const errored = new Set(a.errors.map((e) => e.source));
   // Which upstream advisor lints already fired. The SQL-derived unused/duplicate
   // index findings below are FALLBACKS for when advisors are unavailable (e.g.
   // the hosted advisors/performance endpoint 400s and no superuser --db-url is
@@ -1248,8 +1275,107 @@ export function deriveFindings(a: Analysis): Finding[] {
     }
   }
   // Transaction-ID wraparound headroom (age(relfrozenxid) toward the 2B ceiling).
+  // Rank on absolute transactions remaining (XID_CEILING - max_age), not percentage.
+  // Fire when maxAge >= freezeBlockedAge (200M XIDs consumed). Escalate
+  // when remaining drops to the Postgres escalation points:
+  // - freezeWarnRemaining (40M): Postgres logs warnings
+  // - freezeStopRemaining (3M): Postgres starts refusing writes (database is read-only)
+  // Also consider database-level freeze age (pg_database.datfrozenxid), which can
+  // block per-table vacuums: the whole database's freeze is as old as the catalog.
+  const tableAges = a.sql.txidWraparound.map((r) => num(r.xid_age)).filter((n) => n > 0);
+  const dbAges = a.sql.databaseFreezeAge.map((r) => num(r.xid_age)).filter((n) => n > 0);
+  const maxAge = Math.max(...tableAges, ...dbAges, 0);
   const maxXidPct = a.sql.txidWraparound.reduce((mx, r) => Math.max(mx, num(r.pct_wraparound)), 0);
-  if (maxXidPct >= THRESHOLDS.txidWarnPct) {
+  // Check if remaining column is present in any row (new SQL); if all rows lack it,
+  // fall back to pct-based ranking for back-compat with old analysis.json files.
+  // Bun.SQL may return int8 as strings, so coerce for the check.
+  const hasRemaining =
+    a.sql.txidWraparound.some(
+      (r) => typeof r.remaining === "number" || typeof r.remaining === "string",
+    ) ||
+    a.sql.databaseFreezeAge.some(
+      (r) => typeof r.remaining === "number" || typeof r.remaining === "string",
+    );
+  const getRemaining = (row: SqlRow): number | null => {
+    const r = row.remaining;
+    if (typeof r === "number") return r;
+    if (typeof r === "string") return Number(r);
+    return null;
+  };
+  const remaining = THRESHOLDS.XID_CEILING - maxAge;
+  // Pre-compute blocker presence for severity escalation
+  const slotHolders_ = a.sql.replicationSlots
+    .map((r) => ({
+      type: "replication slot",
+      name: String(r.slot_name),
+      age: Math.max(num(r.xmin_age) ?? 0, num(r.catalog_xmin_age) ?? 0),
+    }))
+    .filter((h) => h.age >= THRESHOLDS.xminHolderAge);
+  const preparedHolders_ = a.sql.preparedXacts
+    .map((r) => ({
+      type: "prepared transaction",
+      name: String(r.gid),
+      age: num(r.xid_age),
+    }))
+    .filter((h) => h.age >= THRESHOLDS.xminHolderAge);
+  const xminHolders_pre = a.sql.xminHolders
+    .map((r) => ({
+      type: "backend",
+      name: `pid ${num(r.pid)}`,
+      age: Math.max(num(r.xmin_age) ?? 0, num(r.xid_age) ?? 0),
+    }))
+    .filter((h) => h.age >= THRESHOLDS.xminHolderAge);
+  const replicationHolders_ = a.sql.replicationXmin
+    .map((r) => ({
+      type: "standby",
+      name: String(r.application_name),
+      age: num(r.xmin_age),
+    }))
+    .filter((h) => h.age >= THRESHOLDS.xminHolderAge);
+  const allHolders_ = [
+    ...slotHolders_,
+    ...preparedHolders_,
+    ...xminHolders_pre,
+    ...replicationHolders_,
+  ];
+  if (hasRemaining && maxAge >= THRESHOLDS.freezeBlockedAge) {
+    const isStopping = remaining <= THRESHOLDS.freezeStopRemaining;
+    const isWarning = remaining <= THRESHOLDS.freezeWarnRemaining;
+    // Find the best remaining value (prefer explicit column over computed)
+    const explicit = Math.min(
+      ...a.sql.txidWraparound.map((r) => getRemaining(r)).filter((r) => r !== null),
+      ...a.sql.databaseFreezeAge.map((r) => getRemaining(r)).filter((r) => r !== null),
+    );
+    const bestRemaining = Number.isFinite(explicit) ? explicit : remaining;
+    const dbFreezeAge = a.sql.databaseFreezeAge[0] ? num(a.sql.databaseFreezeAge[0].xid_age) : null;
+    const maxTableAge = a.sql.txidWraparound[0] ? num(a.sql.txidWraparound[0].xid_age) : null;
+    const isDatabase = dbFreezeAge != null && (maxTableAge == null || dbFreezeAge >= maxTableAge);
+    const attribution = isDatabase ? "(database)" : "(table)";
+    const text = isStopping
+      ? "XID assignment is refused; database is read-only"
+      : isWarning
+        ? "Postgres is logging warnings and approaching the point where writes will be refused"
+        : "";
+    const hasBlocker = allHolders_.length > 0;
+    const titleSuffix = isStopping
+      ? "(writes are refused - emergency vacuum required)"
+      : "(freeze autovacuum falling behind)";
+    const evidenceLines =
+      hasBlocker && allHolders_.length > 0
+        ? `Blocking holder(s): ${allHolders_
+            .map((h) => `${h.type} ${h.name} (${h.age.toLocaleString()} XIDs)`)
+            .join("; ")}.`
+        : "";
+    out.push({
+      severity: isStopping || isWarning || hasBlocker ? "high" : "med",
+      category: "Capacity",
+      title: `Transaction-ID wraparound at ${maxAge.toLocaleString()} age, ${bestRemaining.toLocaleString()} remaining ${attribution} ${titleSuffix}`,
+      evidence: [text, evidenceLines].filter(Boolean).join(" "),
+      anchor: "#txid",
+      ...meta("txid_wraparound"),
+    });
+  } else if (maxXidPct >= THRESHOLDS.txidWarnPct) {
+    // Back-compat path: old analysis.json without remaining column, rank on pct.
     out.push({
       severity: maxXidPct >= THRESHOLDS.txidHighPct ? "high" : "med",
       category: "Capacity",
@@ -1263,13 +1389,95 @@ export function deriveFindings(a: Analysis): Finding[] {
     (mx, r) => Math.max(mx, num(r.pct_wraparound)),
     0,
   );
-  if (maxMxidPct >= THRESHOLDS.txidWarnPct) {
+  const maxMxidAge = a.sql.multixactWraparound.map((r) => num(r.mxid_age)).filter((n) => n > 0);
+  const maxMxidAgeVal = Math.max(...maxMxidAge, 0);
+  const hasMxidRemaining = a.sql.multixactWraparound.some(
+    (r) => typeof r.remaining === "number" || typeof r.remaining === "string",
+  );
+  if (hasMxidRemaining && maxMxidAgeVal >= THRESHOLDS.freezeBlockedAge) {
+    const mxidRemaining = Math.min(
+      ...a.sql.multixactWraparound.map((r) => getRemaining(r)).filter((r) => r !== null),
+      THRESHOLDS.XID_CEILING - maxMxidAgeVal,
+    );
+    const isMxidStopping = mxidRemaining <= THRESHOLDS.freezeStopRemaining;
+    const isMxidWarning = mxidRemaining <= THRESHOLDS.freezeWarnRemaining;
+    const text = isMxidStopping
+      ? "Multixact-ID assignment is refused; database is read-only"
+      : isMxidWarning
+        ? "Postgres is logging warnings and approaching the point where writes will be refused"
+        : "";
+    const actualMxidRemaining =
+      Number.isFinite(mxidRemaining) && mxidRemaining >= 0
+        ? mxidRemaining
+        : THRESHOLDS.XID_CEILING - maxMxidAgeVal;
+    out.push({
+      severity: isMxidWarning ? "high" : "med",
+      category: "Capacity",
+      title: `Multixact-ID wraparound at ${maxMxidAgeVal.toLocaleString()} age, ${actualMxidRemaining.toLocaleString()} remaining (heavy row locking; freeze falling behind)`,
+      evidence: text,
+      anchor: "#multixact",
+      ...meta("multixact_wraparound"),
+    });
+  } else if (maxMxidPct >= THRESHOLDS.txidWarnPct) {
     out.push({
       severity: maxMxidPct >= THRESHOLDS.txidHighPct ? "high" : "med",
       category: "Capacity",
       title: `Multixact-ID wraparound at ${maxMxidPct}% on the oldest table (heavy row locking; freeze falling behind)`,
       anchor: "#multixact",
       ...meta("multixact_wraparound"),
+    });
+  }
+  // Wraparound projection: if the txid age is climbing in the trends, estimate
+  // days until it hits the ceiling. Only emit when we have sufficient data
+  // (12+ points over 3+ days, per trendstats rules).
+  const txidTrendPoints =
+    a.trends.find((t) => t.title === "Transaction-ID age (max)")?.points ?? [];
+  if (sufficient(txidTrendPoints)) {
+    const stat = trendStat(txidTrendPoints);
+    if (stat && stat.direction === "rising") {
+      const daysToEnd = projectDaysTo(stat, THRESHOLDS.XID_CEILING);
+      if (daysToEnd && daysToEnd > 0 && Number.isFinite(daysToEnd)) {
+        const maxProjectionDays = 2 * THRESHOLDS.freezeProjectionDays;
+        if (daysToEnd <= maxProjectionDays) {
+          try {
+            const eta =
+              new Date(Date.now() + daysToEnd * 86400 * 1000).toISOString().split("T")[0] ??
+              "unknown";
+            out.push({
+              severity: daysToEnd <= THRESHOLDS.freezeProjectionDays ? "high" : "med",
+              category: "Capacity",
+              title: `Transaction-ID wraparound projected in ~${Math.round(daysToEnd)} days (ETA ${eta})`,
+              evidence: `Based on the current climb of ${(stat.slopePerDay / 1_000_000).toFixed(1)}M XIDs/day over the last ${Math.round(stat.spanDays)} days.`,
+              anchor: "#txid",
+              ...meta("wraparound_projected"),
+            });
+          } catch {
+            // Silently skip if date calculation fails (shouldn't happen, but be defensive)
+          }
+        }
+      }
+    }
+  }
+  // Wraparound log warning: Postgres itself is warning that wraparound is
+  // imminent. This is the strongest possible evidence and outranks every estimate.
+  if (
+    a.sql.freezeLog &&
+    (a.sql.freezeLog.mustVacuumWithin !== null || a.sql.freezeLog.oldestXminWarnings > 0)
+  ) {
+    out.push({
+      severity: "high",
+      category: "Capacity",
+      title:
+        a.sql.freezeLog.mustVacuumWithin !== null
+          ? `Server log shows freeze warnings: must vacuum within ${a.sql.freezeLog.mustVacuumWithin.toLocaleString()} transactions`
+          : "Server log shows freeze warnings: oldest xmin far in the past, immediate action required",
+      evidence:
+        `${a.sql.freezeLog.mustVacuumWithin !== null ? `Warning: must vacuum within ${a.sql.freezeLog.mustVacuumWithin.toLocaleString()} transactions. ` : ""}` +
+        `${a.sql.freezeLog.oldestXminWarnings > 0 ? `${a.sql.freezeLog.oldestXminWarnings} oldest-xmin warning(s). ` : ""}` +
+        `${a.sql.freezeLog.antiWraparoundVacuums > 0 ? `${a.sql.freezeLog.antiWraparoundVacuums} anti-wraparound vacuum(s) logged on ${a.sql.freezeLog.relations.join(", ")}. ` : ""}` +
+        `Priority: clear xmin holders and run VACUUM immediately.`,
+      anchor: "#txid",
+      ...meta("wraparound_log_warning"),
     });
   }
   // Sequence exhaustion: an int4/serial sequence nearing 2^31 - a hard INSERT
@@ -1297,10 +1505,108 @@ export function deriveFindings(a: Analysis): Finding[] {
       ...meta("statements_evicted"),
     });
   }
+  // xmin horizon blockers: slots/prepared xacts/backends/replicas holding old
+  // xmin/catalog_xmin ages. Any row with age >= xminHolderAge (50M) is a
+  // blocker we should name.
+  const slotHolders = a.sql.replicationSlots
+    .map((r) => ({
+      type: "replication slot",
+      name: String(r.slot_name),
+      age: Math.max(num(r.xmin_age) ?? 0, num(r.catalog_xmin_age) ?? 0),
+    }))
+    .filter((h) => h.age >= THRESHOLDS.xminHolderAge);
+  const preparedHolders = a.sql.preparedXacts
+    .map((r) => ({
+      type: "prepared transaction",
+      name: String(r.gid),
+      age: num(r.xid_age),
+    }))
+    .filter((h) => h.age >= THRESHOLDS.xminHolderAge);
+  const xminHolders_ = a.sql.xminHolders
+    .map((r) => ({
+      type: "backend",
+      name: `pid ${num(r.pid)}`,
+      age: Math.max(num(r.xmin_age) ?? 0, num(r.xid_age) ?? 0),
+    }))
+    .filter((h) => h.age >= THRESHOLDS.xminHolderAge);
+  const replicationHolders = a.sql.replicationXmin
+    .map((r) => ({
+      type: "standby",
+      name: String(r.application_name),
+      age: num(r.xmin_age),
+    }))
+    .filter((h) => h.age >= THRESHOLDS.xminHolderAge);
+  const allHolders = [...slotHolders, ...preparedHolders, ...xminHolders_, ...replicationHolders];
+  const nonPreparedHolders = [...slotHolders, ...xminHolders_, ...replicationHolders];
+  // xmin_horizon_blocked: ONE finding naming the worst non-prepared holder with the rest in evidence.
+  if (nonPreparedHolders.length > 0) {
+    const worst = nonPreparedHolders.reduce((w, h) => (h.age > w.age ? h : w));
+    const others = nonPreparedHolders.filter((h) => h !== worst);
+    const evidenceLines = others.map((h) => `${h.type} ${h.name}: ${h.age.toLocaleString()} XIDs`);
+    const evidence =
+      others.length > 0
+        ? `Worst holder: ${worst.type} ${worst.name} (${worst.age.toLocaleString()} XIDs). Others: ${evidenceLines.join("; ")}.`
+        : "";
+    out.push({
+      severity: maxAge >= THRESHOLDS.freezeBlockedAge ? "high" : "med",
+      category: "Capacity",
+      title: `${worst.type} ${worst.name} holding xmin age ${worst.age.toLocaleString()} (horizon blocked for freeze)`,
+      evidence,
+      anchor: "#xmin",
+      ...meta("xmin_horizon_blocked"),
+    });
+  }
+  // Prepared transactions: any prepared 2PC. Usually empty; presence = stale/orphaned.
+  for (const p of a.sql.preparedXacts) {
+    const age = num(p.xid_age);
+    if (age > 0) {
+      out.push({
+        severity: age >= THRESHOLDS.xminHolderAge ? "high" : "med",
+        category: "Capacity",
+        title: `prepared transaction ${String(p.gid)} in database ${String(p.database)} for ${age.toLocaleString()} XIDs (rollback or commit to unblock freeze)`,
+        anchor: "#xmin",
+        ...meta("prepared_xact_old"),
+      });
+    }
+  }
+  // Frozen/lost replication slots are their own finding, not a WAL-retention one.
+  const lost = a.sql.replicationSlots.filter((r) => r.wal_status === "lost");
+  if (lost.length > 0) {
+    const slots = lost.map((r) => String(r.slot_name)).join(", ");
+    out.push({
+      severity: "high",
+      category: "Capacity",
+      title: `${lost.length} replication ${lost.length === 1 ? "slot" : "slots"} with wal_status='lost' (${slots}): WAL cannot be reserved; slot is unresponsive`,
+      anchor: "#slots",
+      ...meta("replication_slot_lost"),
+    });
+  }
+  // When freeze is blocked but no identified holder explains it, escalate as a
+  // potential corruption branch (data loss on crash, WAL file corruption).
+  // Only fire if all holder planes actually ran (not errored), else a failed
+  // collection could cause a false "unknown blocker" panic.
+  if (
+    maxAge >= THRESHOLDS.freezeBlockedAge &&
+    allHolders.length === 0 &&
+    !errored.has("sql:replicationSlots") &&
+    !errored.has("sql:preparedXacts") &&
+    !errored.has("sql:xminHolders") &&
+    !errored.has("sql:replicationXmin")
+  ) {
+    out.push({
+      severity: "high",
+      category: "Capacity",
+      title: `Transaction-ID age is ${maxAge.toLocaleString()} (freeze blocked) but no explaining xmin holder found (replication slot / prepared transaction / backend / standby)`,
+      evidence:
+        "Audit the four holder classes (see txid_wraparound remediation). If all are empty or young, the blocker is opaque to SQL. Check application logs and long-running processes for unexplained connections. To verify index/heap integrity, run sbperf with --amcheck if amcheck is installed.",
+      anchor: "#xmin",
+      ...meta("freeze_blocked_no_holder"),
+    });
+  }
   // Replication slots: inactive slots pin WAL (disk-fill risk); large active lag
-  // signals a slow downstream consumer.
+  // signals a slow downstream consumer. Exclude lost slots (they have their own finding).
   const inactiveSlots = a.sql.replicationSlots.filter(
-    (r) => r.active === false && num(r.retained_wal_bytes) > 0,
+    (r) => r.active === false && num(r.retained_wal_bytes) > 0 && r.wal_status !== "lost",
   ).length;
   if (inactiveSlots > 0) {
     out.push({
