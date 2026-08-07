@@ -113,6 +113,27 @@ export type BenchRunRow = Omit<BenchRunInput, "tainted" | "unstable" | "guc_json
 const SCALAR_KEYS: Array<{ key: string; pick: (a: Analysis) => number | null }> = [
   { key: "cache_hit_pct", pick: (a) => a.sql.cacheHitPct },
   { key: "index_hit_pct", pick: (a) => a.sql.indexHitPct },
+  // Transaction-ID age (max across per-table or database-level). Trended to
+  // project days until wraparound. Null when no freeze rows exist.
+  {
+    key: "txid_max_age",
+    pick: (a) => {
+      const tableAges = a.sql.txidWraparound.map((r) => Number(r.xid_age) || 0);
+      const dbAges = a.sql.databaseFreezeAge.map((r) => Number(r.xid_age) || 0);
+      const maxAge = Math.max(...tableAges, ...dbAges);
+      return maxAge > 0 ? maxAge : null;
+    },
+  },
+  // Multixact-ID age (max across per-table). Trended separately from txid.
+  // Null when no multixact rows exist.
+  {
+    key: "mxid_max_age",
+    pick: (a) => {
+      const mxidAges = a.sql.multixactWraparound.map((r) => Number(r.mxid_age) || 0);
+      const maxMxidAge = Math.max(...mxidAges);
+      return maxMxidAge > 0 ? maxMxidAge : null;
+    },
+  },
   // Max WAL retained across ACTIVE replication slots. Trended so a slot whose
   // retention keeps climbing (consumer falling behind) is caught even below the
   // point-in-time 1 GiB threshold. Null when there are no active slots.
@@ -122,6 +143,26 @@ const SCALAR_KEYS: Array<{ key: string; pick: (a: Analysis) => number | null }> 
       const active = a.sql.replicationSlots.filter((r) => r.active === true);
       if (!active.length) return null;
       return active.reduce((mx, r) => Math.max(mx, Number(r.retained_wal_bytes) || 0), 0);
+    },
+  },
+  // Max xmin age across the four holder classes (slots, prepared transactions,
+  // backends, standbys). Trended to detect when a blocker starts / stops holding.
+  // Null when all holder classes are empty or young.
+  {
+    key: "xmin_holder_max_age",
+    pick: (a) => {
+      const slotAges = a.sql.replicationSlots
+        .map((r) => Math.max(Number(r.xmin_age) || 0, Number(r.catalog_xmin_age) || 0))
+        .filter((n) => n > 0);
+      const prepAges = a.sql.preparedXacts.map((r) => Number(r.xid_age) || 0).filter((n) => n > 0);
+      const xminAges = a.sql.xminHolders
+        .map((r) => Math.max(Number(r.xmin_age) || 0, Number(r.xid_age) || 0))
+        .filter((n) => n > 0);
+      const replAges = a.sql.replicationXmin
+        .map((r) => Number(r.xmin_age) || 0)
+        .filter((n) => n > 0);
+      const allAges = [...slotAges, ...prepAges, ...xminAges, ...replAges];
+      return allAges.length > 0 ? Math.max(...allAges) : null;
     },
   },
 ];

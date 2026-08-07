@@ -126,6 +126,12 @@ const SCALARS: ScalarDef[] = [
   // has no per-slot lag family. In no-PAT+Grafana slot growth degrades to the
   // point-in-time slot findings; here it becomes a trendable growth signal.
   { title: "Slot WAL retained (max, bytes)", unit: "bytes", key: "slot_wal_retained_max_bytes" },
+  // Transaction-ID and multixact-ID age tracking for wraparound projection.
+  { title: "Transaction-ID age (max)", unit: "", key: "txid_max_age" },
+  { title: "Multixact-ID age (max)", unit: "", key: "mxid_max_age" },
+  // xmin horizon blocker age tracking: max age across all four holder classes.
+  // Trended to detect when a blocker appears / disappears.
+  { title: "xmin holder age (max)", unit: "", key: "xmin_holder_max_age" },
 ];
 
 function scalarSeries(snaps: SnapshotForTrends[], def: ScalarDef): TrendSeries | null {

@@ -259,7 +259,15 @@ src/
                  LATERAL over the top-N heavy pg_stat_statements entries -
                  concrete CREATE INDEX DDL; superuser tier AND index_advisor +
                  hypopg already installed, gated like bloatExact, sbperf never
-                 CREATEs them). The auth/
+                 CREATEs them). Wraparound forensics (2026-08) adds FOUR holder
+                 planes: databaseFreezeAge (datfrozenxid + remaining XIDs vs 2^31
+                 ceiling), preparedXacts (2PC xid horizon), xminHolders
+                 (pg_stat_activity backends, masking state/backend_type/query per
+                 read-only tier), replicationXmin (standby hot_standby_feedback).
+                 Also freezeLog (pg_read_file server-log warnings, freezelog.ts).
+                 All are READ-ONLY SELECT queries. Remediation mentions DROP
+                 REPLICATION SLOT, ROLLBACK PREPARED, pg_terminate_backend for
+                 the user to execute - sbperf never writes. The auth/
                  cron/queryIoStats queries run in BOTH modes (pure SQL) - part of
                  keeping no-PAT at feature parity with PAT. bloat carries a 10MB
                  table-size floor (the pg_stats estimator throws absurd bloat_x
@@ -392,12 +400,20 @@ src/
                  query_disk_reads_high (per-query cache-miss - the complement to
                  the global cache-hit ratio), public_bucket (public storage
                  bucket, Security awareness), unlogged_table (durability),
-                 index_advisor_rec (exact CREATE INDEX from index_advisor), plus
-                 configTuningFindings (a separate
-                 exported fn) for the static GUC sanity set (work_mem blast,
-                 timeouts, maintenance_work_mem RAM-relative, checkpoint
-                 completion, track_io_timing). gucBytes() converts a pg_settings
-                 value+unit to bytes for the memory-relative checks.
+                 index_advisor_rec (exact CREATE INDEX from index_advisor).
+                 Wraparound forensics (2026-08) adds SEVEN new findings:
+                 txid_wraparound (table/database-attributed, escalates to high
+                 when a holder is present; title states writes are refused at
+                 <=3M remaining), xmin_horizon_blocked (worst non-prepared
+                 holder by age), prepared_xact_old (per-2PC high/med by holder
+                 age), replication_slot_lost (wal_status='lost'), wraparound_log_warning
+                 (Postgres server-log evidence), wraparound_projected (days to
+                 ceiling from trends), freeze_blocked_no_holder (no explaining
+                 xmin when age is blocked, corruption risk). Also configTuningFindings
+                 (exported fn) for static GUC sanity: autovacuum_freeze_max_age
+                 (freeze readiness context) + work_mem/timeouts/maintenance_work_mem
+                 RAM-relative/checkpoint_completion/track_io_timing. gucBytes()
+                 converts pg_settings value+unit to bytes for memory checks.
   trendstats.ts  trend-analysis primitives (slope/growth, sustained-fraction,
                  peak, linear projection) behind sufficient() gating; the shapes
                  the capacity findings + trend-health positives reason over.
@@ -456,6 +472,12 @@ src/
   sync.ts        on-by-default soft-fail upstream sync check -> analysis.sync:
                  catalog vintage/age + vendored splinter.sql vs upstream hash;
                  rendered in the report footer. --no-sync-check to skip.
+  freezelog.ts   Pure server-log parser for Postgres freeze warnings (2026-08).
+                 parseFreezeLog: reads pg_read_file output, extracts must-vacuum-within
+                 intervals + oldest-xmin warnings + anti-wraparound vacuum events,
+                 returns null if no evidence or on collection error. Bounded sampling
+                 of matching lines for evidence. No side effects; used in both PAT
+                 read-only (logs accessible via SQL) and superuser tiers.
   store.ts       SQLite history store (bun:sqlite): `snapshot` appends full
                  Analysis + denormalized metric_samples/sql_scalars; keyed by
                  ref at ~/.sbperf/history.db; prune to retention. Also holds
