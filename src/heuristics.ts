@@ -74,9 +74,23 @@ export const THRESHOLDS = {
   /** Derived disk throughput / provisioned warning fraction. */
   diskThroughputFrac: 0.8,
   /** age(relfrozenxid) toward the 2B ceiling: warn / high percent. Reused for
-   * the multixact-ID ceiling (relminmxid), which shares the same 2B limit. */
+   * the multixact-ID ceiling (relminmxid), which shares the same 2B limit.
+   * DEPRECATED in favor of absolute transaction counts (below). Kept for
+   * back-compat with older analysis.json files that predate the remaining column. */
   txidWarnPct: 20,
   txidHighPct: 40,
+  /** Transaction-ID wraparound constants (Postgres routine-vacuuming docs).
+   * XID_CEILING = 2^31 - 1_000_000: the operator runbook's "remaining"
+   * denominator. Postgres starts logging warnings at freezeWarnRemaining and
+   * refuses writes at freezeStopRemaining. freezeBlockedAge is the operator
+   * threshold at which a freeze is provably blocked. xminHolderAge gates the
+   * holder finding (a quarter of the blocked threshold, tunable). All in XIDs. */
+  XID_CEILING: 2 ** 31 - 1_000_000,
+  freezeBlockedAge: 200_000_000,
+  freezeWarnRemaining: 40_000_000,
+  freezeStopRemaining: 3_000_000,
+  xminHolderAge: 50_000_000,
+  freezeProjectionDays: 90,
   /** A single statement generating at/above this % of total WAL bytes is a
    * write-amplification hotspot worth attributing. */
   walHeavyPct: 40,
@@ -830,13 +844,25 @@ export const HEURISTICS: Record<string, Heuristic> = {
   txid_wraparound: {
     id: "txid_wraparound",
     plane: "Vacuum",
-    sql: "-- find the oldest table, then vacuum to freeze it:\nSELECT relname, age(relfrozenxid) FROM pg_class WHERE relkind='r' ORDER BY age(relfrozenxid) DESC LIMIT 5;\nVACUUM (FREEZE, VERBOSE) <schema>.<table>;",
+    sql: "-- Check the four xmin holders (must be cleared first):\nSELECT slot_name, xmin, catalog_xmin, age(xmin), age(catalog_xmin) FROM pg_replication_slots WHERE xmin IS NOT NULL OR catalog_xmin IS NOT NULL;\nSELECT gid, database, prepared, age(transaction) FROM pg_prepared_xacts;\nSELECT pid, datname, backend_xmin, backend_xid, age(backend_xmin), age(backend_xid), query FROM pg_stat_activity WHERE backend_xmin IS NOT NULL OR backend_xid IS NOT NULL;\n-- Then, find and vacuum the oldest tables:\nSELECT relname, age(relfrozenxid), (2146483648 - age(relfrozenxid)) as remaining FROM pg_class WHERE relkind='r' ORDER BY age(relfrozenxid) DESC LIMIT 5;\nVACUUM <schema>.<table>;  -- emergency path (<=3M remaining): plain VACUUM, not FREEZE (needs xid), repeats until datfrozenxid steady\n-- OR for catch-up (>3M remaining): VACUUM (VERBOSE) <schema>.<table>;  -- when age is under the emergency threshold",
     howToVerify:
-      "Check age(relfrozenxid) on the oldest table - it should fall well below the 2B ceiling after vacuum.",
+      "Audit the four holder views for any old xmin/xid ages. Then check age(relfrozenxid) and the remaining transactions on the oldest table - remaining should rise well above the 3M critical threshold after vacuum.",
     whyItMatters:
-      "Transaction-ID age nearing the ~2B ceiling is existential: at the limit Postgres stops accepting writes until an unkillable anti-wraparound vacuum completes - a hard, self-inflicted outage.",
+      "Transaction-ID age nearing the ~2B ceiling is existential: at the limit Postgres stops accepting writes until an unkillable anti-wraparound vacuum completes - a hard, self-inflicted outage. Vacuum cannot progress while an xmin holder blocks it, so holders MUST be cleared first.",
     remediation:
-      "VACUUM (FREEZE) the oldest tables by age(relfrozenxid) - freeze autovacuum is falling behind. At ~2B unfrozen XIDs Postgres halts writes, so clear any xmin-pinning txn and let the anti-wraparound vacuum complete (it cannot be killed).",
+      "First, clear any xmin-pinning transaction (logical slot / prepared transaction / old backend / hot standby) - the four queries above identify them. Then VACUUM the oldest tables by age(relfrozenxid). Use plain VACUUM (not FREEZE, which needs an XID and may fail in the emergency window). An anti-wraparound vacuum cannot be killed, so let it run to completion. Note: superuser VACUUM only - a non-superuser cannot advance datfrozenxid, so this must run as a superuser or via the pooler as the service role.",
+    docUrl: "https://www.postgresql.org/docs/current/routine-vacuuming.html",
+    reviewed: R,
+  },
+  wraparound_projected: {
+    id: "wraparound_projected",
+    plane: "Vacuum",
+    howToVerify:
+      "Check the trend in the Resource snapshot - is the Transaction-ID age still climbing? A sustained plateau means the projected ETA is no longer valid; recalculate after the next collection.",
+    whyItMatters:
+      "If the current climb rate continues, transaction-ID will hit the ceiling and Postgres will stop accepting writes. The projection is data-driven from the last 30+ days, so it is only valid if the climb persists at the same rate. A sudden change in application load or schema growth can invalidate the projection faster or slower.",
+    remediation:
+      "Clear any xmin holders (replication slots / prepared transactions / long-running backends / standby hot_standby_feedback) and run VACUUM (FREEZE) on the oldest tables to lower the age now. Lower autovacuum_freeze_max_age to make freeze autovacuum start earlier (default is 200M consumed XIDs; 150M gives more runway). Monitor the trend: if it flattens, the crisis has passed. If it keeps climbing despite vacuum, check application INSERT/UPDATE/DELETE patterns - high churn tables age fast and need frequent freezing.",
     docUrl: "https://www.postgresql.org/docs/current/routine-vacuuming.html",
     reviewed: R,
   },
@@ -1677,6 +1703,101 @@ export const HEURISTICS: Record<string, Heuristic> = {
         url: "https://supabase.com/docs/guides/platform/performance",
       },
     ],
+    reviewed: R,
+  },
+  autovacuum_freeze_tuning: {
+    id: "autovacuum_freeze_tuning",
+    plane: "Vacuum",
+    howToVerify:
+      "SELECT current_setting('autovacuum'), current_setting('autovacuum_freeze_max_age'), current_setting('autovacuum_multixact_freeze_max_age'). Then check age(datfrozenxid) - it should stay well below the freeze_max_age threshold.",
+    whyItMatters:
+      "If autovacuum is off, tables never freeze - transaction-ID wraparound becomes inevitable. If freeze_max_age is too high, tables age before freeze autovacuum starts, increasing the risk of wraparound before freeze completes.",
+    remediation:
+      "If autovacuum is off, enable it: ALTER SYSTEM SET autovacuum = on; SELECT pg_reload_conf();. If freeze_max_age is above the default 200000000, lower it closer to the default so freeze autovacuum starts earlier: ALTER SYSTEM SET autovacuum_freeze_max_age = 200000000; SELECT pg_reload_conf();.",
+    docUrl: "https://www.postgresql.org/docs/current/runtime-config-vacuum.html",
+    reviewed: R,
+  },
+  xmin_horizon_blocked: {
+    id: "xmin_horizon_blocked",
+    plane: "Vacuum",
+    sql: `-- audit the four holder classes:
+select slot_name, slot_type, xmin, catalog_xmin, age(xmin) as xmin_age, age(catalog_xmin) as catalog_xmin_age from pg_replication_slots where xmin is not null or catalog_xmin is not null;
+select gid, database, prepared, age(transaction) as xid_age from pg_prepared_xacts;
+select pid, usename, backend_xmin, backend_xid, age(backend_xmin) as xmin_age, age(backend_xid) as xid_age, state from pg_stat_activity where backend_xmin is not null;
+select application_name, backend_xmin, age(backend_xmin) as xmin_age from pg_stat_replication;`,
+    howToVerify:
+      "Run the queries above to identify which holder class (slot/prepared/backend/standby) has the oldest age. Once that holder is cleared, re-run to confirm ages drop and autovacuum proceeds.",
+    whyItMatters:
+      "An xmin holder (logical slot, prepared transaction, active backend, or standby) pinning a transaction this old prevents the database from advancing its freeze horizon, blocking autovacuum and accumulating dead tuples on every table. No freeze progress means transaction-ID wraparound is inevitable unless the holder is cleared.",
+    remediation:
+      "Identify the holder and clear it: drop the inactive logical slot (select pg_drop_replication_slot('<slot>')); commit or rollback the prepared transaction (ROLLBACK PREPARED); terminate the idle or long-running backend (SELECT pg_terminate_backend(pid)); or reduce hot_standby_feedback on the standby (feedback delays the primary's catalog freeze). After clearing the holder, autovacuum will proceed and the freeze will age the database forward.",
+    docUrl: "https://www.postgresql.org/docs/current/routine-vacuuming.html",
+    reviewed: R,
+  },
+  replication_slot_lost: {
+    id: "replication_slot_lost",
+    plane: "Storage",
+    sql: `-- find lost slots:
+select slot_name, slot_type, wal_status, xmin, catalog_xmin, restart_lsn from pg_replication_slots where wal_status = 'lost';
+-- drop a lost slot:
+select pg_drop_replication_slot('<slot_name>');`,
+    howToVerify:
+      "After dropping the slot, re-run the query above to confirm it is gone. The downstream consumer should reconnect and start consuming from a later LSN.",
+    whyItMatters:
+      "A lost slot has failed to reserve WAL and can no longer consume the logical replication stream - it cannot be recovered without manually resetting it (data loss). The primary is likely to discard WAL it needs, leaving the slot permanently broken.",
+    remediation:
+      "Drop the lost slot (select pg_drop_replication_slot('<slot>')) and let the downstream consumer reconnect and rebuild its state from the current WAL position. Lost slots are unrecoverable; reconnection is the recovery path.",
+    docUrl: "https://www.postgresql.org/docs/current/view-pg-replication-slots.html",
+    reviewed: R,
+  },
+  prepared_xact_old: {
+    id: "prepared_xact_old",
+    plane: "Vacuum",
+    sql: `-- find prepared transactions and their ages:
+select gid, database, owner, prepared, transaction, age(transaction) as xid_age from pg_prepared_xacts order by age(transaction) desc;
+-- rollback a stale transaction:
+ROLLBACK PREPARED '<gid>';`,
+    howToVerify:
+      "After rolling back or committing, re-run the query above to confirm the gid is gone and the xmin age drops.",
+    whyItMatters:
+      "A prepared transaction (2-phase commit) that remains unresolved blocks the database's freeze horizon by holding an XID. Each such transaction prevents autovacuum from freezing any table on any database. Prepared transactions are rare on Supabase (2PC requires application coordination); presence usually indicates an abandoned transaction whose coordinator never completed the second phase.",
+    remediation:
+      "Commit or rollback the transaction to release its XID: COMMIT PREPARED '<gid>' or ROLLBACK PREPARED '<gid>'. If the GID is unknown or the application crashed, rolling back is safe (it un-reserves the XID and lets freeze progress). Once resolved, autovacuum will proceed.",
+    docUrl: "https://www.postgresql.org/docs/current/routine-vacuuming.html",
+    reviewed: R,
+  },
+  freeze_blocked_no_holder: {
+    id: "freeze_blocked_no_holder",
+    plane: "Vacuum",
+    sql: `-- audit the four holder classes as a superuser:
+select slot_name, slot_type, xmin, catalog_xmin, age(xmin) as xmin_age from pg_replication_slots where xmin is not null or catalog_xmin is not null;
+select gid, database, owner, age(transaction) as xid_age from pg_prepared_xacts;
+select pid, usename, backend_xmin, backend_xid, age(backend_xmin) as xmin_age, age(backend_xid) as xid_age from pg_stat_activity where backend_xmin is not null;
+select application_name, backend_xmin, age(backend_xmin) as xmin_age from pg_stat_replication;`,
+    howToVerify:
+      "Re-run the queries above as a superuser to see if any holder has age >= 200M. If all are empty or young, autovacuum is proceeding - re-collect after a few hours to confirm the finding self-resolves.",
+    whyItMatters:
+      "The freeze age is at/above the blocked-freeze threshold (200M consumed XIDs), but none of the four known holder classes are visible. This may be because: the holder is younger than the threshold and no longer the bottleneck (autovacuum has since progressed), the audit connection's role lacks visibility into that holder class (read-only tier cannot see backend state on other roles), or the holder exists but the audit's connection itself is the horizon holder and cannot see itself.",
+    remediation:
+      "Re-run the four diagnostic queries as a superuser (--db-url with supabase_admin or postgres role) to see all holders, then clear any old ones per xmin_horizon_blocked. If no old holder is found even as a superuser, autovacuum may have already caught up - re-collect after a few minutes, as the finding will self-resolve once all holders are younger than the threshold.",
+    docUrl: "https://www.postgresql.org/docs/current/routine-vacuuming.html",
+    reviewed: R,
+  },
+  wraparound_log_warning: {
+    id: "wraparound_log_warning",
+    plane: "Vacuum",
+    sql: `-- check database age and the oldest table's age:
+select datname, age(datfrozenxid) as datfrozenxid_age, (2^31 - 1000000) - age(datfrozenxid) as remaining_xids from pg_database where datname = current_database();
+select schemaname, tablename, age(relfrozenxid) as relfrozenxid_age from pg_tables join pg_class on relname = tablename where schemaname not in ('pg_catalog','information_schema') order by age(relfrozenxid) desc limit 5;
+-- then vacuum the oldest table:
+VACUUM (FREEZE, VERBOSE, ANALYZE) <schema>.<oldest_table>;`,
+    howToVerify:
+      "Review the server log for WARNING/LOG lines with 'vacuum', 'wraparound', 'xmin' keywords. After vacuuming the oldest tables, the warnings should stop appearing and the remaining XID count should climb back above 40M.",
+    whyItMatters:
+      "Postgres itself is warning that transaction-ID wraparound is imminent. This is the strongest possible evidence from the database - more authoritative than any estimate based on current age. When Postgres logs these warnings, vacuum must be prioritized immediately to prevent a hard outage.",
+    remediation:
+      "Priority one: run anti-wraparound vacuum as a superuser immediately. First clear any xmin holders (old replication slots, prepared transactions, long-running backends, hot standby feedback) per xmin_horizon_blocked. Then VACUUM the oldest tables repeatedly until datfrozenxid stops advancing and no more warnings appear in the log. An anti-wraparound vacuum cannot be killed, so let it run to completion.",
+    docUrl: "https://www.postgresql.org/docs/current/routine-vacuuming.html",
     reviewed: R,
   },
 };
