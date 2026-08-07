@@ -907,7 +907,8 @@ export function render(
       ) ||
       a.sql.preparedXacts.length > 0 ||
       a.sql.xminHolders.length > 0 ||
-      a.sql.replicationXmin.length > 0,
+      a.sql.replicationXmin.length > 0 ||
+      a.sql.antiWraparoundVacuums.length > 0,
     walarchiving: a.sql.walArchiving.length > 0,
     longrunning: a.sql.longRunning.length > 0,
     locks: a.sql.locks.length > 0,
@@ -1499,6 +1500,21 @@ function xminHoldersSection(a: Analysis): string {
       .join("");
     parts.push(
       `<p class=lead>Standby hot_standby_feedback</p><table><thead><tr><th>application</th><th>xmin_age</th></tr></thead><tbody>${body}</tbody></table>`,
+    );
+  }
+
+  // Forced anti-wraparound autovacuum in flight: proof the freeze mechanism is
+  // already running, which is what makes a still-climbing age a horizon problem
+  // rather than an autovacuum-is-behind problem.
+  if (a.sql.antiWraparoundVacuums.length) {
+    const body = a.sql.antiWraparoundVacuums
+      .map(
+        (r) =>
+          `<tr><td class=mono>${esc(r.pid)}</td><td>${esc(r.datname ?? "-")}</td><td>${esc(r.running_s ?? "-")}</td><td class=mono>${esc(r.query ?? "-")}</td></tr>`,
+      )
+      .join("");
+    parts.push(
+      `<p class=lead>Anti-wraparound autovacuum in flight</p><table><thead><tr><th>pid</th><th>database</th><th>running_s</th><th>query</th></tr></thead><tbody>${body}</tbody></table>`,
     );
   }
 

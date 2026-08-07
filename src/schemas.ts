@@ -425,6 +425,8 @@ export const Analysis = z.object({
     xminHolders: SqlRows.default([]),
     // Standby replicas via hot_standby_feedback. Back-compat default.
     replicationXmin: SqlRows.default([]),
+    // Forced anti-wraparound autovacuum workers in flight. Back-compat default.
+    antiWraparoundVacuums: SqlRows.default([]),
     rlsPolicies: SqlRows,
     connections: SqlRows,
     roleStats: SqlRows,

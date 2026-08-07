@@ -1172,6 +1172,25 @@ export const QUERIES = {
     order by greatest(age(backend_xmin), age(backend_xid)) desc nulls last
     limit 10`,
 
+  // Forced anti-wraparound autovacuum in flight. Postgres launches these even
+  // when autovacuum is nominally off, and the worker's pg_stat_activity query
+  // text ends with "(to prevent wraparound)" (upstream routine-vacuuming docs;
+  // wording confirmed on a live 18.4 cluster). This is the both-tier signal
+  // that the freeze mechanism is ALREADY trying: if the age is still climbing
+  // while this runs, something is pinning the horizon rather than autovacuum
+  // being behind. Normally empty - a worker only exists while it vacuums.
+  antiWraparoundVacuums: /* sql */ `
+    select
+      pid,
+      datname,
+      extract(epoch from (now() - xact_start))::bigint as running_s,
+      left(regexp_replace(query, '\\s+', ' ', 'g'), 120) as query
+    from pg_stat_activity
+    where backend_type = 'autovacuum worker'
+      and query like '%to prevent wraparound%'
+    order by xact_start
+    limit 10`,
+
   // Standby replicas via hot_standby_feedback (holding backend_xmin on the
   // primary). Empty when no replication or hot_standby_feedback is off.
   replicationXmin: /* sql */ `
