@@ -15,6 +15,19 @@ Two independent things consume the scraped data:
 Both work against the same scrape with no relabelling, because they key on the
 `supabase_project_ref` label the endpoint emits itself.
 
+## Growing it into a central monitoring stack
+
+The generated stack is not Supabase-only by construction: the render/init
+split (base prometheus.yml + per-project generated jobs) means you can add
+non-Supabase jobs to the base file - edge exporters, node exporters,
+anything - and keep the per-project Supabase jobs generated on top. Two
+operational rules of thumb if you go this way: put the stack behind your
+reverse proxy with Grafana's own auth as the gate (and an IP allowlist for
+Prometheus, which has no auth), and for metrics whose failure domain
+overlaps the thing being observed (e.g. edge/network health stored only on
+a host across that network), dual-store: a short-retention Prometheus at
+the edge scraping the same exporter covers central outages.
+
 ---
 
 ## Generate and run
