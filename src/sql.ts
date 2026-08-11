@@ -1124,6 +1124,22 @@ export const QUERIES = {
           and am.amname in ('ivfflat', 'hnsw')
           and a.attnum = any (i.indkey)
       )
+      -- Expression ANN indexes (e.g. (embedding::halfvec(384))) carry indkey 0
+      -- for every key, so the check above can't attribute them to a column and
+      -- false-positives (all three of memledger's halfvec HNSW indexes fired
+      -- here 2026-08-11). Attribute them via pg_depend: an expression index
+      -- depends on every column its expression references.
+      and not exists (
+        select 1
+        from pg_depend d
+        join pg_class ic on ic.oid = d.objid and ic.relkind in ('i', 'I')
+        join pg_am am on am.oid = ic.relam
+        where d.classid = 'pg_class'::regclass
+          and d.refclassid = 'pg_class'::regclass
+          and d.refobjid = c.oid
+          and d.refobjsubid = a.attnum
+          and am.amname in ('ivfflat', 'hnsw')
+      )
     order by n.nspname, c.relname, a.attname`,
 
   // Foreign keys whose referencing columns have NO covering index. An unindexed
