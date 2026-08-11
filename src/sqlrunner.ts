@@ -67,7 +67,7 @@ export class ManagementSqlRunner implements SqlRunner {
 /**
  * Session guards prepended to EVERY superuser query so no diagnostic can run
  * unbounded against a live customer database. statement_timeout caps runtime;
- * lock_timeout caps time spent blocked on a lock (sbperf is read-only, so it
+ * lock_timeout caps time spent blocked on a lock (pg-analyser is read-only, so it
  * only ever takes AccessShareLock, but this fails fast rather than queueing
  * behind someone's ALTER). Both overridable via env; '0' disables a cap
  * (Postgres semantics). Sent in the SAME simple-query message as the query so
@@ -78,8 +78,8 @@ export class ManagementSqlRunner implements SqlRunner {
  */
 export function sessionGuard(): string {
   const clean = (v: string) => v.replace(/[^0-9a-z ]/gi, "").trim() || "0";
-  const st = clean(process.env.SBPERF_STATEMENT_TIMEOUT ?? "120s");
-  const lt = clean(process.env.SBPERF_LOCK_TIMEOUT ?? "15s");
+  const st = clean(process.env.PG_ANALYSER_STATEMENT_TIMEOUT ?? "120s");
+  const lt = clean(process.env.PG_ANALYSER_LOCK_TIMEOUT ?? "15s");
   return `set statement_timeout='${st}'; set lock_timeout='${lt}'; `;
 }
 

@@ -1,6 +1,6 @@
-# sbperf heuristics catalog
+# pg-analyser heuristics catalog
 
-Evergreen performance/cost heuristics sbperf evaluates against a Supabase
+Evergreen performance/cost heuristics pg-analyser evaluates against a Supabase
 project, grounded in Supabase maintainer guidance, the Postgres docs, and
 production war stories. This is the source-of-truth reference; `src/heuristics.ts`
 encodes the thresholds as typed data and `src/findings.ts` evaluates them.
@@ -8,7 +8,7 @@ encodes the thresholds as typed data and `src/findings.ts` evaluates them.
 ## Why this exists
 
 The example competitor/reference reports read as polished narratives because
-each finding carries a threshold, an explanation, and a concrete fix. sbperf
+each finding carries a threshold, an explanation, and a concrete fix. pg-analyser
 already DETECTS most of these signals; this catalog makes the detection
 - **grounded**: every threshold cites a maintainer/docs source, not a guess.
 - **evergreen**: thresholds are stable Postgres/Supabase facts, dated so we know
@@ -18,7 +18,7 @@ already DETECTS most of these signals; this catalog makes the detection
 
 ## Provenance & the sync model
 
-sbperf gets a large amount of upstream sync for FREE: the advisor lints
+pg-analyser gets a large amount of upstream sync for FREE: the advisor lints
 (`/advisors/{performance,security}`) are fetched LIVE via the Management API on
 every run - those are Supabase's own evergreen heuristics, always current.
 
@@ -132,7 +132,7 @@ them on data / thresholds rather than always rendering an empty or noise table
 - **Exclusive locks** - the query filters `locktype = 'relation'` + strong modes
   (AccessExclusive/Exclusive/ShareRowExclusive). The old `mode='ExclusiveLock'`-
   only form also matched the `virtualxid`/`transactionid` lock every backend
-  (incl. sbperf's own diagnostic connections) holds, so it was never empty and
+  (incl. pg-analyser's own diagnostic connections) holds, so it was never empty and
   showed the tool auditing itself. Section shown only when a real relation lock
   exists at collection.
 - **Blocking chains / long-running queries / replication slots** - shown only
@@ -193,7 +193,7 @@ Concrete facts:
 - The most common reason autovacuum can't succeed: a long-running or idle-in-
   transaction session pins `oldest xmin`, so dead tuples can't be removed and
   bloat + XID age climb together. Watch `pg_stat_activity` for old
-  `xact_start` / `idle in transaction`. sbperf already flags
+  `xact_start` / `idle in transaction`. pg-analyser already flags
   `idle_in_transaction_session_timeout = 0` and long-running queries; the NEW
   check correlates "old txn present AND dead tuples rising" into one finding.
 - Bloat reclaim: `pg_repack` rebuilds online (brief final lock); `VACUUM FULL`
@@ -297,11 +297,11 @@ High Disk I/O troubleshooting.
 | `work_mem_blast` | worst-case `work_mem x max_connections x parallel` vs RAM estimated from `shared_buffers` (~25%) - a broad OOM risk from a high global work_mem | worst case >= est RAM (`workMemBlastFrac` 1.0) | med | HAVE |
 | `maintenance_work_mem_low` | RAM-RELATIVE (Supabase tier-scales it, so a small value on a small instance is correct): flagged only when < `maintWorkMemMinFrac` 3% of est RAM AND est RAM >= `maintWorkMemMinRamGb` 8GB | see thresholds | low | HAVE |
 | `checkpoint_completion_low` | `checkpoint_completion_target` below 0.9 spreads checkpoint I/O too tightly (spiky flushes) | < `checkpointCompletionMin` 0.7 | low | HAVE |
-| `track_io_timing_off` | `track_io_timing = off` - no per-query I/O timing (blinds pg_stat_statements + sbperf's own I/O analysis); negligible overhead on tsc-clocksource hosts | =off | low | HAVE |
+| `track_io_timing_off` | `track_io_timing = off` - no per-query I/O timing (blinds pg_stat_statements + pg-analyser's own I/O analysis); negligible overhead on tsc-clocksource hosts | =off | low | HAVE |
 | `lock_wave` | retrospective server-log parse (superuser + probe-gated): a burst of "still waiting for ...Lock" + timeout-cancellation lines = a lock-queue cascade (DDL queued behind readers, then readers queued behind the DDL). Worst 10-min window drives severity; a deadlock line alone is >=MED. Coverage window is stated honestly (log rotation may keep hours). PRIVACY: only parsed counts + literal-free reconstructed sample phrases are stored, never raw log text | HIGH: cancels>=50, or maxWait>=60s & waits>=10; MED: waits>=10 / cancels>=10 / any deadlock | high/med | NEW |
 | `lock_forensics` | observability posture (mirrors `track_io_timing_off`): (1) `log_lock_waits=off` so lock waits leave no log trail; (2) no session/role-scoped `lock_timeout` (checked via `pg_roles.rolconfig`) so a blocked migration waits indefinitely. Guardrail advice is session/role-scoped ONLY - a cluster-wide `lock_timeout` is never recommended (settled design). `deadlock_timeout > 5s` is a one-line note in the same card, not its own finding. Positive when `log_lock_waits=on` | see signal | low | NEW |
 | `contention_episode` | metrics-side retrospective (needs Prometheus/Grafana): a synchronized burst of transaction rollbacks + active backends + share-lock counts = a mass-cancellation event. Separate native-resolution scan (`--incident-scan-days`, default 7) because the 30d trend panels average a 10-min event away. Hot buckets gated on `max(absFloor, k x median-over-nonzero)` so a chatty baseline does not fire; adjacent hot buckets merge into episodes | HIGH: >=2 correlated series & rollbackTotal>=100; MED: >=2 series; LOW: single series | high/med/low | NEW |
-| `live_lock_contention` | point-in-time: wait-event samples taken during collection catch active backends waiting on a `Lock` RIGHT NOW (not retrospective - use `lock_wave`/`contention_episode` for after-the-fact). Sampling count via `SBPERF_WAIT_SAMPLES` (default 5, 0 disables) | `Lock` in >=2 of the samples | med | NEW |
+| `live_lock_contention` | point-in-time: wait-event samples taken during collection catch active backends waiting on a `Lock` RIGHT NOW (not retrospective - use `lock_wave`/`contention_episode` for after-the-fact). Sampling count via `PG_ANALYSER_WAIT_SAMPLES` (default 5, 0 disables) | `Lock` in >=2 of the samples | med | NEW |
 | `work_mem_spill` | `pg_stat_database_temp_bytes_total` rising (sorts/hashes spill to disk) | rate >= 1MB/s (trend) | med | HAVE |
 | `checkpoint_pressure` | `pg_stat_bgwriter_checkpoints_req_total` vs `_timed_total` rate (trend) | requested >= 30% of checkpoints -> raise max_wal_size | med | HAVE (trend) |
 | `shared_buffers_ratio` | `shared_buffers` vs RAM | not ~25% (warn > 40%) | low | NEW |
@@ -440,7 +440,7 @@ Sources: Supabase Backups / Storage docs; live advisors for the security angle.
 | `ssl_not_enforced` | `sslEnforcement.currentConfig.database = false` (server accepts unencrypted connections) | SSL enforcement off | med | HAVE |
 | `hba_weak_auth` | `pg_hba_file_rules` trust/password/ident rule for a non-loopback, non-replication address (superuser --db-url only) | any such rule | med | HAVE |
 
-These are sbperf-ORIGINAL Security findings derived from Management-API config
+These are pg-analyser-ORIGINAL Security findings derived from Management-API config
 planes (network-restrictions, ssl-enforcement) plus a superuser `pg_hba_file_rules`
 check - not advisor-lint passthrough. `hba_weak_auth` needs a TRUE superuser
 (`supabase_admin`) and fires only on a real auth bypass (a non-`scram-sha-256`

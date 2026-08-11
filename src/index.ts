@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import "./envalias.ts"; // SBPERF_* -> PG_ANALYSER_* back-compat; must run first
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import pkg from "../package.json" with { type: "json" };
@@ -54,7 +55,7 @@ import { computeTrends } from "./trends.ts";
 const VERSION = pkg.version;
 
 // Report branding, resolved once at startup (Supabase default; --brand /
-// SBPERF_BRAND / ./sbperf.brand.json override). Read by the render call sites.
+// PG_ANALYSER_BRAND / ./pg-analyser.brand.json override). Read by the render call sites.
 let activeBrand: Brand = DEFAULT_BRAND;
 // The active audit profiles (--profile <file.json>, repeatable): force-no-PAT + region-mapped
 // Grafana creds + target databases, all in one gitignored JSON. Consulted by
@@ -70,36 +71,36 @@ let activeProfiles: Profile[] = [];
 type SweepTarget = DbTarget & { profile?: Profile };
 
 function usage(code = 1): never {
-  console.log(`sbperf ${VERSION} - Supabase performance analysis
+  console.log(`pg-analyser ${VERSION} - Supabase performance analysis
 
 Usage:
-  sbperf analyze  --ref <ref> [--out <dir>]   fetch all planes -> analysis.json
-  sbperf report   <dir>                       analysis.json -> report.html (technical + business)
-  sbperf summary  <dir>                        analysis.json -> summary.html (optional plain-language one-pager)
-  sbperf pdf      <dir>                        analysis.json -> report.pdf
-  sbperf narrate  <dir>                        analysis.json -> narrative.md (LLM pass, needs SBPERF_LLM_*)
-  sbperf narrate  <dir> --print-prompt         write prompt.md (grounded prompt) to paste into any chat LLM
-  sbperf narrate  <dir> --import <file>|-      embed a pasted LLM reply back (file or stdin); no endpoint needed
-  sbperf import-trends <dir> <file...>         merge external CSV/JSON series into analysis.trends
-  sbperf full     --ref <ref> [--out <dir>]    analyze + report + pdf
-  sbperf full     --ref <r1>,<r2> ...          audit several projects + combined index
-  sbperf full     --ref-file <refs.txt|.csv>   ...refs from a file (one per line / CSV)
-  sbperf full     --all [--org <slug>]         audit every project + index.html
-  sbperf full     --all --db-config <json>     ...and upgrade each matched project to superuser SQL (PAT + connstrings = full coverage)
-  sbperf snapshot --ref <ref> [--store <db>]   collect + append to the history store
-  sbperf diff     <oldDir> <newDir>            compare two analysis.json runs (findings delta + query regressions)
-  sbperf diff     --ref <ref> [--store <db>]   compare the two most recent store snapshots
-  sbperf check    <dir> [--fail-on <sev>]      CI gate: exit nonzero if findings breach the threshold
-  sbperf bench    --db-url <c> [-f x.sql|-b tpcb-like]  pgbench with guardrails -> history store
-  sbperf bench    --list [--ref <r>]           stored bench runs
-  sbperf bench    --show <id>                  one stored run, per-run detail
-  sbperf bench    --compare <idA> <idB>        perf delta + pg_settings diff between two runs
-  sbperf export-prometheus <dir> [--ref <ref>] history store -> OpenMetrics for promtool backfill
-  sbperf alerts-init [--ref <ref>] [--dir <d>] write the Prometheus alerting-rule pack
-  sbperf scrape-init --ref <ref> [--dir <d>]   write the Prometheus+Grafana stack
+  pg-analyser analyze  --ref <ref> [--out <dir>]   fetch all planes -> analysis.json
+  pg-analyser report   <dir>                       analysis.json -> report.html (technical + business)
+  pg-analyser summary  <dir>                        analysis.json -> summary.html (optional plain-language one-pager)
+  pg-analyser pdf      <dir>                        analysis.json -> report.pdf
+  pg-analyser narrate  <dir>                        analysis.json -> narrative.md (LLM pass, needs PG_ANALYSER_LLM_*)
+  pg-analyser narrate  <dir> --print-prompt         write prompt.md (grounded prompt) to paste into any chat LLM
+  pg-analyser narrate  <dir> --import <file>|-      embed a pasted LLM reply back (file or stdin); no endpoint needed
+  pg-analyser import-trends <dir> <file...>         merge external CSV/JSON series into analysis.trends
+  pg-analyser full     --ref <ref> [--out <dir>]    analyze + report + pdf
+  pg-analyser full     --ref <r1>,<r2> ...          audit several projects + combined index
+  pg-analyser full     --ref-file <refs.txt|.csv>   ...refs from a file (one per line / CSV)
+  pg-analyser full     --all [--org <slug>]         audit every project + index.html
+  pg-analyser full     --all --db-config <json>     ...and upgrade each matched project to superuser SQL (PAT + connstrings = full coverage)
+  pg-analyser snapshot --ref <ref> [--store <db>]   collect + append to the history store
+  pg-analyser diff     <oldDir> <newDir>            compare two analysis.json runs (findings delta + query regressions)
+  pg-analyser diff     --ref <ref> [--store <db>]   compare the two most recent store snapshots
+  pg-analyser check    <dir> [--fail-on <sev>]      CI gate: exit nonzero if findings breach the threshold
+  pg-analyser bench    --db-url <c> [-f x.sql|-b tpcb-like]  pgbench with guardrails -> history store
+  pg-analyser bench    --list [--ref <r>]           stored bench runs
+  pg-analyser bench    --show <id>                  one stored run, per-run detail
+  pg-analyser bench    --compare <idA> <idB>        perf delta + pg_settings diff between two runs
+  pg-analyser export-prometheus <dir> [--ref <ref>] history store -> OpenMetrics for promtool backfill
+  pg-analyser alerts-init [--ref <ref>] [--dir <d>] write the Prometheus alerting-rule pack
+  pg-analyser scrape-init --ref <ref> [--dir <d>]   write the Prometheus+Grafana stack
 
 Flags:
-  --store <db>         history SQLite file (default ~/.sbperf/history.db)
+  --store <db>         history SQLite file (default ~/.pg-analyser/history.db)
   --retention-days <n> snapshot: prune snapshots older than n days (default 90, 0=keep)
   --interval <window>  analytics timeframe: 15min|30min|1hr|3hr|1day|3day|7day (default 1day)
   --db-url <connstr>   run SQL as superuser via a Postgres connstring; full-access
@@ -107,30 +108,30 @@ Flags:
                        metrics. Default is the PAT read-only runner. REPEATABLE:
                        sweep several DBs ('full' -> per-DB reports + index;
                        'snapshot' -> each to store). Env fallback (no flag given):
-                       SBPERF_DB_URL plus numbered SBPERF_DB_URL_2, _3, ...
+                       PG_ANALYSER_DB_URL plus numbered PG_ANALYSER_DB_URL_2, _3, ...
   --amcheck [heap]     data-integrity check (opt-in; superuser --db-url + amcheck
                        already installed). Bare: bt_index_check on app B-tree
                        indexes (light). 'heap': also verify_heapam on the biggest
                        tables (HEAVY - reads every page). Never installs amcheck.
   --db-config <file>   JSON list of {name?,ref?,dbUrl} targets (gitignored); an
                        alternative to repeated --db-url. ref auto-derived if omitted.
-                       ./sbperf.databases.json is auto-loaded when no db flag/env set.
+                       ./pg-analyser.databases.json is auto-loaded when no db flag/env set.
   --prometheus <url>   trends from a scraper's Prometheus instead of the history store
   --prometheus-token <t>  bearer token for an auth'd datasource - e.g. a Grafana
                        datasource proxy (/api/datasources/proxy/uid/<uid>) or an
-                       auth'd Prometheus (env: SBPERF_PROMETHEUS_TOKEN)
+                       auth'd Prometheus (env: PG_ANALYSER_PROMETHEUS_TOKEN)
   --prometheus-cookie <c> session Cookie header for a datasource behind an SSO
                        proxy that a bearer token can't traverse (the same auth
                        the Grafana UI uses). Token wins if both are set.
-                       (env: SBPERF_PROMETHEUS_COOKIE)
+                       (env: PG_ANALYSER_PROMETHEUS_COOKIE)
   --prometheus-matcher <m> project-label selector template for a scraper whose
                        schema isn't the default supabase_project_ref="{ref}";
-                       "{ref}" -> the project ref (env: SBPERF_PROMETHEUS_MATCHER)
+                       "{ref}" -> the project ref (env: PG_ANALYSER_PROMETHEUS_MATCHER)
   --no-pat             force no-PAT mode: ignore any token (incl. the CLI
                        ~/.supabase/access-token fallback) and run on --db-url +
                        Grafana alone. For a profile auditing projects you
                        have a connstring for but no PAT.
-                       (env: SBPERF_NO_PAT=1)
+                       (env: PG_ANALYSER_NO_PAT=1)
   --profile <file>     one gitignored JSON = the whole no-PAT config: forced
                        no-PAT + region-mapped Grafana creds (per-region cookie)
                        + target databases. full --profile <file> sweeps them,
@@ -140,12 +141,12 @@ Flags:
                        combine profiles into ONE index - each DB keeps its own
                        mode (a no-PAT profile's DBs skip the API planes; a PAT
                        profile's use the token), Grafana, and trend window.
-                       See sbperf.profile.example.json.
+                       See pg-analyser.profile.example.json.
   --trend-days <n>     trend query window in days (default 30; the store/Grafana
                        is a TSDB so 90 is fine). profile.trendDays wins for a
-                       profile run. (env: SBPERF_TREND_DAYS)
+                       profile run. (env: PG_ANALYSER_TREND_DAYS)
   --incident-scan-days <n>  native-resolution contention scan window (default 7,
-                       capped by retention). (env: SBPERF_INCIDENT_SCAN_DAYS)
+                       capped by retention). (env: PG_ANALYSER_INCIDENT_SCAN_DAYS)
   --fail-on <sev>      check: gate severity - high|med|low (default high); exit 1 if breached
   --category <cat>     check/diff: restrict the gate to Performance|Security|Capacity
   --new-since <dir>    check: gate only on findings NEW vs the baseline dir's analysis.json
@@ -168,33 +169,33 @@ Flags:
   --narrative          report/pdf: embed the narrative summary (run 'narrate' first)
   --print-prompt       narrate: write the grounded prompt to prompt.md for copy-paste
   --import <file>|-    narrate: embed a pasted LLM reply (file, or - for stdin)
-  --brand <file>       white-label branding JSON (default: Supabase; or SBPERF_BRAND
-                       / ./sbperf.brand.json)
+  --brand <file>       white-label branding JSON (default: Supabase; or PG_ANALYSER_BRAND
+                       / ./pg-analyser.brand.json)
   --overlay <file>     per-project review overlay JSON (hide sections + notes;
-                       default: ./sbperf.overlays/<ref>.json or ~/.sbperf/overlays/<ref>.json)
+                       default: ./pg-analyser.overlays/<ref>.json or ~/.pg-analyser/overlays/<ref>.json)
   -h, --help           show this help
   -v, --version        print version
 
 narrate: writes the executive summary (analysis.json -> narrative.md), embedded
 at the top of the report with --narrative. Three ways to run it:
-  1. auto: set SBPERF_LLM_BASE_URL + SBPERF_LLM_MODEL (+ _API_KEY if needed);
+  1. auto: set PG_ANALYSER_LLM_BASE_URL + PG_ANALYSER_LLM_MODEL (+ _API_KEY if needed);
      works with OpenAI, a local llama-server, OpenRouter, etc.
   2. copy-paste: 'narrate <dir> --print-prompt' writes prompt.md - paste it into
      any chat LLM (pi.dev / ChatGPT / Claude), then bring the reply back with
      'narrate <dir> --import <reply.md>' (or 'pbpaste | narrate <dir> --import -').
   3. skip it: the report has a deterministic executive summary without any LLM.
 
-30-day trends: run 'sbperf snapshot' on a schedule (e.g. hourly cron) to
-accumulate history, then 'sbperf report <dir>' draws trends from the store.
-No Prometheus/Grafana needed - sbperf is the collector, SQLite is the store.
+30-day trends: run 'pg-analyser snapshot' on a schedule (e.g. hourly cron) to
+accumulate history, then 'pg-analyser report <dir>' draws trends from the store.
+No Prometheus/Grafana needed - pg-analyser is the collector, SQLite is the store.
 
 <ref> is your project ref (dashboard URL, or 'supabase projects list').
 Auth: set SUPABASE_ACCESS_TOKEN (see .env.example).
 
-No-PAT mode: with NO SUPABASE_ACCESS_TOKEN but a --db-url (or SBPERF_DB_URL /
-sbperf.databases.json), sbperf runs on the superuser connstring alone - SQL
+No-PAT mode: with NO SUPABASE_ACCESS_TOKEN but a --db-url (or PG_ANALYSER_DB_URL /
+pg-analyser.databases.json), pg-analyser runs on the superuser connstring alone - SQL
 diagnostics + advisors from the self-hosted splinter lints (+ Grafana trends if
-SBPERF_PROMETHEUS_* is set). Management-API planes (provisioning, backups,
+PG_ANALYSER_PROMETHEUS_* is set). Management-API planes (provisioning, backups,
 pooler, metrics, analytics) are skipped. This is the no-PAT path where
 you have a DB connstring but no PAT. '--all' still needs a PAT.`);
   process.exit(code);
@@ -424,7 +425,7 @@ async function doAllDbs(
     const tp = prof?.noPat ? null : transport;
     // Per-project regional Grafana: the target's profile maps its region (derived
     // from its connstring) to that region's host/uid/cookie. Falls back to the
-    // global --prometheus / SBPERF_PROMETHEUS_* when there's no profile match.
+    // global --prometheus / PG_ANALYSER_PROMETHEUS_* when there's no profile match.
     const graf = prof ? resolveGrafana(prof, t.region) : null;
     // A profile WITH a grafana block but no entry for this project's region =
     // trends can't be fetched; surface it in the report note + the done line
@@ -537,7 +538,7 @@ async function doAllDbs(
  * bar plus each project's permanent done() line already convey progress, and the
  * suppressed collect start/done detail is folded into that line. WARN/ERROR stay
  * visible (rendered cleanly above the bar via bindProgress). An explicit
- * SBPERF_LOG_LEVEL wins, so `SBPERF_LOG_LEVEL=info full --profile ...` restores
+ * PG_ANALYSER_LOG_LEVEL wins, so `PG_ANALYSER_LOG_LEVEL=info full --profile ...` restores
  * the full per-plane stream.
  */
 function sweepLogger(): Logger {
@@ -632,7 +633,7 @@ async function doAll(
   const cfg = noPatForced() ? null : loadConfigOptional();
   if (!cfg)
     throw new Error(
-      "--all needs a PAT: it enumerates projects via the Management API (and cannot run in forced no-PAT mode). For no-PAT, pass explicit --db-url connstrings (or sbperf.databases.json) to 'full'.",
+      "--all needs a PAT: it enumerates projects via the Management API (and cannot run in forced no-PAT mode). For no-PAT, pass explicit --db-url connstrings (or pg-analyser.databases.json) to 'full'.",
     );
   const transport = makeTransport(cfg);
   const m = new Management(transport);
@@ -822,17 +823,17 @@ function loadCfg() {
  * (with a one-line notice) when no PAT is resolvable - collect then runs on the
  * superuser --db-url + Grafana trends alone, skipping all Management planes.
  */
-/** Forced no-PAT mode (--no-pat / SBPERF_NO_PAT). Ignores any resolvable token
+/** Forced no-PAT mode (--no-pat / PG_ANALYSER_NO_PAT). Ignores any resolvable token
  * - including the personal ~/.supabase/access-token CLI fallback - so a work
  * profile auditing projects never accidentally runs PAT mode. */
 function noPatForced(): boolean {
-  return ["1", "true", "yes"].includes((process.env.SBPERF_NO_PAT ?? "").trim().toLowerCase());
+  return ["1", "true", "yes"].includes((process.env.PG_ANALYSER_NO_PAT ?? "").trim().toLowerCase());
 }
 
 function resolveTransport(): Transport | null {
   if (noPatForced()) {
     console.error(
-      "> no-PAT mode forced (--no-pat / SBPERF_NO_PAT); ignoring any token - Management API planes skipped",
+      "> no-PAT mode forced (--no-pat / PG_ANALYSER_NO_PAT); ignoring any token - Management API planes skipped",
     );
     return null;
   }
@@ -858,20 +859,23 @@ function splitRefs(v: string): string[] {
   return v.split(/[\s,]+/).filter(Boolean);
 }
 
-/** Default multi-DB config file auto-loaded from cwd when no db flag/env given. */
-const DEFAULT_DB_CONFIG = "sbperf.databases.json";
+/** Default multi-DB config file auto-loaded from cwd when no db flag/env given.
+ *  Renamed from sbperf.databases.json (2026-08-11); the old name is still read
+ *  when the new one is absent. */
+const DEFAULT_DB_CONFIG = "pg-analyser.databases.json";
+const LEGACY_DB_CONFIG = "sbperf.databases.json";
 
 /**
- * Collect superuser connstrings from the environment: SBPERF_DB_URL plus the
- * numbered SBPERF_DB_URL_2, SBPERF_DB_URL_3, ... (gaps tolerated). Each var
+ * Collect superuser connstrings from the environment: PG_ANALYSER_DB_URL plus the
+ * numbered PG_ANALYSER_DB_URL_2, PG_ANALYSER_DB_URL_3, ... (gaps tolerated). Each var
  * holds ONE full connstring - we never split a single var, since a password can
  * contain any delimiter. Order: base var first, then ascending index.
  */
 function collectEnvDbUrls(): string[] {
   const urls: string[] = [];
-  if (process.env.SBPERF_DB_URL) urls.push(process.env.SBPERF_DB_URL);
+  if (process.env.PG_ANALYSER_DB_URL) urls.push(process.env.PG_ANALYSER_DB_URL);
   for (let i = 2; i <= 99; i++) {
-    const v = process.env[`SBPERF_DB_URL_${i}`];
+    const v = process.env[`PG_ANALYSER_DB_URL_${i}`];
     if (v) urls.push(v);
   }
   return urls;
@@ -994,7 +998,7 @@ async function doDiff(
       const recent = store.recentAnalyses(ref, 2);
       if (recent.length < 2)
         throw new Error(
-          `need >= 2 snapshots for ${ref} in ${storePath} (have ${recent.length}) - run 'sbperf snapshot --ref ${ref}' on a schedule first`,
+          `need >= 2 snapshots for ${ref} in ${storePath} (have ${recent.length}) - run 'pg-analyser snapshot --ref ${ref}' on a schedule first`,
         );
       b = recent[0]!; // newest = current
       a = recent[1]!; // older = baseline
@@ -1003,7 +1007,7 @@ async function doDiff(
     }
   } else {
     throw new Error(
-      "diff needs two report dirs ('sbperf diff <old> <new>') or --ref <ref> to compare the two latest store snapshots",
+      "diff needs two report dirs ('pg-analyser diff <old> <new>') or --ref <ref> to compare the two latest store snapshots",
     );
   }
   console.log(renderDiffText(computeDiff(a, b)));
@@ -1056,7 +1060,7 @@ async function doBench(flags: Flags, targets: SweepTarget[]): Promise<void> {
         const [a, b] = flags.compare.map((x) => store.benchRun(Number(x)));
         if (!a || !b)
           throw new Error(
-            `compare needs two stored run ids (${flags.compare.join(", ")}) - see 'sbperf bench --list'`,
+            `compare needs two stored run ids (${flags.compare.join(", ")}) - see 'pg-analyser bench --list'`,
           );
         console.log(renderCompareText(a, b));
       }
@@ -1071,7 +1075,7 @@ async function doBench(flags: Flags, targets: SweepTarget[]): Promise<void> {
   const target = targets[0];
   if (!target)
     throw new Error(
-      "bench needs a --db-url connstring (or SBPERF_DB_URL / sbperf.databases.json with one entry) - pgbench speaks the wire protocol",
+      "bench needs a --db-url connstring (or PG_ANALYSER_DB_URL / pg-analyser.databases.json with one entry) - pgbench speaks the wire protocol",
     );
   const protocol = (flags.protocol ?? "extended") as (typeof BENCH_PROTOCOLS)[number];
   if (!BENCH_PROTOCOLS.includes(protocol))
@@ -1118,7 +1122,7 @@ async function loadAnalysis(dir: string) {
   const path = join(dir, "analysis.json");
   if (!(await Bun.file(path).exists())) {
     throw new Error(
-      `no analysis.json in ${dir} - run 'sbperf analyze --ref <ref> --out ${dir}' first`,
+      `no analysis.json in ${dir} - run 'pg-analyser analyze --ref <ref> --out ${dir}' first`,
     );
   }
   return Analysis.parse(await Bun.file(path).json());
@@ -1165,7 +1169,7 @@ async function doSnapshot(
     );
     console.error(
       n >= 2
-        ? "> run 'sbperf report' to render trends from accumulated history"
+        ? "> run 'pg-analyser report' to render trends from accumulated history"
         : "> trends need >=2 snapshots; schedule this command to accumulate history",
     );
   } finally {
@@ -1197,7 +1201,7 @@ function fillTrendsFromStore(
 
 /**
  * Export the accumulated history store as OpenMetrics for promtool backfill,
- * so Grafana can query sbperf's corpus retroactively. One ref (--ref) or all
+ * so Grafana can query pg-analyser's corpus retroactively. One ref (--ref) or all
  * refs in the store (labels carry supabase_project_ref to disambiguate).
  */
 async function doExportPrometheus(
@@ -1206,7 +1210,7 @@ async function doExportPrometheus(
   storePath: string,
 ): Promise<void> {
   if (!(await Bun.file(storePath).exists())) {
-    throw new Error(`no history store at ${storePath} - run 'sbperf snapshot' first`);
+    throw new Error(`no history store at ${storePath} - run 'pg-analyser snapshot' first`);
   }
   const store = HistoryStore.open(storePath);
   try {
@@ -1224,7 +1228,7 @@ async function doExportPrometheus(
       : "(none)";
 
     await mkdir(outDir, { recursive: true });
-    const omPath = join(outDir, `sbperf-${ref ?? "all"}.om`);
+    const omPath = join(outDir, `pg-analyser-${ref ?? "all"}.om`);
     await Bun.write(omPath, om);
     console.error(
       `> ${omPath} (${refs.length} ref(s), ${snaps.length} snapshots, ${seriesCount} families, ${sampleCount} samples)`,
@@ -1247,7 +1251,9 @@ async function doReport(
   const path = storePath ?? DEFAULT_STORE;
   if (await Bun.file(path).exists()) fillTrendsFromStore(analysis, path);
   if (narrative && !analysis.narrative)
-    console.error("> --narrative given but analysis.json has none; run 'sbperf narrate' first");
+    console.error(
+      "> --narrative given but analysis.json has none; run 'pg-analyser narrate' first",
+    );
   const overlay = await loadOverlay({ ref: analysis.meta.ref, file: overlayFile });
   const htmlPath = join(dir, "report.html");
   await Bun.write(htmlPath, render(analysis, { narrative, brand: activeBrand, overlay }));
@@ -1282,7 +1288,7 @@ async function doPdf(
 /**
  * Merge externally-exported time series (Grafana CSV export, Prometheus dump,
  * spreadsheet, ...) into analysis.trends so `report` renders them as native
- * trend panels. Vendor-neutral: sbperf ingests a file you produced, it never
+ * trend panels. Vendor-neutral: pg-analyser ingests a file you produced, it never
  * talks to your dashboard.
  */
 async function doImportTrends(dir: string, files: string[]): Promise<void> {
@@ -1304,7 +1310,7 @@ async function doImportTrends(dir: string, files: string[]): Promise<void> {
   const path = join(dir, "analysis.json");
   await Bun.write(path, JSON.stringify(analysis, null, 2));
   console.error(`> merged ${added} series into ${path} (${analysis.trends.length} total)`);
-  console.error("> run 'sbperf report' / 'pdf' to render them");
+  console.error("> run 'pg-analyser report' / 'pdf' to render them");
 }
 
 /** Persist a narrative markdown onto analysis.json + emit narrative.md/html. */
@@ -1316,7 +1322,7 @@ async function embedNarrative(dir: string, analysis: Analysis, md: string): Prom
   await Bun.write(join(dir, "narrative.html"), renderNarrativePage(analysis, activeBrand));
   console.error(`> ${path}`);
   console.error(`> ${join(dir, "narrative.html")}`);
-  console.error(`> embed in the report with: sbperf report ${dir} --narrative`);
+  console.error(`> embed in the report with: pg-analyser report ${dir} --narrative`);
   return path;
 }
 
@@ -1339,10 +1345,10 @@ async function doNarrate(
     // a real analysis starts with ## Executive summary.
     if (/^##\s+SYSTEM\b/m.test(md) && /^##\s+USER\b/m.test(md))
       throw new Error(
-        `${where} looks like the PROMPT (the sbperf --print-prompt output), not the model's reply. ` +
+        `${where} looks like the PROMPT (the pg-analyser --print-prompt output), not the model's reply. ` +
           `Paste the chat LLM's ANSWER (the analysis, starting with "## Executive summary") - not prompt.md.`,
       );
-    const header = `<!-- imported into sbperf from ${where}; the deterministic report.html is ground truth -->\n\n`;
+    const header = `<!-- imported into pg-analyser from ${where}; the deterministic report.html is ground truth -->\n\n`;
     return embedNarrative(dir, analysis, `${header}${md}\n`);
   }
 
@@ -1365,7 +1371,7 @@ async function doNarrate(
     console.error("> 1. paste prompt.md into a chat LLM (pi.dev / ChatGPT / Claude)");
     console.error("> 2. save the LLM's ANSWER (not the prompt) to a file, e.g. reply.md");
     console.error(
-      `> 3. sbperf narrate ${dir} --import reply.md   (or: pbpaste | sbperf narrate ${dir} --import -)`,
+      `> 3. pg-analyser narrate ${dir} --import reply.md   (or: pbpaste | pg-analyser narrate ${dir} --import -)`,
     );
     return p;
   }
@@ -1388,7 +1394,7 @@ async function doAlertsInit(ref: string | undefined, dir: string): Promise<void>
   const rules = buildAlertRules({ refMatcher: ref ? `supabase_project_ref="${ref}"` : "" });
   await mkdir(dir, { recursive: true });
   const yamlPath = join(dir, "alerts.yml");
-  await Bun.write(yamlPath, renderAlertsYaml(rules, ref ? `sbperf-${ref}` : "sbperf"));
+  await Bun.write(yamlPath, renderAlertsYaml(rules, ref ? `pg-analyser-${ref}` : "pg-analyser"));
   await Bun.write(
     join(dir, "EXCLUSIONS.md"),
     `# Findings deliberately NOT alerted on\n\n${renderExclusions()}\n`,
@@ -1420,12 +1426,12 @@ async function main(): Promise<void> {
   activeBrand = await loadBrand({ file: flags.brand });
   // Bridge the flag to the env that collect reads, so the token reaches
   // fetchTrends without threading a secret through every collect call site.
-  if (flags.prometheusToken) process.env.SBPERF_PROMETHEUS_TOKEN = flags.prometheusToken;
-  if (flags.prometheusCookie) process.env.SBPERF_PROMETHEUS_COOKIE = flags.prometheusCookie;
-  if (flags.prometheusMatcher) process.env.SBPERF_PROMETHEUS_MATCHER = flags.prometheusMatcher;
-  if (flags.noPat) process.env.SBPERF_NO_PAT = "1";
-  if (flags.trendDays) process.env.SBPERF_TREND_DAYS = flags.trendDays;
-  if (flags.incidentScanDays) process.env.SBPERF_INCIDENT_SCAN_DAYS = flags.incidentScanDays;
+  if (flags.prometheusToken) process.env.PG_ANALYSER_PROMETHEUS_TOKEN = flags.prometheusToken;
+  if (flags.prometheusCookie) process.env.PG_ANALYSER_PROMETHEUS_COOKIE = flags.prometheusCookie;
+  if (flags.prometheusMatcher) process.env.PG_ANALYSER_PROMETHEUS_MATCHER = flags.prometheusMatcher;
+  if (flags.noPat) process.env.PG_ANALYSER_NO_PAT = "1";
+  if (flags.trendDays) process.env.PG_ANALYSER_TREND_DAYS = flags.trendDays;
+  if (flags.incidentScanDays) process.env.PG_ANALYSER_INCIDENT_SCAN_DAYS = flags.incidentScanDays;
 
   // A --profile <file.json> is the whole no-PAT config in one gitignored JSON:
   // force-no-PAT + region-mapped Grafana creds + target databases. Loaded
@@ -1438,7 +1444,7 @@ async function main(): Promise<void> {
     // Force no-PAT globally ONLY when EVERY chained profile is no-PAT. In a mixed
     // run (some PAT, some no-PAT) the PAT must resolve for the PAT profiles;
     // doAllDbs then passes a null transport per-target for the no-PAT ones.
-    if (activeProfiles.every((p) => p.noPat)) process.env.SBPERF_NO_PAT = "1";
+    if (activeProfiles.every((p) => p.noPat)) process.env.PG_ANALYSER_NO_PAT = "1";
     flags.profiles.forEach((f, i) => {
       const p = activeProfiles[i]!;
       console.error(
@@ -1457,8 +1463,8 @@ async function main(): Promise<void> {
     // explicit db flag, fall back to env, then to an auto-discovered config file:
     //   1. --profile <file.json>       (its databases[])
     //   2. --db-url / --db-config      (explicit; merged)
-    //   3. SBPERF_DB_URL[_N] env vars  (numbered; each a full connstring)
-    //   4. ./sbperf.databases.json     (auto-loaded if it exists)
+    //   3. PG_ANALYSER_DB_URL[_N] env vars  (numbered; each a full connstring)
+    //   4. ./pg-analyser.databases.json     (auto-loaded if it exists)
     let targets: SweepTarget[] = [];
     if (activeProfiles.length) {
       // Each profile's databases resolve independently and carry that profile,
@@ -1481,6 +1487,9 @@ async function main(): Promise<void> {
         } else if (await Bun.file(DEFAULT_DB_CONFIG).exists()) {
           raw.push(...parseDbConfig(await Bun.file(DEFAULT_DB_CONFIG).text()));
           console.error(`> db targets: auto-loaded ${DEFAULT_DB_CONFIG} (${raw.length})`);
+        } else if (await Bun.file(LEGACY_DB_CONFIG).exists()) {
+          raw.push(...parseDbConfig(await Bun.file(LEGACY_DB_CONFIG).text()));
+          console.error(`> db targets: auto-loaded ${LEGACY_DB_CONFIG} (${raw.length})`);
         }
       }
       if (raw.length) targets = resolveTargets(raw, raw.length === 1 ? flags.ref : undefined);
@@ -1621,7 +1630,7 @@ async function main(): Promise<void> {
           const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
           // Maximal coverage: PAT enumerates + serves API planes/metrics, and any
           // project whose ref has a connstring (--db-config / --db-url / env /
-          // auto-loaded sbperf.databases.json) is upgraded to superuser SQL.
+          // auto-loaded pg-analyser.databases.json) is upgraded to superuser SQL.
           const dbUrlByRef = new Map(targets.map((t) => [t.ref, t.dbUrl]));
           await doAll(
             flags.org,
@@ -1697,7 +1706,7 @@ async function main(): Promise<void> {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(err instanceof ConfigError ? `config error: ${msg}` : `error: ${msg}`);
-    if (process.env.SBPERF_DEBUG && err instanceof Error) console.error(err.stack);
+    if (process.env.PG_ANALYSER_DEBUG && err instanceof Error) console.error(err.stack);
     process.exit(1);
   }
 }

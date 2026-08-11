@@ -5,8 +5,8 @@ import { TrendSeries as TrendSeriesSchema } from "./schemas.ts";
  * Import externally-sourced time series into `analysis.trends` so the report
  * renders them as native inline-SVG trend panels - no vendor coupling. You
  * export whatever history you have (Grafana "Inspect -> Data -> Download CSV",
- * a Prometheus dump, a spreadsheet) and hand sbperf the file; it maps onto the
- * generic TrendSeries shape ({title, unit, points:[{t,v}]}). sbperf never talks
+ * a Prometheus dump, a spreadsheet) and hand pg-analyser the file; it maps onto the
+ * generic TrendSeries shape ({title, unit, points:[{t,v}]}). pg-analyser never talks
  * to your dashboard - it only ingests a file you produced.
  *
  * Supported formats:
@@ -17,7 +17,7 @@ import { TrendSeries as TrendSeriesSchema } from "./schemas.ts";
  *    tidy-data shape. Detected by header names (series/metric/name + value) or
  *    by sniffing (col 2 is a non-numeric label, col 3 numeric). Grouped into one
  *    series per distinct label.
- *  - JSON: a TrendSeries[] (sbperf-native), or {trends:[...]}, or an array of
+ *  - JSON: a TrendSeries[] (pg-analyser-native), or {trends:[...]}, or an array of
  *    {title, unit?, points:[{t,v}]} / {title, unit?, points:[[t,v],...]}.
  *
  * Timestamps may be ISO-8601 or epoch (seconds or milliseconds); all are

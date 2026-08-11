@@ -5,7 +5,7 @@ import type { SqlRow } from "./schemas.ts";
  * managed service schemas, and common extension schemas.
  *
  * This mirrors the exclusion set baked into splinter.sql's `unused_index` and
- * `duplicate_index` lints (see src/splinter.sql), so sbperf's SQL-derived
+ * `duplicate_index` lints (see src/splinter.sql), so pg-analyser's SQL-derived
  * findings and the narrate evidence digest count the SAME objects the advisor
  * does: we never flag a Supabase-managed index (e.g. an `auth` internal index)
  * and never miss a custom application schema (e.g. `app1`). The previous

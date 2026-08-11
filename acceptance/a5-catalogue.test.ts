@@ -71,7 +71,7 @@ describe("Task 5 - every new finding is catalogued", () => {
   });
 });
 
-describe("Task 5 - sbperf stays read-only", () => {
+describe("Task 5 - pg-analyser stays read-only", () => {
   test("remediation SQL is printed for a human, never executed by the tool", () => {
     // The catalogue may CONTAIN pg_drop_replication_slot / ROLLBACK PREPARED /
     // pg_terminate_backend as copy-pasteable text; the guarantee under test is

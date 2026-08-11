@@ -277,7 +277,7 @@ export const Analysis = z.object({
     // Where the trend series came from, so the report can label the Resource
     // snapshot (and note that CloudWatch-only panels like EBS burst-balance are
     // absent from the non-CloudWatch sources). "prometheus" = a Prometheus/
-    // Grafana TSDB, "store" = the sbperf SQLite history store, "import" = an
+    // Grafana TSDB, "store" = the pg-analyser SQLite history store, "import" = an
     // imported CSV/JSON series. Absent = no trends (single run).
     trendSource: z.enum(["prometheus", "store", "import"]).optional(),
     // Result of the superuser log-directory probe (Check 1 of the lock-
@@ -372,7 +372,7 @@ export const Analysis = z.object({
     queryIoStats: SqlRows.default([]),
     // index_advisor CREATE INDEX recommendations for heavy statements. Populated
     // ONLY when the superuser SQL tier is used AND index_advisor + hypopg are
-    // installed (sbperf never CREATEs them). Empty otherwise. Back-compat default.
+    // installed (pg-analyser never CREATEs them). Empty otherwise. Back-compat default.
     indexAdvisor: SqlRows.default([]),
     // Unlogged tables in app schemas (relpersistence='u') - not crash-safe,
     // truncated on failover. Both tiers. Back-compat default.

@@ -1,11 +1,11 @@
 import { Database } from "bun:sqlite";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { type Analysis, MetricSample } from "./schemas.ts";
 import type { SnapshotForTrends } from "./trends.ts";
 
 /**
- * SQLite-backed history store. sbperf is its own collector: each `snapshot`
+ * SQLite-backed history store. pg-analyser is its own collector: each `snapshot`
  * run appends one timestamped Analysis here, and `report` reads accumulated
  * snapshots to compute 30-day trends - no Prometheus/Grafana required.
  *
@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS sql_scalars (
 );
 CREATE INDEX IF NOT EXISTS idx_ss_snap ON sql_scalars(snapshot_id);
 
--- sbperf bench: pgbench run history (see bench.ts / docs/bench-design.md).
+-- pg-analyser bench: pgbench run history (see bench.ts / docs/bench-design.md).
 -- Independent of snapshots (no FK): a benchmark is a point-in-time event, not
 -- part of the collected Analysis corpus. Keyed by (ref, script_hash) so a
 -- script's runs form a comparable series. Connstrings are never stored.
@@ -167,7 +167,13 @@ const SCALAR_KEYS: Array<{ key: string; pick: (a: Analysis) => number | null }> 
   },
 ];
 
-export const DEFAULT_STORE = `${process.env.HOME ?? "."}/.sbperf/history.db`;
+// Renamed default location (sbperf -> pg-analyser, 2026-08-11). Fall back to
+// the pre-rename store when it exists and the new one does not, so existing
+// history keeps working unmigrated.
+const NEW_STORE = `${process.env.HOME ?? "."}/.pg-analyser/history.db`;
+const LEGACY_STORE = `${process.env.HOME ?? "."}/.sbperf/history.db`;
+export const DEFAULT_STORE =
+  !existsSync(NEW_STORE) && existsSync(LEGACY_STORE) ? LEGACY_STORE : NEW_STORE;
 
 /** sqlite row -> BenchRunRow: booleans from ints, guc_json parsed. */
 function hydrateBenchRow(r: Record<string, unknown>): BenchRunRow {
@@ -277,7 +283,7 @@ export class HistoryStore {
   }
 
   /** The `n` most recent stored Analyses for a ref, newest first. Powers the
-   *  store-based `sbperf diff --ref <ref>` (defaults to comparing the last two). */
+   *  store-based `pg-analyser diff --ref <ref>` (defaults to comparing the last two). */
   recentAnalyses(ref: string, n = 2): Analysis[] {
     const rows = this.db
       .query("SELECT analysis_json FROM snapshots WHERE ref = ? ORDER BY collected_ts DESC LIMIT ?")

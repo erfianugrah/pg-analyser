@@ -224,7 +224,7 @@ function groupAdvisors(
 
 /**
  * Security-config findings from the auth / network / SSL Management planes.
- * Unlike the advisor passthrough, these are sbperf-ORIGINAL Security checks.
+ * Unlike the advisor passthrough, these are pg-analyser-ORIGINAL Security checks.
  * a.security is null in no-PAT mode (no Management API) - nothing is asserted
  * then. Each sub-plane is independently nullable, so a single 403 (e.g. a
  * beta-gated endpoint) skips just its checks. Fields are optional at the schema
@@ -1604,7 +1604,7 @@ export function deriveFindings(a: Analysis): Finding[] {
       category: "Capacity",
       title: `Transaction-ID age is ${maxAge.toLocaleString()} (freeze blocked) but no explaining xmin holder found (replication slot / prepared transaction / backend / standby)`,
       evidence:
-        "Audit the four holder classes (see txid_wraparound remediation). If all are empty or young, the blocker is opaque to SQL. Check application logs and long-running processes for unexplained connections. To verify index/heap integrity, run sbperf with --amcheck if amcheck is installed.",
+        "Audit the four holder classes (see txid_wraparound remediation). If all are empty or young, the blocker is opaque to SQL. Check application logs and long-running processes for unexplained connections. To verify index/heap integrity, run pg-analyser with --amcheck if amcheck is installed.",
       anchor: "#xmin",
       ...meta("freeze_blocked_no_holder"),
     });
@@ -2454,7 +2454,7 @@ export function deriveFindings(a: Analysis): Finding[] {
     // AccessShareLock on the tables its command touches for its whole run, so
     // any ALTER on those tables queues every new reader behind the waiting
     // exclusive lock (Postgres grants locks in queue order). Match overrun jobs
-    // against the top-N biggest tables sbperf already collected.
+    // against the top-N biggest tables pg-analyser already collected.
     const collisions: string[] = [];
     const topTables = a.sql.biggestTables
       .map((t) => String(t.table))
@@ -2689,7 +2689,7 @@ export function deriveFindings(a: Analysis): Finding[] {
   out.push(...liveLockContentionFindings(a));
   out.push(...lockWaveFindings(a));
 
-  // Security config (auth / network / SSL) - sbperf-original Security findings.
+  // Security config (auth / network / SSL) - pg-analyser-original Security findings.
   out.push(...securityConfigFindings(a));
 
   out.sort(

@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "sbperf",
+      "name": "pg-analyser",
       "dependencies": {
         "zod": "4.4.3",
       },

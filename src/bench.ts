@@ -6,14 +6,14 @@ import { DirectSqlRunner } from "./sqlrunner.ts";
 import type { BenchRunInput, BenchRunRow, HistoryStore } from "./store.ts";
 
 /**
- * `sbperf bench` - a pgbench wrapper with methodology guardrails. pgbench does
+ * `pg-analyser bench` - a pgbench wrapper with methodology guardrails. pgbench does
  * the work; this adds the mechanizable half of good benchmarking: client-side
  * saturation checks, warmup + repetition with stability detection, exact
  * percentiles parsed from the per-transaction log (-l), a pg_settings snapshot
  * per run (so --compare shows the config delta next to the perf delta), and a
  * SQLite run history keyed by (ref, script). See docs/bench-design.md.
  *
- * Binary discovery mirrors report/pdf.ts's Chromium approach: SBPERF_PGBENCH
+ * Binary discovery mirrors report/pdf.ts's Chromium approach: PG_ANALYSER_PGBENCH
  * env, then PATH. pgbench talks the wire protocol, so a connstring is
  * required and no Management API planes are involved.
  */
@@ -284,9 +284,9 @@ export function renderCompareText(a: BenchRunRow, b: BenchRunRow): string {
 // ---------------------------------------------------------------------------
 // Orchestration (live pgbench; exercised manually, not in CI)
 
-/** pgbench binary: SBPERF_PGBENCH env, then PATH. Null when absent. */
+/** pgbench binary: PG_ANALYSER_PGBENCH env, then PATH. Null when absent. */
 export function findPgbench(): string | null {
-  const env = process.env.SBPERF_PGBENCH;
+  const env = process.env.PG_ANALYSER_PGBENCH;
   if (env) return env;
   return Bun.which("pgbench");
 }
@@ -366,7 +366,7 @@ export async function runBench(opts: BenchOptions, store: HistoryStore): Promise
   const bin = findPgbench();
   if (!bin)
     throw new Error(
-      "pgbench not found. Install PostgreSQL client tools, or set SBPERF_PGBENCH=/path/to/pgbench",
+      "pgbench not found. Install PostgreSQL client tools, or set PG_ANALYSER_PGBENCH=/path/to/pgbench",
     );
   const cores = cpus().length;
   const load1 = loadavg()[0] ?? 0;
@@ -434,7 +434,7 @@ export async function runBench(opts: BenchOptions, store: HistoryStore): Promise
       scriptArgs.push("-b", opts.builtin);
     }
 
-    const dir = await mkdtemp(join(tmpdir(), "sbperf-bench-"));
+    const dir = await mkdtemp(join(tmpdir(), "pg-analyser-bench-"));
     const runs: RunStats[] = [];
     let loadMax = 0;
     try {
