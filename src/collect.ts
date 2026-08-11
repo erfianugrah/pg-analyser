@@ -284,6 +284,7 @@ export async function collect(
     storageUsage,
     extensions,
     unindexedVectors,
+    vectorIndexes,
     bucketList,
     walArchiving,
     checksumFailures,
@@ -357,6 +358,7 @@ export async function collect(
     sql("storageUsage"),
     sql("extensions"),
     sql("unindexedVectors"),
+    sql("vectorIndexes"),
     sql("bucketList"),
     sql("walArchiving"),
     // Checksum failures read from pg_stat_database - no superuser needed, runs
@@ -950,6 +952,7 @@ export async function collect(
       storageUsage,
       extensions,
       unindexedVectors,
+      vectorIndexes,
       walArchiving,
       checksumFailures,
       walDirSize,

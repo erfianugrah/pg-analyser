@@ -1546,6 +1546,58 @@ export const HEURISTICS: Record<string, Heuristic> = {
     docUrl: "https://supabase.com/docs/guides/ai/vector-indexes",
     reviewed: R,
   },
+  vector_index_economics: {
+    id: "vector_index_economics",
+    plane: "Storage",
+    sql: "-- reindex the fp32 column as half precision (halfvec type added in pgvector 0.7.0), ~half the index at equal recall:\nCREATE INDEX CONCURRENTLY <new_idx> ON <schema>.<table> USING hnsw ((<column>::halfvec(<dims>)) halfvec_cosine_ops);\n-- flip queries to the halfvec operator, verify recall on a held-out set, then DROP INDEX CONCURRENTLY <old_idx>;",
+    howToVerify:
+      "Compare pg_relation_size of the old and new index, and pin recall: run a fixed set of distance queries against both indexes (pinned by primary key, not OFFSET pagination) and compare top-k overlap. Measure, don't assume - a prior 'identical recall' claim turned out to be an unpinned-OFFSET artifact; real halfvec recall was 92.5% vs 91.5% full precision (equal within noise).",
+    whyItMatters:
+      "An HNSW/IVFFlat index over a full-precision vector column stores every vector at float32 inside the index, so on a large table the ANN index alone can rival the heap and dominate database size (measured: 1,043 MB full-precision HNSW vs 597 MB halfvec on the same 384-dim corpus). Disk is provisioned and billed on total size, so an oversized index is a recurring capacity cost, not a one-off.",
+    remediation:
+      "If the workload tolerates float16 (most embedding models do at equal recall), rebuild the index over the halfvec cast - the column keeps full precision, only the index halves. Requires pgvector >= 0.7.0. For very high-dimensional columns consider dimensionality reduction or Matryoshka truncation first - smaller dims beat narrower floats.",
+    docUrl: "https://supabase.com/docs/guides/ai/vector-indexes",
+    reviewed: R,
+  },
+  filtered_vector_query: {
+    id: "filtered_vector_query",
+    plane: "Query",
+    sql: "-- confirm the ANN index survives the filter:\nEXPLAIN (ANALYZE, BUFFERS)\nSELECT ... FROM <table> WHERE <filter> ORDER BY <vec> <=> $1 LIMIT k;\n-- look for an Index Scan using the hnsw/ivfflat index, NOT a Seq Scan + top-N heapsort",
+    howToVerify:
+      "EXPLAIN the flagged statement: the plan must show the ANN index being scanned. If it seq-scans + sorts, restructure: move the vector search into a CROSS JOIN LATERAL against the filtered row set, or use pgvector's iterative index scans (strict_order/relaxed_order) so post-filtering happens inside the scan.",
+    whyItMatters:
+      "HNSW/IVFFlat indexes accelerate ORDER BY distance LIMIT k, but a WHERE filter can silently defeat them: Postgres applies the filter as a post-index predicate (returning too few rows) or falls back to an exact scan + sort. Query SHAPES matter too - a WITH/materialized CTE or correlated subquery around the distance ordering blocks index pushdown entirely (measured: a source-filtered vector search went 8.4s -> 0.21s once the materialized CTE was removed). pg_stat_statements shows the statement is slow; only the plan shows why.",
+    remediation:
+      "EXPLAIN the statement and check the ANN index appears under the filter. If not: rewrite the filter as a LATERAL subquery, drop materialized CTEs around the distance ordering, enable iterative scans (SET hnsw.iterative_scan = 'relaxed_order', added in pgvector 0.8.0), or add a partial ANN index matching a selective constant filter.",
+    docUrl: "https://supabase.com/docs/guides/ai/vector-indexes",
+    reviewed: R,
+  },
+  queue_poll_pressure: {
+    id: "queue_poll_pressure",
+    plane: "Query",
+    sql: "-- a partial index matching the poll predicate keeps the SELECT O(remaining) and self-empties:\nCREATE INDEX CONCURRENTLY <idx> ON <table> (<order_col>) WHERE <pending_predicate>;",
+    howToVerify:
+      "Re-check pg_stat_statements after indexing: the poll statement's mean_exec_time should stop growing as the pending set shrinks, and its share of total time should fall.",
+    whyItMatters:
+      "A SELECT ... FOR UPDATE SKIP LOCKED poll loop re-scans the same shrinking candidate set on every cycle - as the queue drains, each poll takes LONGER relative to the work it finds (measured: a backfill poll ran 75k times at 1.19s mean, ending at 81% of total database exec time). The table also churns dead tuples from the claim/delete pattern, feeding autovacuum.",
+    remediation:
+      "Add a partial index ON the poll's ORDER BY column WHERE the pending predicate holds - the poll becomes O(remaining) and the index self-empties when the queue drains. Keep the queue table's autovacuum aggressive (per-table autovacuum_vacuum_scale_factor low) since SKIP LOCKED claims generate update/delete churn.",
+    docUrl: "https://www.postgresql.org/docs/current/indexes-partial.html",
+    reviewed: R,
+  },
+  recursive_cte_heavy: {
+    id: "recursive_cte_heavy",
+    plane: "Query",
+    sql: "-- the recursive term's join/lookup columns need a plain b-tree:\nEXPLAIN (ANALYZE) <the recursive query>;\n-- the Recursive Union's inner scan should be an Index Scan, not a Seq Scan of the edge table",
+    howToVerify:
+      "EXPLAIN the statement: the recursive term (the part under Recursive Union that re-reads the working table) should hit an index on the join columns. If it seq-scans, add the index on the traversal key (for an edge table, the direction you traverse: (source) for outbound, (target) for inbound).",
+    whyItMatters:
+      "WITH RECURSIVE queries (graph traversal, hierarchy walks) execute their recursive term once per level; if that term seq-scans the edge/table relation, cost multiplies by depth. A recursive CTE appearing in the top-by-time statements means the traversal itself is a first-class workload and worth indexing for directly.",
+    remediation:
+      "Index the recursive term's join columns (for edge tables: the column you traverse from, typically (source) or (target) - both if you traverse both directions). If cycles are possible, add a cycle-detection column (CYCLE clause) instead of relying on application-side guards.",
+    docUrl: "https://www.postgresql.org/docs/current/queries-with.html",
+    reviewed: R,
+  },
   extensions_outdated: {
     id: "extensions_outdated",
     plane: "Config",
