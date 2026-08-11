@@ -382,6 +382,12 @@ export const Analysis = z.object({
     // populated ONLY when the extension is installed + superuser SQL. Empty
     // otherwise (findings fall back to the pg_stats estimate). Back-compat default.
     bloatExact: SqlRows.default([]),
+    // Version-gated planes: empty unless the server major supports them
+    // (pg_stat_io PG16+, pgss jit_* fields PG15+, checkpointer view split at
+    // PG17 - both checkpointer variants alias one shape). Back-compat defaults.
+    ioByBackend: SqlRows.default([]),
+    jitTopStatements: SqlRows.default([]),
+    checkpointer: SqlRows.default([]),
     indexStats: SqlRows,
     duplicateIndexes: SqlRows,
     rlsUnindexed: SqlRows,
