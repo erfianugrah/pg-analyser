@@ -82,6 +82,7 @@ function base(): Analysis {
       storageUsage: [],
       extensions: [],
       unindexedVectors: [],
+      vectorIndexes: [],
       sequenceExhaustion: [],
       walArchiving: [],
       hbaRules: [],
@@ -2387,4 +2388,206 @@ describe("anti-wraparound autovacuum in flight", () => {
     const f = deriveFindings(a).find((x) => x.heuristicId === "txid_wraparound");
     expect(f?.evidence ?? "").not.toContain("forced anti-wraparound");
   });
+});
+
+describe("pgvector / query-shape findings (2026-08 vectors)", () => {
+  test("vector_index_economics: big fp32 ANN index + halfvec available -> low finding", () => {
+    const a = base();
+    a.sql.extensions = [{ name: "vector", installed: "0.8.6", latest: "0.8.6", outdated: false }];
+    a.sql.vectorIndexes = [
+      {
+        schema: "public",
+        table: "messages",
+        column: "embedding",
+        dimensions: 384,
+        method: "hnsw",
+        index: "messages_embedding_hnsw",
+        index_bytes: 1_093_000_000,
+        index_size: "1043 MB",
+        table_bytes: 2_400_000_000,
+        pct_of_table: 45.5,
+        pct_of_db: 24.9,
+        idx_scan: 1000,
+        definition:
+          "CREATE INDEX messages_embedding_hnsw ON public.messages USING hnsw (embedding vector_cosine_ops)",
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "vector_index_economics");
+    expect(f?.severity).toBe("low");
+    expect(f?.category).toBe("Capacity");
+    expect(f?.evidence).toContain("messages_embedding_hnsw");
+    expect(f?.evidence).toContain("24.9% of db");
+  });
+
+  test("vector_index_economics: halfvec index already -> no finding", () => {
+    const a = base();
+    a.sql.extensions = [{ name: "vector", installed: "0.8.6", latest: "0.8.6", outdated: false }];
+    a.sql.vectorIndexes = [
+      {
+        schema: "public",
+        table: "messages",
+        column: null,
+        dimensions: null,
+        method: "hnsw",
+        index: "messages_embedding_halfvec_hnsw",
+        index_bytes: 626_000_000,
+        index_size: "597 MB",
+        table_bytes: 2_400_000_000,
+        pct_of_table: 26.1,
+        pct_of_db: 15.1,
+        idx_scan: 500,
+        definition:
+          "CREATE INDEX messages_embedding_halfvec_hnsw ON public.messages USING hnsw ((embedding::halfvec(384)) halfvec_cosine_ops)",
+      },
+    ];
+    expect(deriveFindings(a).some((x) => x.heuristicId === "vector_index_economics")).toBe(false);
+  });
+
+  test("vector_index_economics: pgvector < 0.7 -> suppressed (no halfvec)", () => {
+    const a = base();
+    a.sql.extensions = [{ name: "vector", installed: "0.6.2", latest: "0.8.6", outdated: true }];
+    a.sql.vectorIndexes = [
+      {
+        schema: "public",
+        table: "docs",
+        column: "embedding",
+        dimensions: 384,
+        method: "hnsw",
+        index: "docs_embedding_hnsw",
+        index_bytes: 2_000_000_000,
+        index_size: "1907 MB",
+        table_bytes: 3_000_000_000,
+        pct_of_table: 66.7,
+        pct_of_db: 40.0,
+        idx_scan: 10,
+        definition:
+          "CREATE INDEX docs_embedding_hnsw ON public.docs USING hnsw (embedding vector_cosine_ops)",
+      },
+    ];
+    expect(deriveFindings(a).some((x) => x.heuristicId === "vector_index_economics")).toBe(false);
+  });
+
+  test("filtered_vector_query: distance op + WHERE with ANN indexes present -> low advisory", () => {
+    const a = base();
+    a.sql.vectorIndexes = [
+      {
+        schema: "public",
+        table: "messages",
+        method: "hnsw",
+        index: "m_hnsw",
+        index_bytes: 100,
+        pct_of_db: 0.1,
+        pct_of_table: 0.1,
+        definition: "...",
+      },
+    ];
+    a.sql.topStatements = [
+      {
+        queryid: "1",
+        query: "SELECT id FROM messages WHERE source = $1 ORDER BY embedding <=> $2 LIMIT 10",
+        mean_ms: 8400,
+        calls: 100,
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "filtered_vector_query");
+    expect(f?.severity).toBe("low");
+    expect(f?.evidence).toContain("embedding <=>");
+  });
+
+  test("filtered_vector_query: no ANN indexes -> suppressed (pgvector_unindexed covers it)", () => {
+    const a = base();
+    a.sql.topStatements = [
+      {
+        queryid: "1",
+        query: "SELECT id FROM docs WHERE ns = $1 ORDER BY v <=> $2 LIMIT 5",
+        mean_ms: 100,
+        calls: 5,
+      },
+    ];
+    expect(deriveFindings(a).some((x) => x.heuristicId === "filtered_vector_query")).toBe(false);
+  });
+
+  test("queue_poll_pressure: SKIP LOCKED poll dominating calls -> low finding", () => {
+    const a = base();
+    a.sql.topByCalls = [
+      {
+        queryid: "7",
+        query:
+          "SELECT id FROM jobs WHERE done IS NULL ORDER BY created_at LIMIT $1 FOR UPDATE SKIP LOCKED",
+        calls: 75000,
+        mean_ms: 1190,
+        pct_calls: 45.2,
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "queue_poll_pressure");
+    expect(f?.severity).toBe("low");
+    expect(f?.title).toContain("45.2% of calls");
+    expect(f?.evidence).toContain("75000 calls");
+  });
+
+  test("queue_poll_pressure: lock wait without SKIP LOCKED -> no finding", () => {
+    const a = base();
+    a.sql.topByCalls = [
+      { queryid: "7", query: "UPDATE t SET x = 1 WHERE id = $1", calls: 99999, pct_calls: 60 },
+    ];
+    expect(deriveFindings(a).some((x) => x.heuristicId === "queue_poll_pressure")).toBe(false);
+  });
+
+  test("recursive_cte_heavy: WITH RECURSIVE in top statements -> low advisory", () => {
+    const a = base();
+    a.sql.topStatements = [
+      {
+        queryid: "9",
+        query:
+          "WITH RECURSIVE walk AS (SELECT id, target FROM edges WHERE source = $1 UNION ALL SELECT e.id, e.target FROM edges e JOIN walk w ON e.source = w.target) SELECT * FROM walk",
+        mean_ms: 2300,
+        calls: 400,
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "recursive_cte_heavy");
+    expect(f?.severity).toBe("low");
+    expect(f?.title).toContain("recursive-CTE");
+  });
+});
+
+test("queue_poll_pressure: truncated 160-char pgss text cut inside the locking clause still matches", () => {
+  const a = base();
+  // live shape from memledger: "... ORDER BY ts DESC NULLS LAST LIMIT $1 FOR UP"
+  a.sql.topStatements = [
+    {
+      queryid: "3",
+      query:
+        "SELECT session_key, ordinal, content FROM messages WHERE embedding IS NULL AND content IS NOT NULL AND content <> $2 ORDER BY ts DESC NULLS LAST LIMIT $1 FOR UP",
+      calls: 75000,
+      mean_ms: 1190,
+      pct: 81.0,
+    },
+  ];
+  const f = deriveFindings(a).find((x) => x.heuristicId === "queue_poll_pressure");
+  expect(f?.severity).toBe("low");
+});
+
+test("queue_poll_pressure: same queryid in topByCalls (low share) and topStatements (high share) still fires", () => {
+  const a = base();
+  // live memledger shape: topByCalls copy has pct_calls 9.5 / pct 0.0,
+  // topStatements copy has pct 81.0 - the qualifying row must survive dedup.
+  a.sql.topByCalls = [
+    {
+      queryid: "3",
+      query: "SELECT id FROM m WHERE embedding IS NULL LIMIT $1 FOR UPDATE SKIP ",
+      calls: 88362,
+      pct_calls: 9.5,
+      pct: 0.0,
+    },
+  ];
+  a.sql.topStatements = [
+    {
+      queryid: "3",
+      query: "SELECT id FROM m WHERE embedding IS NULL LIMIT $1 FOR UPDATE SKIP ",
+      calls: 88362,
+      pct: 81.0,
+    },
+  ];
+  const f = deriveFindings(a).find((x) => x.heuristicId === "queue_poll_pressure");
+  expect(f?.severity).toBe("low");
 });

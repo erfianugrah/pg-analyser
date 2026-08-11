@@ -461,6 +461,10 @@ export const EXCLUSIONS: Record<string, { clause: ExclusionClause; why: string }
   // --- Extension plane ---
   extensions_outdated: { clause: "no-metric", why: "pg_extension SQL; no metric family" },
   pgvector_unindexed: { clause: "no-metric", why: "pg_index SQL; no metric family" },
+  vector_index_economics: { clause: "no-metric", why: "pg_index/pg_class SQL; no metric family" },
+  filtered_vector_query: { clause: "no-metric", why: "pg_stat_statements SQL; no metric family" },
+  queue_poll_pressure: { clause: "no-metric", why: "pg_stat_statements SQL; no metric family" },
+  recursive_cte_heavy: { clause: "no-metric", why: "pg_stat_statements SQL; no metric family" },
   // --- Health plane ---
   hba_weak_auth: { clause: "no-metric", why: "pg_hba_file_rules SQL; no metric family" },
   archiver_failing: { clause: "no-metric", why: "pg_stat_archiver SQL; no metric family" },

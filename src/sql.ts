@@ -1040,6 +1040,46 @@ export const QUERIES = {
     where e.extname not in ('plpgsql')
     order by e.extname`,
 
+  // The inverse of unindexedVectors: the ANN indexes that DO exist, with their
+  // storage economics. pgvector ANN indexes are large - an HNSW over a big
+  // table routinely rivals or exceeds the heap size, and the index is pure
+  // overhead if the workload could run at half precision. Columns: method
+  // (hnsw/ivfflat), size vs parent table and vs the whole database, the
+  // indexed column's declared dimensions (null for expression indexes, e.g.
+  // (embedding::halfvec(384)) - indkey is 0 there), the full index definition
+  // (reveals the opclass + a halfvec cast), and usage counters so an ANN
+  // index nobody queries is visible too. Always safe: zero rows without
+  // pgvector.
+  vectorIndexes: /* sql */ `
+    select
+      n.nspname as schema,
+      t.relname as table,
+      a.attname as column,
+      nullif(a.atttypmod, -1) as dimensions,
+      am.amname as method,
+      ic.relname as index,
+      pg_relation_size(ic.oid) as index_bytes,
+      pg_size_pretty(pg_relation_size(ic.oid)) as index_size,
+      pg_relation_size(t.oid) as table_bytes,
+      round(pg_relation_size(ic.oid) * 100.0
+        / nullif(pg_relation_size(t.oid), 0), 1) as pct_of_table,
+      round(pg_relation_size(ic.oid) * 100.0
+        / nullif(pg_database_size(current_database()), 0), 1) as pct_of_db,
+      s.idx_scan,
+      pg_get_indexdef(i.indexrelid) as definition
+    from pg_index i
+    join pg_class ic on ic.oid = i.indexrelid
+    join pg_am am on am.oid = ic.relam
+    join pg_class t on t.oid = i.indrelid
+    join pg_namespace n on n.oid = t.relnamespace
+    left join pg_attribute a
+      on a.attrelid = t.oid and a.attnum = i.indkey[0] and a.attnum > 0
+    left join pg_stat_user_indexes s on s.indexrelid = ic.oid
+    where am.amname in ('hnsw', 'ivfflat')
+      and n.nspname not in (${NON_APP_SCHEMAS_SQL})
+    order by pg_relation_size(ic.oid) desc
+    limit 50`,
+
   // pgvector columns with no approximate-nearest-neighbour index (ivfflat or
   // hnsw). Always safe: if pgvector isn't installed the 'vector' type doesn't
   // exist so t.typname='vector' matches nothing (zero rows), and the ANN index
