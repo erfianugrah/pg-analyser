@@ -8,7 +8,7 @@ import { fetchIncidentSeries, fetchTrends } from "./prometheus.ts";
 import { isUnwrappedAuth } from "./rls.ts";
 import { type Analysis, MetricSample, type SqlRow } from "./schemas.ts";
 import { collectSplinterLints } from "./splinter.ts";
-import { logTailQuery, QUERIES, relationNamesQuery } from "./sql.ts";
+import { logTailQuery, QUERIES, relationNamesQuery, withPgssSchema } from "./sql.ts";
 import { ManagementSqlRunner, type SqlRunner } from "./sqlrunner.ts";
 import { computeSyncStatus } from "./sync.ts";
 import type { Transport } from "./transport.ts";
@@ -206,8 +206,21 @@ export async function collect(
     }
   }
 
+  // Resolve where pg_stat_statements is installed before fanning out: hosted
+  // Supabase puts it in `extensions`, self-hosted Postgres usually in
+  // `public`. The pgss planes are schema-qualified, so a wrong schema
+  // silently empties ALL of them via safe() (memledger, 2026-08-10: 251 pgss
+  // rows present, topStatements empty). Probe once, rewrite, merge.
+  let sqlQ: Record<keyof typeof QUERIES, string> = QUERIES;
+  if (sqlServing) {
+    const pgssRows = await safe("sql:pgssSchema", () => runner.run(QUERIES.pgssSchema), []);
+    const first = pgssRows[0];
+    const schema = first && typeof first.schema === "string" ? first.schema : undefined;
+    sqlQ = { ...QUERIES, ...withPgssSchema(schema) };
+  }
+
   const sql = (key: keyof typeof QUERIES) =>
-    sqlServing ? safe(`sql:${key}`, () => runner.run(QUERIES[key]), []) : Promise.resolve([]);
+    sqlServing ? safe(`sql:${key}`, () => runner.run(sqlQ[key]), []) : Promise.resolve([]);
 
   const [
     health,
@@ -517,7 +530,7 @@ export async function collect(
     extensions.some((r) => String(r.name) === "hypopg");
   const indexAdvisor =
     hasIndexAdvisor && runner.source === "superuser" && sqlServing
-      ? await safe("sql:indexAdvisor", () => runner.run(QUERIES.indexAdvisor), [])
+      ? await safe("sql:indexAdvisor", () => runner.run(sqlQ.indexAdvisor), [])
       : [];
   // index_advisor is installed but yielded nothing: it recommends only single-
   // column btree indexes and cannot type the generic $1 params that
