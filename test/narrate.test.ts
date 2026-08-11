@@ -88,6 +88,7 @@ function base(): Analysis {
       storageUsage: [],
       extensions: [],
       unindexedVectors: [],
+      vectorIndexes: [],
       sequenceExhaustion: [],
       walArchiving: [],
       hbaRules: [],

@@ -288,11 +288,14 @@ function securityConfigSection(a: Analysis): string {
 function extensionsSection(a: Analysis): string {
   const exts = a.sql.extensions;
   const vecs = a.sql.unindexedVectors;
-  if (!exts.length && !vecs.length) return "<p class=empty>none collected</p>";
+  const vIdx = a.sql.vectorIndexes;
+  if (!exts.length && !vecs.length && !vIdx.length) return "<p class=empty>none collected</p>";
   let html = "";
   if (exts.length) html += sqlTable(exts, { mono: ["name"] });
   if (vecs.length)
     html += `<p class=note>pgvector columns without an ANN index (ivfflat/hnsw) - exact-scanned on distance queries</p>${sqlTable(vecs, { mono: ["table", "column"], hide: ["schema"] })}`;
+  if (vIdx.length)
+    html += `<p class=note>ANN (hnsw/ivfflat) indexes - storage economics; a full-precision index dominating the DB is a halfvec candidate</p>${sqlTable(vIdx, { mono: ["table", "index", "definition"], hide: ["schema", "index_bytes", "table_bytes"] })}`;
   return html;
 }
 

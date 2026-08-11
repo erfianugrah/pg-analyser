@@ -444,6 +444,9 @@ export const Analysis = z.object({
     // about masking upstream API shape drift, which does not apply here).
     extensions: SqlRows.default([]),
     unindexedVectors: SqlRows.default([]),
+    // Existing ANN (hnsw/ivfflat) index inventory + storage economics.
+    // Defaulted for back-compat with analysis.json predating the query.
+    vectorIndexes: SqlRows.default([]),
     // WAL-archiving state (pg_stat_archiver + archive_mode) - the SQL proxy for
     // PITR when the Management API backups plane is absent. Defaulted for
     // back-compat with analysis.json written before the query existed.

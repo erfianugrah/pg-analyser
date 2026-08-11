@@ -2251,6 +2251,125 @@ export function deriveFindings(a: Analysis): Finding[] {
       ...meta("pgvector_unindexed"),
     });
   }
+
+  // ANN index economics (the inverse view): existing hnsw/ivfflat indexes that
+  // dominate storage. Flag full-precision fp32 indexes with a large footprint
+  // when halfvec is available (pgvector >= 0.7.0) - halving the index at equal
+  // recall. Thresholds: >=10% of the whole database, or >= the parent heap.
+  const vIdx = a.sql.vectorIndexes;
+  if (vIdx.length) {
+    const vecExt = a.sql.extensions.find((r) => r.name === "vector");
+    const vecVer = /^0\.(\d+)/.exec(String(vecExt?.installed ?? ""));
+    const halfvecAvailable = vecVer ? Number(vecVer[1]) >= 7 : false;
+    const big = vIdx.filter(
+      (r) => num(r.index_bytes) > 0 && (num(r.pct_of_db) >= 10 || num(r.pct_of_table) >= 100),
+    );
+    const fp32 = big.filter(
+      (r) =>
+        typeof r.definition === "string" && !/halfvec|sparsevec|binary_quantize/.test(r.definition),
+    );
+    if (halfvecAvailable && fp32.length) {
+      const detail = fp32
+        .slice(0, 5)
+        .map(
+          (r) =>
+            `${r.schema}.${r.table} index ${r.index} (${r.method}, ${r.index_size}, ${r.pct_of_db}% of db, ${r.pct_of_table}% of table)`,
+        )
+        .join("; ");
+      out.push({
+        severity: "low",
+        category: "Capacity",
+        title: `${fp32.length} full-precision ANN index${fp32.length === 1 ? "" : "es"} dominating storage - halfvec would ~halve`,
+        anchor: "#extensions",
+        evidence: detail,
+        ...meta("vector_index_economics"),
+      });
+    }
+  }
+
+  // Query-shape heuristics over pg_stat_statements text. These are ATTRIBUTION
+  // advisories, not measurements: pgss shows the statement is hot; only
+  // EXPLAIN shows whether the plan is the problem. All low severity.
+  const stmtRows = [...a.sql.topStatements, ...a.sql.queryIoStats];
+  const callRows = [...a.sql.topByCalls, ...a.sql.topStatements];
+  const VECTOR_OP = /(<=>|<->|<#>|<\+>|<~>|<%>)/;
+  const seen = new Set<string>();
+  const uniq = (rows: typeof stmtRows) =>
+    rows.filter((r) => {
+      const id = String(r.queryid ?? r.query ?? "");
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+
+  // Filtered vector search: distance operator + WHERE while ANN indexes exist.
+  // A filter can silently defeat the hnsw/ivfflat index (post-filter under-
+  // recall or exact-scan fallback; CTE materialization blocks pushdown).
+  seen.clear();
+  const filteredVec = uniq(stmtRows).filter(
+    (r) => VECTOR_OP.test(String(r.query)) && /\bwhere\b/i.test(String(r.query)),
+  );
+  if (filteredVec.length && a.sql.vectorIndexes.length) {
+    out.push({
+      severity: "low",
+      category: "Performance",
+      title: `${filteredVec.length} filtered vector-search statement${filteredVec.length === 1 ? "" : "s"} in the top queries - verify the ANN index survives the filter`,
+      anchor: "#outliers",
+      evidence: filteredVec
+        .slice(0, 3)
+        .map((r) => `${r.mean_ms}ms mean: ${String(r.query).slice(0, 110)}`)
+        .join(" | "),
+      ...meta("filtered_vector_query"),
+    });
+  }
+
+  // Queue-poll loops: SELECT ... FOR UPDATE [SKIP LOCKED] that dominates calls
+  // or time. The poll re-scans a shrinking candidate set; a partial index on
+  // the pending predicate keeps it O(remaining). NOTE: pgss query text is
+  // truncated at 160 chars here, so a long poll can be cut off INSIDE the
+  // locking clause (observed: "... LIMIT $1 FOR UP") - match a truncated tail
+  // too, not just the full FOR UPDATE SKIP LOCKED phrase.
+  seen.clear();
+  const LOCKING_TAIL = /\bfor\s+(update|share|up|sha)\b[^;]*$/i;
+  // Filter BEFORE dedup: the same queryid appears in both topByCalls (pct_calls)
+  // and topStatements (pct), and only one copy may carry a qualifying share.
+  const queuePoll = uniq(
+    callRows.filter(
+      (r) => LOCKING_TAIL.test(String(r.query)) && (num(r.pct_calls) >= 20 || num(r.pct) >= 20),
+    ),
+  );
+  if (queuePoll.length) {
+    const q = queuePoll[0];
+    out.push({
+      severity: "low",
+      category: "Performance",
+      title: `Row-locking poll loop (SELECT ... FOR UPDATE [SKIP LOCKED]) is a top consumer (${q && q.pct_calls != null ? `${q.pct_calls}% of calls` : `${q?.pct}% of time`})`,
+      anchor: "#outliers",
+      evidence: queuePoll
+        .slice(0, 3)
+        .map((r) => `${r.calls} calls, ${r.mean_ms}ms mean: ${String(r.query).slice(0, 110)}`)
+        .join(" | "),
+      ...meta("queue_poll_pressure"),
+    });
+  }
+
+  // Recursive CTEs in the hot set: graph/hierarchy traversal as first-class
+  // workload - the recursive term's join columns need their own index.
+  seen.clear();
+  const recursive = uniq(stmtRows).filter((r) => /\bwith\s+recursive\b/i.test(String(r.query)));
+  if (recursive.length) {
+    out.push({
+      severity: "low",
+      category: "Performance",
+      title: `${recursive.length} recursive-CTE statement${recursive.length === 1 ? "" : "s"} in the top queries - index the traversal key`,
+      anchor: "#outliers",
+      evidence: recursive
+        .slice(0, 3)
+        .map((r) => `${r.mean_ms}ms mean, ${r.calls} calls: ${String(r.query).slice(0, 110)}`)
+        .join(" | "),
+      ...meta("recursive_cte_heavy"),
+    });
+  }
   // Scheduled-job failures (pg_cron): a concrete automation outage, upgraded
   // from the generic pg_cron nudge when we can actually see the run log. The
   // nudge only fires as a fallback when there's no run-detail visibility.

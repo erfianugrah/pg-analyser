@@ -82,6 +82,7 @@ function makeAnalysis(opts: {
       storageUsage: [],
       extensions: [],
       unindexedVectors: [],
+      vectorIndexes: [],
       sequenceExhaustion: [],
       walArchiving: [],
       hbaRules: [],
