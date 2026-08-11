@@ -6,8 +6,43 @@ import { NON_APP_SCHEMAS_SQL } from "./appschema.ts";
  *
  * All read-only, run via the Management API read-only SQL runner (as
  * supabase_read_only_user). pg_stat_statements lives in the `extensions`
- * schema on Supabase.
+ * schema on hosted Supabase, but self-hosted Postgres installs it wherever
+ * search_path pointed at CREATE EXTENSION time (typically `public`). The
+ * pgss planes below are schema-qualified, so collect resolves the real
+ * schema once via the `pgssSchema` probe and rewrites them with
+ * withPgssSchema() - a bare `extensions.` reference silently empties every
+ * pgss plane on a self-hosted DB (memledger, 2026-08-10).
  */
+
+// The hosted-Supabase location; also the fallback when the probe can't run.
+export const PGSS_DEFAULT_SCHEMA = "extensions";
+
+// The QUERIES keys that reference extensions.pg_stat_statements[_info] and
+// must be rewritten when the extension lives elsewhere.
+export const PGSS_KEYS = [
+  "statsResetAge",
+  "topStatements",
+  "topByCalls",
+  "queryIoStats",
+  "indexAdvisor",
+  "topByWal",
+] as const;
+
+// Rewrite the pgss planes for a resolved extension schema. The schema comes
+// from pg_extension on the target DB - validate it as a plain identifier
+// before inlining (the SQL here takes no bind params); anything else falls
+// back to the hosted default.
+export function withPgssSchema(
+  schema: string | undefined,
+): Partial<Record<(typeof PGSS_KEYS)[number], string>> {
+  const s = schema && /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(schema) ? schema : PGSS_DEFAULT_SCHEMA;
+  if (s === PGSS_DEFAULT_SCHEMA) return {};
+  const out: Partial<Record<(typeof PGSS_KEYS)[number], string>> = {};
+  for (const k of PGSS_KEYS) {
+    out[k] = QUERIES[k].replaceAll("extensions.pg_stat_statements", `${s}.pg_stat_statements`);
+  }
+  return out;
+}
 
 // Platform / Studio / introspection queries that swamp pg_stat_statements but
 // are not the user's workload. Excluded from the outliers view (footnoted).
@@ -74,6 +109,16 @@ const NOT_APP_STATEMENT =
   "cluster|copy|explain|deallocate|listen|notify|prepare|checkpoint|lock)\\M";
 
 export const QUERIES = {
+  // Where the pg_stat_statements extension is installed (its extnamespace).
+  // Hosted Supabase: `extensions`; self-hosted: usually `public`. Empty when
+  // the extension is not installed - the pgss planes then fail as before and
+  // safe() records the note.
+  pgssSchema: /* sql */ `
+    select n.nspname as schema
+    from pg_extension e
+    join pg_namespace n on n.oid = e.extnamespace
+    where e.extname = 'pg_stat_statements'`,
+
   dbSize: /* sql */ `
     select
       pg_size_pretty(pg_database_size(current_database())) as db_size,

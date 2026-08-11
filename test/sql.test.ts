@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { logTailQuery, QUERIES, relationNamesQuery } from "../src/sql.ts";
+import {
+  logTailQuery,
+  PGSS_KEYS,
+  QUERIES,
+  relationNamesQuery,
+  withPgssSchema,
+} from "../src/sql.ts";
 
 const WRITE = /\b(insert|update|delete|drop|alter|truncate|create|grant|revoke)\b/i;
 
@@ -157,5 +163,36 @@ describe("anti-wraparound autovacuum detection", () => {
     // Measured on PostgreSQL 18.4: an anti-wraparound worker's query text ends
     // with "(to prevent wraparound)".
     expect(q).toContain("to prevent wraparound");
+  });
+});
+
+describe("pgss schema resolution (self-hosted pg_stat_statements)", () => {
+  test("probe reads the extension namespace", () => {
+    expect(QUERIES.pgssSchema).toContain("pg_extension");
+    expect(QUERIES.pgssSchema).toContain("extnamespace");
+  });
+
+  test("default schema rewrites nothing (hosted Supabase path unchanged)", () => {
+    expect(withPgssSchema("extensions")).toEqual({});
+    expect(withPgssSchema(undefined)).toEqual({});
+  });
+
+  test("non-default schema rewrites exactly the pgss planes", () => {
+    const out = withPgssSchema("public");
+    for (const k of PGSS_KEYS) {
+      expect(out[k]).toBeDefined();
+      expect(out[k]).toContain("public.pg_stat_statements");
+      expect(out[k]).not.toContain("extensions.pg_stat_statements");
+    }
+    // statsResetAge reads the _info view - the prefix replace must carry it
+    expect(out.statsResetAge).toContain("public.pg_stat_statements_info");
+    // non-pgss planes are untouched
+    expect("dbSize" in out).toBe(false);
+    expect("locks" in out).toBe(false);
+  });
+
+  test("rejects a non-identifier schema (inlined, no bind params)", () => {
+    expect(withPgssSchema('public"; drop table x; --')).toEqual({});
+    expect(withPgssSchema("")).toEqual({});
   });
 });
