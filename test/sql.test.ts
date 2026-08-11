@@ -201,3 +201,11 @@ test("unindexedVectors attributes expression ANN indexes via pg_depend (indkey 0
   expect(QUERIES.unindexedVectors).toContain("pg_depend");
   expect(QUERIES.unindexedVectors).toContain("refobjsubid = a.attnum");
 });
+
+test("fkUnindexed slices the ZERO-based indkey array ([0:N-1], wiki form)", () => {
+  expect(QUERIES.fkUnindexed).toContain("[0:cardinality(con.conkey)-1]");
+  expect(QUERIES.fkUnindexed).not.toContain("[1:cardinality(con.conkey)]");
+  // partial/expression indexes cannot serve the FK enforcement scan
+  expect(QUERIES.fkUnindexed).toContain("indpred is null");
+  expect(QUERIES.fkUnindexed).toContain("indexprs is null");
+});
