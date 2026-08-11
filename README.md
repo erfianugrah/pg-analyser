@@ -1,5 +1,9 @@
 # pg-analyser
 
+(renamed from `sbperf` 2026-08-11 - `PG_ANALYSER_*` env is canonical, `SBPERF_*`
+is mapped at startup by `src/envalias.ts`; `~/.pg-analyser/` falls back to
+`~/.sbperf/`; the GitHub repo rename redirects the old URL.)
+
 Supabase performance analysis. Pulls advisors, read-only SQL diagnostics,
 project config, and infra metrics, and renders a self-contained **HTML + PDF**
 report you can drag straight into an email or Slack.

@@ -260,7 +260,23 @@ src/
                  LATERAL over the top-N heavy pg_stat_statements entries -
                  concrete CREATE INDEX DDL; superuser tier AND index_advisor +
                  hypopg already installed, gated like bloatExact, pg-analyser never
-                 CREATEs them). Wraparound forensics (2026-08) adds FOUR holder
+                 CREATEs them). Incident-class expansion (2026-08-11, each
+                 grounded in a measured incident on a live self-hosted pgvector
+                 DB): vectorIndexes (EXISTING hnsw/ivfflat inventory with index-
+                 vs-table-vs-db size economics + index definition, feeding
+                 vector_index_economics halfvec-candidate finding; inverse of
+                 unindexedVectors), plus three pure pgss-text heuristics
+                 (filtered_vector_query, queue_poll_pressure, recursive_cte_heavy)
+                 and version-gated planes ioByBackend (pg_stat_io, PG16+,
+                 collect+render only), jitTopStatements (pgss jit_* fields,
+                 PG15+, feeding jit_overhead) and checkpointer/checkpointerPre17
+                 (counters moved pg_stat_bgwriter -> pg_stat_checkpointer in
+                 PG17; both alias one shape; feeds checkpoint_pressure_counters,
+                 the no-PAT lens for the trends-based checkpoint_pressure,
+                 suppressed when that series exists). Same 2026-08-11 batch:
+                 pgssSchema probe + withPgssSchema rewrite (self-hosted pgss
+                 lives in `public`, not `extensions` - without the probe every
+                 pgss plane silently empties via safe()'s expected-absence). Wraparound forensics (2026-08) adds FOUR holder
                  planes: databaseFreezeAge (datfrozenxid + remaining XIDs vs 2^31
                  ceiling), preparedXacts (2PC xid horizon), xminHolders
                  (pg_stat_activity backends, masking state/backend_type/query per
@@ -621,6 +637,35 @@ src/
 - Scraper dirs contain a live credential in `prometheus.yml` - gitignored.
 
 ## Verified upstream facts (Supabase, 2026-07)
+
+2026-08-11 additions (verified against a self-hosted PG18 pgvector DB + a hosted
+PG17 project):
+
+- **pg_stat_statements does NOT always live in `extensions`.** Hosted Supabase
+  installs it there; a self-hosted container puts it wherever search_path
+  pointed at CREATE EXTENSION time (`public` on the verified DB). Every pgss
+  plane is schema-qualified, so collect probes `pg_extension.extnamespace` once
+  (QUERIES.pgssSchema) and rewrites the six pgss planes (withPgssSchema /
+  PGSS_KEYS). Without the probe the 42P01 folds into safe()'s expected-absence
+  and ALL pgss planes silently return empty.
+- **`int2vector::smallint[]` keeps the ZERO-based lower bound** (`[0:1]={1,2}`),
+  so prefix-slicing `pg_index.indkey` must use `[0:cardinality-1]` (the wiki
+  form). A 1-based slice compares the FK against the index's SECOND column and
+  flags every FK unindexed (fkUnindexed was an always-true lint until
+  2026-08-11).
+- **Expression indexes carry indkey 0 for every key**, so a halfvec-cast ANN
+  index (`hnsw ((embedding::halfvec(384)) ...)`) never matches
+  `a.attnum = any (i.indkey)`. unindexedVectors attributes them via pg_depend
+  (refobjid=table, refobjsubid=attnum) instead.
+- **pg_stat_statements.track=top records only top-level statements** - queries
+  inside SQL functions are invisible to every pgss-text heuristic. Verified on
+  a graph-workload project whose traversal runs entirely in functions: zero
+  recursive-CTE rows in pgss. The filtered_vector_query / recursive_cte_heavy
+  heuristics say so in their verify text.
+- **Version gates (verified):** pg_stat_io is PG16+; pg_stat_statements jit_*
+  fields are PG15+; the checkpoint counters moved from pg_stat_bgwriter to
+  pg_stat_checkpointer (renamed columns) in PG17. All three planes gate on
+  server_version from the collected pgSettings.
 
 - Advisors REST endpoint `/v1/projects/:ref/advisors/{performance,security}`
   returns `{ lints: [...] }` (richer than the CLI - includes INFO lints).
