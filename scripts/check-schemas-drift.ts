@@ -1,15 +1,15 @@
 #!/usr/bin/env bun
 /**
  * Application-schema denylist drift-check (advisory). `NON_APP_SCHEMAS` in
- * src/appschema.ts decides which schemas sbperf treats as the user's own tables
+ * src/appschema.ts decides which schemas pg-analyser treats as the user's own tables
  * (vs Postgres-internal / Supabase-managed). It must stay aligned with the
- * exclusion set baked into splinter.sql's `unused_index` lint, so sbperf's
+ * exclusion set baked into splinter.sql's `unused_index` lint, so pg-analyser's
  * SQL-derived index/RLS findings and the narrate digest scope to the SAME
  * objects the advisor does - never flagging a Supabase-managed index, never
  * missing a custom app schema.
  *
  *   bun run scripts/check-schemas-drift.ts        # warn on drift, exit 0
- *   SBPERF_SCHEMAS_STRICT=1 bun run ...           # exit 1 on dangerous drift
+ *   PG_ANALYSER_SCHEMAS_STRICT=1 bun run ...           # exit 1 on dangerous drift
  *
  * The invariant is a SUPERSET, not equality: NON_APP_SCHEMAS must contain every
  * schema splinter excludes (otherwise we would flag a managed object the advisor
@@ -21,7 +21,7 @@
 import { NON_APP_SCHEMAS } from "../src/appschema.ts";
 
 const IN_GHA = process.env.GITHUB_ACTIONS === "true";
-const STRICT = process.env.SBPERF_SCHEMAS_STRICT === "1";
+const STRICT = process.env.PG_ANALYSER_SCHEMAS_STRICT === "1";
 const warn = (m: string): void => console.error(IN_GHA ? `::warning::${m}` : `warning: ${m}`);
 
 const splinterPath = new URL("../src/splinter.sql", import.meta.url).pathname;
@@ -66,7 +66,7 @@ if (!missing.length) {
 
 warn(
   `${missing.length} schema(s) excluded by splinter.sql's unused_index lint are MISSING from ` +
-    `NON_APP_SCHEMAS in src/appschema.ts - sbperf would flag their (Supabase-managed) objects ` +
+    `NON_APP_SCHEMAS in src/appschema.ts - pg-analyser would flag their (Supabase-managed) objects ` +
     `the advisor ignores. Add them: ${missing.join(", ")}`,
 );
 process.exit(STRICT ? 1 : 0);

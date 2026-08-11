@@ -58,8 +58,8 @@ export const EMPTY_OVERLAY: Overlay = { hide: new Set(), notes: {} };
 
 /**
  * Resolve a project's overlay by precedence:
- *   opts.file (--overlay) > SBPERF_OVERLAY > ./sbperf.overlays/<ref>.json >
- *   ~/.sbperf/overlays/<ref>.json > empty.
+ *   opts.file (--overlay) > PG_ANALYSER_OVERLAY > ./pg-analyser.overlays/<ref>.json >
+ *   ~/.pg-analyser/overlays/<ref>.json > empty.
  * IO is injectable for tests. Unknown hide ids warn (advisory) and are dropped.
  */
 export async function loadOverlay(
@@ -81,18 +81,22 @@ export async function loadOverlay(
   const cwd = opts.cwd ?? ".";
   const home = opts.home ?? homedir();
 
-  // A path the caller named (--overlay flag or SBPERF_OVERLAY) is explicit: a
+  // A path the caller named (--overlay flag or PG_ANALYSER_OVERLAY) is explicit: a
   // parse error there is a mistake the user wants to hear about loudly. A path
   // we auto-discovered by the ref convention is best-effort: one stray/typo'd
   // file must not abort a `full --all` sweep, so we warn and fall back to empty
   // (matching collect.ts's tolerant per-source ethos).
-  let path = opts.file ?? env.SBPERF_OVERLAY;
+  let path = opts.file ?? env.PG_ANALYSER_OVERLAY;
   const explicit = Boolean(path);
   if (!path && opts.ref) {
-    const local = join(cwd, "sbperf.overlays", `${opts.ref}.json`);
-    const global = join(home, ".sbperf", "overlays", `${opts.ref}.json`);
+    const local = join(cwd, "pg-analyser.overlays", `${opts.ref}.json`);
+    const localLegacy = join(cwd, "sbperf.overlays", `${opts.ref}.json`);
+    const global_ = join(home, ".pg-analyser", "overlays", `${opts.ref}.json`);
+    const globalLegacy = join(home, ".sbperf", "overlays", `${opts.ref}.json`);
     if (await exists(local)) path = local;
-    else if (await exists(global)) path = global;
+    else if (await exists(localLegacy)) path = localLegacy;
+    else if (await exists(global_)) path = global_;
+    else if (await exists(globalLegacy)) path = globalLegacy;
   }
   if (!path) return { hide: new Set(), notes: {} };
 
@@ -102,19 +106,19 @@ export async function loadOverlay(
   } catch (err) {
     if (explicit) throw err;
     warn(
-      `sbperf: ignoring malformed overlay ${path}: ${err instanceof Error ? err.message : String(err)}`,
+      `pg-analyser: ignoring malformed overlay ${path}: ${err instanceof Error ? err.message : String(err)}`,
     );
     return { hide: new Set(), notes: {} };
   }
   const hide = new Set<string>();
   for (const id of raw.hide ?? []) {
     if (HIDEABLE.has(id)) hide.add(id);
-    else warn(`sbperf: overlay hide[] has unknown section id '${id}' (ignored)`);
+    else warn(`pg-analyser: overlay hide[] has unknown section id '${id}' (ignored)`);
   }
   const notes: Record<string, string> = {};
   for (const [key, val] of Object.entries(raw.notes ?? {})) {
     if (key === "top" || HIDEABLE.has(key)) notes[key] = val;
-    else warn(`sbperf: overlay notes has unknown section id '${key}' (ignored)`);
+    else warn(`pg-analyser: overlay notes has unknown section id '${key}' (ignored)`);
   }
   return { hide, notes };
 }

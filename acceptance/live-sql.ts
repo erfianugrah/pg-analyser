@@ -8,7 +8,7 @@
  * script executes each query and checks the invariant that the acceptance
  * suite can only assume:  xid_age + remaining == 2^31 - 1000000.
  *
- * Usage: SBPERF_TEST_DB_URL=postgres://... bun acceptance/live-sql.ts
+ * Usage: PG_ANALYSER_TEST_DB_URL=postgres://... bun acceptance/live-sql.ts
  *
  * Any Postgres will do - a throwaway cluster is enough:
  *   initdb -D /tmp/pg -U postgres --auth=trust
@@ -19,9 +19,9 @@
 import { SQL } from "bun";
 import { QUERIES } from "../src/sql.ts";
 
-const url = process.env.SBPERF_TEST_DB_URL;
+const url = process.env.PG_ANALYSER_TEST_DB_URL;
 if (!url) {
-  console.error("SBPERF_TEST_DB_URL is not set - no live database to verify against");
+  console.error("PG_ANALYSER_TEST_DB_URL is not set - no live database to verify against");
   process.exit(1);
 }
 

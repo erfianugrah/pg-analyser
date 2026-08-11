@@ -3,7 +3,7 @@ import type { TrendSeries } from "./schemas.ts";
 
 /**
  * Optional 30-day trend panels, pulled from a Prometheus that scrapes the
- * project metrics endpoint (see `sbperf scrape-init`). The metrics endpoint
+ * project metrics endpoint (see `pg-analyser scrape-init`). The metrics endpoint
  * itself is point-in-time; real history only exists in a scraper's TSDB.
  *
  * A scraper Prometheus can hold MANY projects and every series carries a
@@ -174,7 +174,7 @@ export async function fetchTrends(
   // Project matcher template. Default = the self-scrape schema
   // (`supabase_project_ref="<ref>"`, one label per project). A scraper that
   // relabels series under a different project-identifying label overrides via
-  // `matcher` (--prometheus-matcher / SBPERF_PROMETHEUS_MATCHER); "{ref}" is
+  // `matcher` (--prometheus-matcher / PG_ANALYSER_PROMETHEUS_MATCHER); "{ref}" is
   // substituted with the project ref. No ref -> unscoped (single-project scraper).
   const template = opts.matcher ?? 'supabase_project_ref="{ref}"';
   const refMatcher = ref ? template.replaceAll("{ref}", ref) : "";

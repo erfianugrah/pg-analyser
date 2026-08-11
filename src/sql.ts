@@ -283,7 +283,7 @@ export const QUERIES = {
 
   // App workload only - platform/introspection noise filtered out. queryid is
   // pg_stat_statements' stable per-normalized-query identity (survives literal
-  // changes; resets on pg_stat_statements_reset()) - it keys `sbperf diff`'s
+  // changes; resets on pg_stat_statements_reset()) - it keys `pg-analyser diff`'s
   // query-level regression detection, so the same statement is matched across
   // snapshots even when its truncated text collides with another's.
   topStatements: /* sql */ `
@@ -359,7 +359,7 @@ export const QUERIES = {
   // supports generic $1 params; when a param's type is indiscernible it returns
   // a note in `errors` rather than raising, and we keep only rows that yielded
   // at least one CREATE INDEX. GATED in collect.ts: superuser SQL tier AND both
-  // index_advisor + hypopg already installed (sbperf never CREATEs an extension).
+  // index_advisor + hypopg already installed (pg-analyser never CREATEs an extension).
   // Same PLATFORM_NOISE / NOT_APP_STATEMENT scoping as the outliers view.
   indexAdvisor: /* sql */ `
     with cand as (
@@ -578,7 +578,7 @@ export const QUERIES = {
 
   // EXACT reclaimable space via pgstattuple_approx - run ONLY when the
   // pgstattuple extension is already installed and we have superuser SQL (see
-  // collect.ts; the read-only user can't exec it, and sbperf never CREATEs an
+  // collect.ts; the read-only user can't exec it, and pg-analyser never CREATEs an
   // extension - that would be a write). This replaces the noisy pg_stats
   // ESTIMATE with measured dead-tuple + free-space bytes on the biggest heap
   // tables. `_approx` uses the visibility map to skip all-visible pages, so it
@@ -641,7 +641,7 @@ export const QUERIES = {
 
   // Per-table I/O attribution from pg_statio_user_tables: heap / index / TOAST
   // blocks read-from-disk vs served-from-cache, with computed cache-hit ratios.
-  // sbperf-ORIGINAL (no upstream inspect equivalent) - the layer the global
+  // pg-analyser-ORIGINAL (no upstream inspect equivalent) - the layer the global
   // cache-hit ratio lacks: WHICH relation is disk-bound, and specifically
   // whether the cost is de-toasting an out-of-line column that can't stay
   // cached (low toast_hit_pct + high toast_blks_read - the classic large-
@@ -989,7 +989,7 @@ export const QUERIES = {
   // mode = 'ExclusiveLock', which also matches the virtualxid/transactionid
   // ExclusiveLock EVERY active backend holds on its own transaction - including
   // this tool's sibling diagnostic connections - so the section was never empty
-  // and mostly showed sbperf auditing itself. Real relation-level locks (the
+  // and mostly showed pg-analyser auditing itself. Real relation-level locks (the
   // AccessExclusive DDL takes, or explicit LOCK TABLE) are what block queries.
   locks: /* sql */ `
     select

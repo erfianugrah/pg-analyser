@@ -5,7 +5,7 @@
 > it is OUTSIDE the write scope and cannot be edited. Work task-by-task, run
 > `bun test acceptance/` to see what is still red.
 
-**Goal:** turn sbperf's transaction-ID reporting from "this table has age N" into
+**Goal:** turn pg-analyser's transaction-ID reporting from "this table has age N" into
 the support-runbook answer: *which* xmin holder is blocking the freeze, *how much
 headroom is left in transactions and in days*, and *what to run, in what order*.
 Today the tool can tell a reader they have age; it cannot tell them why the age
@@ -23,8 +23,8 @@ module `src/freezelog.ts` (a sibling of `src/locklog.ts`: bounded server-log tai
 boundaries, biome 2, `bun test`. No new dependency; nothing here crosses the
 network.
 
-**Standing constraint - sbperf is READ-ONLY.** Every remediation is emitted as
-copy-pasteable SQL for a human. sbperf never drops a slot, never rolls back a
+**Standing constraint - pg-analyser is READ-ONLY.** Every remediation is emitted as
+copy-pasteable SQL for a human. pg-analyser never drops a slot, never rolls back a
 prepared transaction, never terminates a backend, never runs VACUUM. A task that
 adds a write path is a failed task.
 
@@ -431,7 +431,7 @@ the tool was wrong.
 
 The detection signal for this failure mode is a server-log line, and the
 repo already has the machinery to read one (bounded superuser tail + a pure
-parser). This closes the loop: sbperf sees from inside the database what the
+parser). This closes the loop: pg-analyser sees from inside the database what the
 platform saw from outside.
 
 **Files:** `src/freezelog.ts` (new), `src/collect.ts`, `src/schemas.ts`,
@@ -502,7 +502,7 @@ platform saw from outside.
       queries, and the `findings.ts` paragraph to name the new findings, in the
       same register as the existing text (dense, factual, no marketing).
 - [ ] State the read-only stance explicitly where the new remediation SQL is
-      described: sbperf PRINTS `pg_drop_replication_slot(...)` /
+      described: pg-analyser PRINTS `pg_drop_replication_slot(...)` /
       `ROLLBACK PREPARED ...` / `pg_terminate_backend(...)`; it never runs them.
 - [ ] `scripts/check-inspect-drift.ts` needs NO new manifest entry: none of
       these queries are derived from the upstream CLI's inspect set (they come
@@ -527,7 +527,7 @@ platform saw from outside.
   the `txid_max_age` STORE scalar this plan adds (Task 7) plus
   `export-prometheus`. Do not add `alerts.ts` here.
 - **Guessing at corruption.** Task 4's no-holder branch signposts `--amcheck`
-  and stops. sbperf does not diagnose corruption from age alone.
+  and stops. pg-analyser does not diagnose corruption from age alone.
 - **Changing the 2e9 percentage denominator.** It stays for continuity with
   existing reports; the absolute numbers are added alongside it, not instead.
 

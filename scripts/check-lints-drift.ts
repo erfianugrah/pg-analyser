@@ -8,7 +8,7 @@
  * diffs it against LINT_FIXES.
  *
  *   bun run scripts/check-lints-drift.ts        # warn on drift, exit 0
- *   SBPERF_LINTS_STRICT=1 bun run ...           # exit 1 on drift (gated job)
+ *   PG_ANALYSER_LINTS_STRICT=1 bun run ...           # exit 1 on drift (gated job)
  *
  * Advisory by design: an uncatalogued lint still renders (findings.ts falls back
  * to the lint's own description + doc URL + dashboard deep-link), so a missing
@@ -19,7 +19,7 @@
 import { LINT_FIXES } from "../src/lints.ts";
 
 const IN_GHA = process.env.GITHUB_ACTIONS === "true";
-const STRICT = process.env.SBPERF_LINTS_STRICT === "1";
+const STRICT = process.env.PG_ANALYSER_LINTS_STRICT === "1";
 const warn = (m: string): void => console.error(IN_GHA ? `::warning::${m}` : `warning: ${m}`);
 
 const splinterPath = new URL("../src/splinter.sql", import.meta.url).pathname;

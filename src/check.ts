@@ -82,7 +82,7 @@ export function renderGateText(r: GateResult): string {
     .join(" ");
   const L: string[] = [];
   L.push(
-    `sbperf check (${scope}): ${r.counts.high} high / ${r.counts.med} med / ${r.counts.low} low findings`,
+    `pg-analyser check (${scope}): ${r.counts.high} high / ${r.counts.med} med / ${r.counts.low} low findings`,
   );
   if (r.pass) {
     L.push(`PASS - no ${r.newOnly ? "new " : ""}findings at or above ${r.failOn}`);

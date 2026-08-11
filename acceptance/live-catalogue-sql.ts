@@ -12,14 +12,14 @@
  * Placeholder statements (containing <angle> tokens) are skipped: they are
  * templates for a human, not runnable SQL.
  *
- * Usage: SBPERF_TEST_DB_URL=postgres://... bun acceptance/live-catalogue-sql.ts
+ * Usage: PG_ANALYSER_TEST_DB_URL=postgres://... bun acceptance/live-catalogue-sql.ts
  */
 import { SQL } from "bun";
 import { HEURISTICS } from "../src/heuristics.ts";
 
-const url = process.env.SBPERF_TEST_DB_URL;
+const url = process.env.PG_ANALYSER_TEST_DB_URL;
 if (!url) {
-  console.error("SBPERF_TEST_DB_URL is not set - no live database to verify against");
+  console.error("PG_ANALYSER_TEST_DB_URL is not set - no live database to verify against");
   process.exit(1);
 }
 

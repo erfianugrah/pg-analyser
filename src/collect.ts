@@ -43,7 +43,7 @@ export async function collect(
     // amcheck data-integrity checks (opt-in). false/undefined = off (default);
     // true = bt_index_check on app B-tree indexes (light, AccessShareLock);
     // "heap" = also verify_heapam over the biggest app tables (HEAVY - reads
-    // every page). Requires superuser SQL + amcheck already installed; sbperf
+    // every page). Requires superuser SQL + amcheck already installed; pg-analyser
     // never CREATEs the extension.
     amcheck?: boolean | "heap";
   } = {},
@@ -395,17 +395,17 @@ export async function collect(
   // later. Nothing is dropped at collection.
   const samples = metricsText ? parsePrometheus(metricsText).map((s) => MetricSample.parse(s)) : [];
   // Auth + schema for an auth'd datasource (Grafana proxy / auth'd Prometheus or
-  // Prometheus). Flag-provided (opts) wins; else the SBPERF_PROMETHEUS_*
+  // Prometheus). Flag-provided (opts) wins; else the PG_ANALYSER_PROMETHEUS_*
   // env. token = service-account bearer; cookie = browser session (SSO-fronted
   // Grafana); matcher = project-label template for a non-default scraper schema.
-  const promUrl = opts.prometheusUrl ?? process.env.SBPERF_PROMETHEUS_URL;
-  const promToken = opts.prometheusToken ?? process.env.SBPERF_PROMETHEUS_TOKEN;
-  const promCookie = opts.prometheusCookie ?? process.env.SBPERF_PROMETHEUS_COOKIE;
-  const promMatcher = opts.prometheusMatcher ?? process.env.SBPERF_PROMETHEUS_MATCHER;
+  const promUrl = opts.prometheusUrl ?? process.env.PG_ANALYSER_PROMETHEUS_URL;
+  const promToken = opts.prometheusToken ?? process.env.PG_ANALYSER_PROMETHEUS_TOKEN;
+  const promCookie = opts.prometheusCookie ?? process.env.PG_ANALYSER_PROMETHEUS_COOKIE;
+  const promMatcher = opts.prometheusMatcher ?? process.env.PG_ANALYSER_PROMETHEUS_MATCHER;
   // Trend query window (days). Grafana/Prometheus is a TSDB, so this can be well
   // past the ~7-day analytics cap - the dashboards go to 90d. Profile/opts wins,
-  // then SBPERF_TREND_DAYS, then 30. Not internal - just a knob, so it's config.
-  const envDays = Number(process.env.SBPERF_TREND_DAYS);
+  // then PG_ANALYSER_TREND_DAYS, then 30. Not internal - just a knob, so it's config.
+  const envDays = Number(process.env.PG_ANALYSER_TREND_DAYS);
   const trendDays =
     opts.trendDays && opts.trendDays > 0
       ? opts.trendDays
@@ -429,7 +429,7 @@ export async function collect(
   // short window (default 7d) - the downsampled trends above cannot see a
   // minutes-long mass-cancellation burst. Same Prometheus config; skipped when
   // no Prometheus is configured.
-  const envIncidentDays = Number(process.env.SBPERF_INCIDENT_SCAN_DAYS);
+  const envIncidentDays = Number(process.env.PG_ANALYSER_INCIDENT_SCAN_DAYS);
   const incidentDays =
     opts.incidentScanDays && opts.incidentScanDays > 0
       ? opts.incidentScanDays
@@ -511,7 +511,7 @@ export async function collect(
     rawDbBytes == null || !Number.isFinite(Number(rawDbBytes)) ? null : Number(rawDbBytes);
 
   // Exact reclaimable space via pgstattuple_approx - run ONLY when the extension
-  // is already installed AND we have superuser SQL. sbperf never CREATEs it (a
+  // is already installed AND we have superuser SQL. pg-analyser never CREATEs it (a
   // write); the read-only PAT user can't exec it either. Cheap on well-vacuumed
   // tables (approx skips all-visible pages); safe() records a note and findings
   // fall back to the pg_stats estimate on any error/absence.
@@ -550,7 +550,7 @@ export async function collect(
     : [];
 
   // index_advisor CREATE INDEX recommendations - run ONLY on the superuser tier
-  // AND when index_advisor + its hypopg dependency are already installed. sbperf
+  // AND when index_advisor + its hypopg dependency are already installed. pg-analyser
   // never CREATEs them (a write), and the read-only PAT user can't exec the
   // advisor function. Runs index_advisor server-side via LATERAL over the top-N
   // heavy statements (see QUERIES.indexAdvisor); safe() records a note on any
@@ -609,7 +609,7 @@ export async function collect(
     : [];
 
   // amcheck integrity checks - opt-in, superuser SQL only, and only when the
-  // extension is ALREADY installed (sbperf never CREATEs it - a write). Index
+  // extension is ALREADY installed (pg-analyser never CREATEs it - a write). Index
   // check calls bt_index_check per index (it RAISES on corruption, so a thrown
   // error is the hit); the heavier heap check (verify_heapam) is row-returning
   // and gated behind --amcheck=heap.
@@ -624,7 +624,7 @@ export async function collect(
       errors.push({
         source: "amcheck",
         message:
-          "amcheck requested but the extension is not installed. On Supabase, amcheck is bundled but supautils-gated as 'unsafe', so the regular postgres role cannot create it - connect as the true superuser (supabase_admin) and run CREATE EXTENSION amcheck once, then re-run with --amcheck. sbperf never installs extensions itself.",
+          "amcheck requested but the extension is not installed. On Supabase, amcheck is bundled but supautils-gated as 'unsafe', so the regular postgres role cannot create it - connect as the true superuser (supabase_admin) and run CREATE EXTENSION amcheck once, then re-run with --amcheck. pg-analyser never installs extensions itself.",
       });
     } else {
       const targets = await safe(
@@ -636,9 +636,9 @@ export async function collect(
       // multi-GB index (targets are size-DESC, so the biggest runs first) can't
       // hang the whole run. Sent as a single simple-query message (SET + check)
       // so the timeout binds to the SAME pooled connection. Default 300s/index,
-      // override with SBPERF_AMCHECK_TIMEOUT (e.g. '20min' to actually finish a
+      // override with PG_ANALYSER_AMCHECK_TIMEOUT (e.g. '20min' to actually finish a
       // huge index). A timeout is a SKIP (recorded as a note), NOT corruption.
-      const amcheckTimeout = (process.env.SBPERF_AMCHECK_TIMEOUT ?? "300s").replace(
+      const amcheckTimeout = (process.env.PG_ANALYSER_AMCHECK_TIMEOUT ?? "300s").replace(
         /[^0-9a-z ]/gi,
         "",
       );
@@ -667,7 +667,7 @@ export async function collect(
             amcheckTimedOut++;
             errors.push({
               source: "amcheck",
-              message: `amcheck skipped ${String(t.index)}: exceeded ${amcheckTimeout} (index too large to verify within the bound - raise SBPERF_AMCHECK_TIMEOUT to check it). NOT a corruption result.`,
+              message: `amcheck skipped ${String(t.index)}: exceeded ${amcheckTimeout} (index too large to verify within the bound - raise PG_ANALYSER_AMCHECK_TIMEOUT to check it). NOT a corruption result.`,
             });
           } else {
             amcheckIndex.push({ index: String(t.index), message: msg });
@@ -730,9 +730,9 @@ export async function collect(
 
   // Wait-event sampling (Check 6, ASH-lite): a few point-in-time histograms
   // ~500ms apart. Both tiers (pg_stat_activity is readable read-only). Default
-  // 5 samples; SBPERF_WAIT_SAMPLES=0 disables it (skips the ~2.5s it adds).
+  // 5 samples; PG_ANALYSER_WAIT_SAMPLES=0 disables it (skips the ~2.5s it adds).
   // One try/catch for the whole loop so a failure records ONE note, not five.
-  const envWaitSamples = Number(process.env.SBPERF_WAIT_SAMPLES);
+  const envWaitSamples = Number(process.env.PG_ANALYSER_WAIT_SAMPLES);
   const nWaitSamples = Number.isFinite(envWaitSamples) ? envWaitSamples : 5;
   const waitSamples: SqlRow[][] = [];
   if (sqlServing && nWaitSamples > 0) {
@@ -1007,7 +1007,7 @@ export async function collect(
 
   // Tool-provenance signal (catalog vintage + vendored-splinter drift). Logged
   // here and persisted to analysis.json; deliberately NOT rendered in the
-  // report - it describes sbperf's currency, not the audited database.
+  // report - it describes pg-analyser's currency, not the audited database.
   if (analysis.sync)
     clog.info("sync check", {
       catalogReviewed: analysis.sync.catalogReviewed,

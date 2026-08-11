@@ -2,14 +2,14 @@
 /**
  * Upstream drift-check. Instead of tracking the Supabase Management API by hand
  * (or leaning on the CLI as a source of truth), assert that every endpoint
- * sbperf depends on still exists - with the HTTP method we use - in the
+ * pg-analyser depends on still exists - with the HTTP method we use - in the
  * canonical OpenAPI spec. CI runs this so an upstream rename/removal fails the
  * build loudly rather than surfacing as a runtime 404 in front of a user.
  *
  *   bun run scripts/check-api-drift.ts
  *
  * Two layers:
- *   1. PRIMARY (pass/fail): assert sbperf's endpoints exist in the LIVE spec
+ *   1. PRIMARY (pass/fail): assert pg-analyser's endpoints exist in the LIVE spec
  *      (api.supabase.com/api/v1-json) - the ground truth for what the deployed
  *      API actually accepts. Missing endpoint => exit 1.
  *   2. CROSS-CHECK (advisory): diff the live spec against the version-controlled
@@ -18,23 +18,23 @@
  *      upstream is mid-change. Never fails the build on its own - emits a
  *      warning (a GitHub Actions ::warning:: annotation in CI).
  *
- * Specs are public (no auth). Overrides: SBPERF_API_SPEC_URL (live),
- * SBPERF_API_SPEC_COMPARE_URL (docs copy), SBPERF_NO_CROSSCHECK=1 to skip (2).
+ * Specs are public (no auth). Overrides: PG_ANALYSER_API_SPEC_URL (live),
+ * PG_ANALYSER_API_SPEC_COMPARE_URL (docs copy), PG_ANALYSER_NO_CROSSCHECK=1 to skip (2).
  *
  * Scope: Management API (api.supabase.com) only. The per-project metrics
  * endpoint (<ref>.supabase.co/customer/v1/privileged/metrics) is a data-plane
  * route, not part of this spec - it is exercised by the live smoke instead.
  */
 
-const SPEC_URL = process.env.SBPERF_API_SPEC_URL ?? "https://api.supabase.com/api/v1-json";
+const SPEC_URL = process.env.PG_ANALYSER_API_SPEC_URL ?? "https://api.supabase.com/api/v1-json";
 const COMPARE_URL =
-  process.env.SBPERF_API_SPEC_COMPARE_URL ??
+  process.env.PG_ANALYSER_API_SPEC_COMPARE_URL ??
   "https://raw.githubusercontent.com/supabase/supabase/master/apps/docs/spec/api_v1_openapi.json";
-const CROSS_CHECK = process.env.SBPERF_NO_CROSSCHECK !== "1";
+const CROSS_CHECK = process.env.PG_ANALYSER_NO_CROSSCHECK !== "1";
 const IN_GHA = process.env.GITHUB_ACTIONS === "true";
 const warn = (msg: string): void => console.error(IN_GHA ? `::warning::${msg}` : `warning: ${msg}`);
 
-/** Single source of truth: (method, path) pairs sbperf calls in management.ts. */
+/** Single source of truth: (method, path) pairs pg-analyser calls in management.ts. */
 const ENDPOINTS: ReadonlyArray<{ method: string; path: string; used: string }> = [
   { method: "get", path: "/v1/projects", used: "org-wide project iteration (--all)" },
   { method: "get", path: "/v1/organizations", used: "org grouping for --all output" },
@@ -114,8 +114,8 @@ async function crossCheck(livePaths: Record<string, unknown>): Promise<void> {
   const onlyLive = [...live].filter((p) => !docs.has(p));
   const onlyDocs = [...docs].filter((p) => !live.has(p));
 
-  // Endpoints sbperf actually uses that disagree between the two = the only
-  // actionable signal; warn on those. A divergence confined to paths sbperf
+  // Endpoints pg-analyser actually uses that disagree between the two = the only
+  // actionable signal; warn on those. A divergence confined to paths pg-analyser
   // never calls (e.g. a new analytics endpoint mid-deploy) is upstream's
   // business - log it as info, not a CI warning annotation.
   const affected = ENDPOINTS.filter((e) => live.has(e.path) !== docs.has(e.path)).map(
@@ -123,7 +123,7 @@ async function crossCheck(livePaths: Record<string, unknown>): Promise<void> {
   );
   if (affected.length) {
     warn(
-      `endpoints sbperf uses differ between live and docs spec (upstream mid-change?): ${affected.join(", ")}`,
+      `endpoints pg-analyser uses differ between live and docs spec (upstream mid-change?): ${affected.join(", ")}`,
     );
   }
 
@@ -132,7 +132,7 @@ async function crossCheck(livePaths: Record<string, unknown>): Promise<void> {
     if (onlyLive.length) parts.push(`${onlyLive.length} live-only`);
     if (onlyDocs.length) parts.push(`${onlyDocs.length} docs-only`);
     console.log(
-      `cross-check: live and docs specs diverge on paths sbperf does not use (${parts.join(", ")}) - informational only`,
+      `cross-check: live and docs specs diverge on paths pg-analyser does not use (${parts.join(", ")}) - informational only`,
     );
   } else {
     console.log(`cross-check: live and docs spec agree (${live.size} paths)`);

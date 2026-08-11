@@ -3,7 +3,7 @@
 Supabase serves a Prometheus-format metrics endpoint and log drains, but no
 in-product alerting. You get the signal and no notification path. Prometheus
 itself is commodity; the part that is not is knowing which number means trouble
-on a tier-scaled managed Postgres - and sbperf already encodes that, with
+on a tier-scaled managed Postgres - and pg-analyser already encodes that, with
 justification, in `src/heuristics.ts`.
 
 `alerts-init` emits those thresholds as Prometheus alerting rules:
@@ -135,7 +135,7 @@ never fire. `check:alerts` is the guard, advisory in the same way as
 
 ```bash
 bun run check:alerts                          # warn on drift, exit 0
-SBPERF_ALERTS_STRICT=1 bun run check:alerts   # exit 1 (gated job)
+PG_ANALYSER_ALERTS_STRICT=1 bun run check:alerts   # exit 1 (gated job)
 ```
 
 It has two layers:

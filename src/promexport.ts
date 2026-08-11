@@ -4,8 +4,8 @@ import type { SnapshotForTrends } from "./trends.ts";
 /**
  * Render accumulated snapshots as OpenMetrics text with timestamps, suitable
  * for `promtool tsdb create-blocks-from-openmetrics` to backfill a Prometheus
- * TSDB - so Grafana can query sbperf's history RETROACTIVELY, instead of
- * sbperf reinventing a time-series store. The SQLite store stays the source of
+ * TSDB - so Grafana can query pg-analyser's history RETROACTIVELY, instead of
+ * pg-analyser reinventing a time-series store. The SQLite store stays the source of
  * truth; this is an export view.
  *
  * Every family is declared `unknown` type: it sidesteps OpenMetrics' strict
