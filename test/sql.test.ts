@@ -196,3 +196,8 @@ describe("pgss schema resolution (self-hosted pg_stat_statements)", () => {
     expect(withPgssSchema("")).toEqual({});
   });
 });
+
+test("unindexedVectors attributes expression ANN indexes via pg_depend (indkey 0)", () => {
+  expect(QUERIES.unindexedVectors).toContain("pg_depend");
+  expect(QUERIES.unindexedVectors).toContain("refobjsubid = a.attnum");
+});
