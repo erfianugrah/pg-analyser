@@ -13,6 +13,7 @@ out/
 *.report.pdf
 
 # compiled binary
+/pg-analyser
 /sbperf
 
 # scraper runtime data
@@ -23,25 +24,35 @@ scraper/data/
 *.swp
 
 # multi-db superuser targets (connstrings)
+pg-analyser.databases.json
+pg-analyser.databases.*.json
+!pg-analyser.databases.example.json
 sbperf.databases.json
 sbperf.databases.*.json
 !sbperf.databases.example.json
 
 # active white-label brand config (keep the .example); may point at private logos
+pg-analyser.brand.json
 sbperf.brand.json
 
 # per-project review overlays (may reference project-specific context; keep the .example)
+pg-analyser.overlays/
 sbperf.overlays/
 
 # exported Grafana dashboard JSON / local datasource config - may contain
 # private URLs, datasource UIDs, and non-public label schemes. never commit.
 db_exporter.json
+pg-analyser.grafana.json
+pg-analyser.grafana.*.json
 sbperf.grafana.json
 sbperf.grafana.*.json
 
 # audit profile: the single-JSON no-PAT profile config (forced no-PAT +
 # region-mapped Grafana cookies + DB connstrings). keep the .example.
-# canonical: sbperf.profile.json; named variants: sbperf.<name>.profile.json
+# canonical: pg-analyser.profile.json; named variants: pg-analyser.<name>.profile.json
+pg-analyser.profile.json
+pg-analyser.*.profile.json
+pg-analyser.work.env
 sbperf.profile.json
 sbperf.*.profile.json
 sbperf.work.env

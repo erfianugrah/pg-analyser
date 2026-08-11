@@ -1,6 +1,6 @@
 # Prometheus + Grafana scrape stack
 
-`sbperf scrape-init` generates a ready-to-run Prometheus + Grafana stack that
+`pg-analyser scrape-init` generates a ready-to-run Prometheus + Grafana stack that
 scrapes a project's privileged metrics endpoint on an interval, giving you real
 going-forward time-series history. The metrics endpoint itself is point-in-time
 (a scrape target, not a TSDB), so history only exists once something is
@@ -9,7 +9,7 @@ scraping it - this stack is that something.
 Two independent things consume the scraped data:
 
 1. **Grafana** renders a dashboard from it directly (open a browser).
-2. **The sbperf report** reads it via `--prometheus` and renders the same trend
+2. **The pg-analyser report** reads it via `--prometheus` and renders the same trend
    panels inline in `report.html` (`fetchTrends`, see [below](#the-report-route-fetchtrends)).
 
 Both work against the same scrape with no relabelling, because they key on the
@@ -47,7 +47,7 @@ For retroactive history from the SQLite store, see
 [Backfilling past history](#backfilling-past-history-retroactive).
 
 > The generated `prometheus.yml` contains a live credential (see below) and is
-> gitignored inside the stack dir. If you run this from inside the sbperf repo,
+> gitignored inside the stack dir. If you run this from inside the pg-analyser repo,
 > the whole `scraper-live/` (or `--dir`) tree is gitignored.
 
 ---
@@ -123,7 +123,7 @@ datasources:
 
 ### The dashboard (`grafana/dashboards/supabase.json`)
 
-A **clean-room** dashboard generated from sbperf's own trend panel definitions
+A **clean-room** dashboard generated from pg-analyser's own trend panel definitions
 (`buildPanels()` in `src/prometheus.ts`) - the exact same list the report's
 trend panels use, so Grafana and the report render the same set and stay in
 lockstep. It is regenerated from that one source; there is no hand-maintained
@@ -151,7 +151,7 @@ label scheme, no import-time datasource picking (the UID is pinned).
 
 ## The report route (`fetchTrends`)
 
-Instead of (or in addition to) looking at Grafana, point the sbperf report at the
+Instead of (or in addition to) looking at Grafana, point the pg-analyser report at the
 Prometheus and it renders the same panels inline in `report.html`:
 
 ```bash
@@ -171,7 +171,7 @@ bun run src/index.ts full --ref <ref> --prometheus http://localhost:9090
   - `--prometheus-cookie '<session cookie>'` - the browser session cookie, for a
     Grafana behind an SSO proxy a token can't traverse. Token wins if both are
     set.
-- Env equivalents: `SBPERF_PROMETHEUS_{URL,TOKEN,COOKIE,MATCHER}`.
+- Env equivalents: `PG_ANALYSER_PROMETHEUS_{URL,TOKEN,COOKIE,MATCHER}`.
 
 ### Auto-scoped query window
 
@@ -226,7 +226,7 @@ project (each carries its own `supabase_project_ref` from the endpoint). Then:
 ## Backfilling past history (retroactive)
 
 Prometheus cannot scrape the past, but it can ingest backfilled TSDB blocks. If
-you have been accumulating the SQLite store (`sbperf snapshot`), export it as
+you have been accumulating the SQLite store (`pg-analyser snapshot`), export it as
 OpenMetrics and backfill it into the stack's data volume:
 
 ```bash

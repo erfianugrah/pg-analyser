@@ -26,7 +26,7 @@ describe("loadBrand precedence", () => {
   const files: Record<string, string> = {
     "/brand.json": JSON.stringify({ accent: "#111111" }),
     "/env.json": JSON.stringify({ accent: "#222222" }),
-    "./sbperf.brand.json": JSON.stringify({ accent: "#333333" }),
+    "./pg-analyser.brand.json": JSON.stringify({ accent: "#333333" }),
     "/logo.svg": "<svg id=fromfile></svg>",
     "/withpath.json": JSON.stringify({ logoPath: "/logo.svg" }),
   };
@@ -43,17 +43,17 @@ describe("loadBrand precedence", () => {
   test("explicit --file wins", async () => {
     const b = await loadBrand({
       file: "/brand.json",
-      env: { SBPERF_BRAND: "/env.json" },
+      env: { PG_ANALYSER_BRAND: "/env.json" },
       readText,
       exists,
     });
     expect(b.accent).toBe("#111111");
   });
-  test("SBPERF_BRAND env used when no --file", async () => {
-    const b = await loadBrand({ env: { SBPERF_BRAND: "/env.json" }, readText, exists });
+  test("PG_ANALYSER_BRAND env used when no --file", async () => {
+    const b = await loadBrand({ env: { PG_ANALYSER_BRAND: "/env.json" }, readText, exists });
     expect(b.accent).toBe("#222222");
   });
-  test("./sbperf.brand.json auto-loaded when present and nothing else set", async () => {
+  test("./pg-analyser.brand.json auto-loaded when present and nothing else set", async () => {
     const b = await loadBrand({ env: {}, readText, exists });
     expect(b.accent).toBe("#333333");
   });

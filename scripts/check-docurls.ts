@@ -8,7 +8,7 @@
  * different path means the doc was renamed - repoint it).
  *
  *   bun run scripts/check-docurls.ts        # warn on dead / renamed, exit 0
- *   SBPERF_DOCURLS_STRICT=1 bun run ...      # exit 1 on any problem (gated job)
+ *   PG_ANALYSER_DOCURLS_STRICT=1 bun run ...      # exit 1 on any problem (gated job)
  *
  * Network-dependent, so advisory by default (offline CI shouldn't fail on it).
  * Mirrors check:api / check:lints: the warning is the nudge to fix the pointer.
@@ -18,7 +18,7 @@ import { HEURISTICS } from "../src/heuristics.ts";
 import { LINT_FIXES } from "../src/lints.ts";
 
 const IN_GHA = process.env.GITHUB_ACTIONS === "true";
-const STRICT = process.env.SBPERF_DOCURLS_STRICT === "1";
+const STRICT = process.env.PG_ANALYSER_DOCURLS_STRICT === "1";
 const warn = (m: string): void => console.error(IN_GHA ? `::warning::${m}` : `warning: ${m}`);
 
 // Collect every URL in the catalog, remembering which finding(s) reference it.

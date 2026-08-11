@@ -23,10 +23,10 @@ function run(args: string[], env: Record<string, string> = {}) {
 
 describe("alerts-init needs no credential", () => {
   test("it writes alerts.yml with an empty environment", () => {
-    const dir = mkdtempSync(join(tmpdir(), "sbperf-alerts-"));
+    const dir = mkdtempSync(join(tmpdir(), "pg-analyser-alerts-"));
     const r = run(["alerts-init", "--dir", dir], {
       SUPABASE_ACCESS_TOKEN: "",
-      SBPERF_LOG_LEVEL: "error",
+      PG_ANALYSER_LOG_LEVEL: "error",
     });
     expect(r.code, `${r.out}\n${r.err}`).toBe(0);
     const yaml = readFileSync(join(dir, "alerts.yml"), "utf8");
@@ -35,10 +35,10 @@ describe("alerts-init needs no credential", () => {
   });
 
   test("--ref scopes the expressions to one project", () => {
-    const dir = mkdtempSync(join(tmpdir(), "sbperf-alerts-"));
+    const dir = mkdtempSync(join(tmpdir(), "pg-analyser-alerts-"));
     const r = run(["alerts-init", "--ref", "examplerefaaaaaaaaaa", "--dir", dir], {
       SUPABASE_ACCESS_TOKEN: "",
-      SBPERF_LOG_LEVEL: "error",
+      PG_ANALYSER_LOG_LEVEL: "error",
     });
     expect(r.code, `${r.out}\n${r.err}`).toBe(0);
     expect(readFileSync(join(dir, "alerts.yml"), "utf8")).toContain("examplerefaaaaaaaaaa");
@@ -66,7 +66,7 @@ describe("the generated Prometheus stack loads the pack", () => {
           headers: { "content-type": "application/json" },
         }),
       )) as unknown as typeof fetch;
-    const dir = mkdtempSync(join(tmpdir(), "sbperf-scraper-"));
+    const dir = mkdtempSync(join(tmpdir(), "pg-analyser-scraper-"));
     await writeScraper("examplerefaaaaaaaaaa", { accessToken: "sbp_x", tokenSource: "env" }, dir);
     const prom = readFileSync(join(dir, "prometheus.yml"), "utf8");
     expect(prom).toContain("rule_files:");

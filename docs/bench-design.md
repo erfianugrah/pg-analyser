@@ -1,11 +1,11 @@
-# sbperf bench - design note
+# pg-analyser bench - design note
 
 A pgbench wrapper with methodology guardrails. The doc (`docs/pgbench.md`)
 carries the *why* (disclaimers, representativeness); `bench` enforces the
 *how* (the mechanizable flaws): client-side saturation, too-short runs, no
 tail latency, untracked config changes, and result amnesia.
 
-pgbench does the actual work. sbperf adds preflight checks, repetition with
+pgbench does the actual work. pg-analyser adds preflight checks, repetition with
 stability detection, percentile parsing, GUC diffing between runs, and a
 SQLite run history keyed by (ref, script) so "did work_mem=64MB help?" is a
 query, not a memory.
@@ -13,10 +13,10 @@ query, not a memory.
 ## Command surface
 
 ```
-sbperf bench --db-url <c> [-f script.sql ...] [-b tpcb-like] [options]   # run
-sbperf bench --list [--ref <r>]                                          # history
-sbperf bench --show <id>                                                 # one run
-sbperf bench --compare <idA> <idB>                                       # delta
+pg-analyser bench --db-url <c> [-f script.sql ...] [-b tpcb-like] [options]   # run
+pg-analyser bench --list [--ref <r>]                                          # history
+pg-analyser bench --show <id>                                                 # one run
+pg-analyser bench --compare <idA> <idB>                                       # delta
 ```
 
 Run options:
@@ -40,13 +40,13 @@ Run options:
 | `--yes` | off | skip interactive confirmations (--init) |
 
 `--db-url` resolution reuses the existing sweep-target chain (flag / env /
-sbperf.databases.json / profile). bench is inherently no-PAT: pgbench speaks
+pg-analyser.databases.json / profile). bench is inherently no-PAT: pgbench speaks
 the wire protocol, so a connstring is required and no Management API planes
 are touched.
 
 ## Guardrails (preflight, in order)
 
-1. **Binary**: pgbench found via `SBPERF_PGBENCH` env, then PATH
+1. **Binary**: pgbench found via `PG_ANALYSER_PGBENCH` env, then PATH
    (`findPgbench()`, same discovery shape as `findChrome()` in report/pdf.ts).
    Version parsed from `pgbench --version` and stored with the run.
 2. **Client saturation**: `os.cpus()` + `os.loadavg()`. Abort (unless `--yes`)
@@ -78,7 +78,7 @@ are touched.
   Stored as JSON with the run; `--compare` diffs the two runs' GUC maps so the
   config delta sits next to the perf delta ("what changed" is never memory).
 - `--reset-stats`: `SELECT pg_stat_statements_reset()` before the first
-  measured run, so a follow-up `sbperf snapshot` + `diff` brackets exactly the
+  measured run, so a follow-up `pg-analyser snapshot` + `diff` brackets exactly the
   benchmark window.
 
 ## Store schema (history.db, new table)
@@ -114,7 +114,7 @@ CREATE TABLE IF NOT EXISTS bench_runs (
 CREATE INDEX IF NOT EXISTS idx_bench_ref_script ON bench_runs(ref, script_hash, ts);
 ```
 
-Same `~/.sbperf/history.db` as snapshots (one history file per user; the
+Same `~/.pg-analyser/history.db` as snapshots (one history file per user; the
 table is independent, no FK to snapshots). HistoryStore grows:
 `recordBenchRun()`, `benchRuns(ref, scriptHash?)`, `benchRun(id)`.
 Connstrings are never stored - `ref` is derived via the existing
@@ -142,7 +142,7 @@ moved Y%".
 
 - No TPC-C/hammerdb-style infra-comparison harness - a different tool class
   (throughput leaderboards), not the customer config-tuning loop.
-- No automatic snapshot bracketing (`sbperf snapshot` before/after stays a
+- No automatic snapshot bracketing (`pg-analyser snapshot` before/after stays a
   manual step; may become `--bracket` later).
 - No CI regression gate on `--compare` (a `--fail-if-slower-pct` is the
   natural phase 2, mirroring check.ts's evaluateGate).

@@ -67,17 +67,17 @@ describe("DirectSqlRunner", () => {
     expect(await r.run("select 9")).toEqual([{ a: 9 }] as unknown as SqlRow[]);
   });
 
-  test("SBPERF_STATEMENT_TIMEOUT overrides the default bound", async () => {
-    const prev = process.env.SBPERF_STATEMENT_TIMEOUT;
-    process.env.SBPERF_STATEMENT_TIMEOUT = "5min";
+  test("PG_ANALYSER_STATEMENT_TIMEOUT overrides the default bound", async () => {
+    const prev = process.env.PG_ANALYSER_STATEMENT_TIMEOUT;
+    process.env.PG_ANALYSER_STATEMENT_TIMEOUT = "5min";
     try {
       const sql = fakeSql([]);
       const r = new DirectSqlRunner("postgres://ignored", sql);
       await r.run("select 1");
       expect(sql.queries[0]).toContain("statement_timeout='5min'");
     } finally {
-      if (prev === undefined) delete process.env.SBPERF_STATEMENT_TIMEOUT;
-      else process.env.SBPERF_STATEMENT_TIMEOUT = prev;
+      if (prev === undefined) delete process.env.PG_ANALYSER_STATEMENT_TIMEOUT;
+      else process.env.PG_ANALYSER_STATEMENT_TIMEOUT = prev;
     }
   });
 

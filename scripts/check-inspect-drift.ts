@@ -1,9 +1,9 @@
 #!/usr/bin/env bun
 /**
- * Inspect-SQL drift-check (advisory). sbperf DERIVES its diagnostic queries
+ * Inspect-SQL drift-check (advisory). pg-analyser DERIVES its diagnostic queries
  * (src/sql.ts) from the Supabase CLI's `inspect` SQL, but does NOT vendor them
  * verbatim - the CLI queries use bind parameters (`LIKE ANY($1)`) that can't
- * pass through the PAT read-only endpoint, and sbperf's findings consume raw
+ * pass through the PAT read-only endpoint, and pg-analyser's findings consume raw
  * columns (e.g. bloat `waste_bytes`) that the CLI SQL wraps away in
  * pg_size_pretty(). So a byte-diff would be meaningless. Instead this check
  * records a fingerprint of each UPSTREAM query at the time we last reviewed our
@@ -12,30 +12,30 @@
  * silent-drift class of bug (e.g. the RLS unwrapped-auth false positive).
  *
  *   bun run scripts/check-inspect-drift.ts            # check, warn on drift
- *   SBPERF_INSPECT_UPDATE=1 bun run scripts/check-inspect-drift.ts   # accept
+ *   PG_ANALYSER_INSPECT_UPDATE=1 bun run scripts/check-inspect-drift.ts   # accept
  *                                                       upstream after review
  *
  * Advisory by design: exit 0 even on drift (emits ::warning:: in CI). Upstream
- * changing their SQL does not break sbperf at runtime - our queries are
+ * changing their SQL does not break pg-analyser at runtime - our queries are
  * independent - so a red build would be noise. The warning is the signal.
- * Set SBPERF_INSPECT_STRICT=1 to exit 1 on drift instead (e.g. a gated job).
+ * Set PG_ANALYSER_INSPECT_STRICT=1 to exit 1 on drift instead (e.g. a gated job).
  *
- * Override the branch with SBPERF_CLI_REF (default: develop).
+ * Override the branch with PG_ANALYSER_CLI_REF (default: develop).
  */
 
 import { createHash } from "node:crypto";
 
-const CLI_REF = process.env.SBPERF_CLI_REF ?? "develop";
+const CLI_REF = process.env.PG_ANALYSER_CLI_REF ?? "develop";
 const RAW_BASE = `https://raw.githubusercontent.com/supabase/cli/${CLI_REF}/apps/cli-go/internal/inspect`;
-const UPDATE = process.env.SBPERF_INSPECT_UPDATE === "1";
-const STRICT = process.env.SBPERF_INSPECT_STRICT === "1";
+const UPDATE = process.env.PG_ANALYSER_INSPECT_UPDATE === "1";
+const STRICT = process.env.PG_ANALYSER_INSPECT_STRICT === "1";
 const IN_GHA = process.env.GITHUB_ACTIONS === "true";
 const warn = (msg: string): void => console.error(IN_GHA ? `::warning::${msg}` : `warning: ${msg}`);
 
 const BASELINE_PATH = new URL("./inspect-baseline.json", import.meta.url).pathname;
 
 /**
- * Manifest: each sbperf query in src/sql.ts that is DERIVED from a CLI inspect
+ * Manifest: each pg-analyser query in src/sql.ts that is DERIVED from a CLI inspect
  * query, mapped to its upstream source dir. `derives` is the QUERIES key in
  * src/sql.ts - the thing to re-review when the upstream fingerprint drifts.
  * Add a row here when you port (or adapt) a new inspect query.
@@ -90,7 +90,7 @@ export function classifyDrift(
     const now = current.get(m.dir);
     const base = baseline[m.dir];
     if (!base) {
-      missing.push(`${m.dir} (no baseline - run with SBPERF_INSPECT_UPDATE=1)`);
+      missing.push(`${m.dir} (no baseline - run with PG_ANALYSER_INSPECT_UPDATE=1)`);
       continue;
     }
     if (now && now !== base.sha256) {
@@ -162,7 +162,7 @@ async function main(): Promise<void> {
     for (const d of drifted) warn(`  ${d}`);
     warn(
       "review whether our derived query needs the same change, then accept with " +
-        "SBPERF_INSPECT_UPDATE=1 bun run scripts/check-inspect-drift.ts",
+        "PG_ANALYSER_INSPECT_UPDATE=1 bun run scripts/check-inspect-drift.ts",
     );
     if (STRICT) process.exit(1);
     return;

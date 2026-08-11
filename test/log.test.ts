@@ -60,21 +60,21 @@ describe("logger", () => {
 });
 
 describe("envLevelExplicit", () => {
-  const orig = process.env.SBPERF_LOG_LEVEL;
+  const orig = process.env.PG_ANALYSER_LOG_LEVEL;
   afterEach(() => {
-    if (orig === undefined) delete process.env.SBPERF_LOG_LEVEL;
-    else process.env.SBPERF_LOG_LEVEL = orig;
+    if (orig === undefined) delete process.env.PG_ANALYSER_LOG_LEVEL;
+    else process.env.PG_ANALYSER_LOG_LEVEL = orig;
   });
   test("null when unset", () => {
-    delete process.env.SBPERF_LOG_LEVEL;
+    delete process.env.PG_ANALYSER_LOG_LEVEL;
     expect(envLevelExplicit()).toBeNull();
   });
   test("null when unrecognised (so the sweep default wins)", () => {
-    process.env.SBPERF_LOG_LEVEL = "loud";
+    process.env.PG_ANALYSER_LOG_LEVEL = "loud";
     expect(envLevelExplicit()).toBeNull();
   });
   test("returns the explicit level", () => {
-    process.env.SBPERF_LOG_LEVEL = "debug";
+    process.env.PG_ANALYSER_LOG_LEVEL = "debug";
     expect(envLevelExplicit()).toBe("debug");
   });
 });

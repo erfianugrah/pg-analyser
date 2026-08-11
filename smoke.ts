@@ -4,7 +4,7 @@
  * Not part of `bun test` (needs live credentials); run explicitly:
  *
  *   SUPABASE_ACCESS_TOKEN=sbp_... bun run smoke --ref <project-ref>
- *   SBPERF_SMOKE_REF=<ref> bun run smoke            # ref from env
+ *   PG_ANALYSER_SMOKE_REF=<ref> bun run smoke            # ref from env
  *
  * Exits non-zero if a hard invariant fails. Per-plane failures are reported
  * as WARN (a project may legitimately lack metrics, advisors, etc.).
@@ -30,7 +30,7 @@ function check(label: string, ok: boolean, detail = "", hard = false): void {
 function refFromArgs(): string | undefined {
   const i = process.argv.indexOf("--ref");
   if (i !== -1) return process.argv[i + 1];
-  return process.env.SBPERF_SMOKE_REF;
+  return process.env.PG_ANALYSER_SMOKE_REF;
 }
 
 async function main(): Promise<void> {
@@ -48,7 +48,7 @@ async function main(): Promise<void> {
 
   const ref = refFromArgs();
   if (!ref) {
-    console.error(`${RED}no project ref:${RESET} pass --ref <ref> or set SBPERF_SMOKE_REF`);
+    console.error(`${RED}no project ref:${RESET} pass --ref <ref> or set PG_ANALYSER_SMOKE_REF`);
     process.exit(2);
   }
 

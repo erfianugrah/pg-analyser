@@ -8,8 +8,8 @@
  * load, which is the worst outcome for an alerting artifact.
  *
  * Skips (exit 0) when promtool is absent, so it is safe in a bare environment;
- * set SBPERF_PROMTOOL to point at the binary.
- *   PATH lookup order: $SBPERF_PROMTOOL, promtool on PATH.
+ * set PG_ANALYSER_PROMTOOL to point at the binary.
+ *   PATH lookup order: $PG_ANALYSER_PROMTOOL, promtool on PATH.
  */
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,7 +17,7 @@ import { join } from "node:path";
 import { buildAlertRules, renderAlertsYaml } from "../src/alerts.ts";
 
 function findPromtool(): string | null {
-  const explicit = process.env.SBPERF_PROMTOOL;
+  const explicit = process.env.PG_ANALYSER_PROMTOOL;
   if (explicit) return explicit;
   const which = Bun.spawnSync(["sh", "-c", "command -v promtool"], { stdout: "pipe" });
   const p = which.stdout.toString().trim();
@@ -26,11 +26,11 @@ function findPromtool(): string | null {
 
 const bin = findPromtool();
 if (!bin) {
-  console.log("live-promtool: promtool not found - skipping (set SBPERF_PROMTOOL to enable)");
+  console.log("live-promtool: promtool not found - skipping (set PG_ANALYSER_PROMTOOL to enable)");
   process.exit(0);
 }
 
-const dir = mkdtempSync(join(tmpdir(), "sbperf-promtool-"));
+const dir = mkdtempSync(join(tmpdir(), "pg-analyser-promtool-"));
 let failures = 0;
 
 // Both the unscoped pack and a ref-scoped one: injecting a label matcher into

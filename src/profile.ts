@@ -5,7 +5,7 @@ import type { RawEntry } from "./dbtargets.ts";
  * A profile is the whole no-PAT config in ONE gitignored JSON: force-no-PAT, the
  * region-mapped Grafana credentials (each region is a separate ALB, so a
  * per-region cookie), and the target databases. Drive it with
- * `sbperf full --profile <file>` - no .env, no wrapper. Nothing here is baked
+ * `pg-analyser full --profile <file>` - no .env, no wrapper. Nothing here is baked
  * into the repo: hosts, datasource UIDs, cookies and connstrings all live in
  * the (gitignored) profile file.
  */

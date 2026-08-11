@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { z } from "zod";
 
 /**
- * Environment configuration. sbperf authenticates to the Supabase Management
+ * Environment configuration. pg-analyser authenticates to the Supabase Management
  * API (and the per-project metrics endpoint, via an auto-fetched service_role
  * key) with a Personal Access Token.
  *
@@ -59,13 +59,13 @@ export function loadConfig(
   throw new ConfigError(
     "no access token. Set SUPABASE_ACCESS_TOKEN " +
       "(https://supabase.com/dashboard/account/tokens), or run `supabase login` " +
-      `so sbperf can read it from ${CLI_TOKEN_PATH}`,
+      `so pg-analyser can read it from ${CLI_TOKEN_PATH}`,
   );
 }
 
 /**
  * Like loadConfig but returns null instead of throwing when no token is found.
- * Enables no-PAT mode: sbperf can run against a superuser --db-url (+ optional
+ * Enables no-PAT mode: pg-analyser can run against a superuser --db-url (+ optional
  * Grafana trends) with no Supabase Management API access at all. A malformed
  * env (not merely absent) still throws.
  */

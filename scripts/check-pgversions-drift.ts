@@ -6,8 +6,8 @@
  * dataset and diffs the latest-minor + EOL per major against PG_LATEST_MINOR.
  *
  *   bun run scripts/check-pgversions-drift.ts        # warn on drift, exit 0
- *   SBPERF_PGVER_STRICT=1 bun run ...                # exit 1 on drift (gated)
- *   SBPERF_PGVER_UPDATE=1 bun run ...                # print the refreshed table
+ *   PG_ANALYSER_PGVER_STRICT=1 bun run ...                # exit 1 on drift (gated)
+ *   PG_ANALYSER_PGVER_UPDATE=1 bun run ...                # print the refreshed table
  *
  * Advisory by design (needs network): a stale table just means the finding
  * under-reports how far behind a server is; it never fabricates. Mirrors
@@ -17,7 +17,7 @@
 import { PG_LATEST_MINOR } from "../src/pgversions.ts";
 
 const IN_GHA = process.env.GITHUB_ACTIONS === "true";
-const STRICT = process.env.SBPERF_PGVER_STRICT === "1";
+const STRICT = process.env.PG_ANALYSER_PGVER_STRICT === "1";
 const warn = (m: string): void => console.error(IN_GHA ? `::warning::${m}` : `warning: ${m}`);
 
 type Cycle = { cycle: string; latest: string; eol: string | boolean };
@@ -45,7 +45,7 @@ for (const major of Object.keys(PG_LATEST_MINOR)) {
     drift.push(`${major}: eol ${have.eol} -> ${up.eol}`);
 }
 
-if (process.env.SBPERF_PGVER_UPDATE === "1") {
+if (process.env.PG_ANALYSER_PGVER_UPDATE === "1") {
   const rows = data
     .filter((c) => Number(c.cycle) >= 12)
     .map((c) => `  "${c.cycle}": { latest: "${c.latest}", eol: "${c.eol}" },`)
@@ -64,6 +64,6 @@ if (drift.length === 0) {
 }
 for (const d of drift) warn(`pgversions drift - ${d}`);
 warn(
-  "refresh src/pgversions.ts (SBPERF_PGVER_UPDATE=1 bun run scripts/check-pgversions-drift.ts) and bump PG_VERSIONS_AS_OF",
+  "refresh src/pgversions.ts (PG_ANALYSER_PGVER_UPDATE=1 bun run scripts/check-pgversions-drift.ts) and bump PG_VERSIONS_AS_OF",
 );
 process.exit(STRICT ? 1 : 0);

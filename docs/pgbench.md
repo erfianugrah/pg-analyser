@@ -1,7 +1,7 @@
 # pgbench tutorial
 
 A simple tool for testing query performance and, more often, optimizing Postgres
-configs. This is the verification companion to sbperf: a finding tells you *what*
+configs. This is the verification companion to pg-analyser: a finding tells you *what*
 to fix, pgbench is how you *prove* the fix worked under concurrency.
 
 Content verified empirically (2026-07) with pgbench 18.4 against Postgres 17.6
@@ -22,7 +22,7 @@ https://www.postgresql.org/docs/current/pgbench.html
   (noisy neighbor), and their load taints your numbers. Pick a quiet window
   and expect results on shared infrastructure to be noisier.
 
-> **Shortcut:** `sbperf bench --db-url <c>` wraps pgbench and enforces the
+> **Shortcut:** `pg-analyser bench --db-url <c>` wraps pgbench and enforces the
 > mechanizable half of this doc by construction (client-saturation checks,
 > warmup + repetition with spread detection, exact p50/p95/p99 from the `-l`
 > log, a pg_settings snapshot per run, run history + `--compare`). The manual
@@ -340,7 +340,7 @@ Prefer scoped GUC changes over system-wide ones while experimenting:
 `ALTER ROLE ... SET work_mem = '64MB'` or `ALTER DATABASE ... SET ...` (or a
 session-level `SET` inside the pgbench script itself) is reversible and has no
 blast radius; `ALTER SYSTEM` touches every connection. Many Supabase GUCs are
-settable per role/database - sbperf's config-tuning findings flag the ones
+settable per role/database - pg-analyser's config-tuning findings flag the ones
 worth looking at (work_mem blast radius, timeouts, checkpoint completion).
 
 ## Beyond the basics (what most pgbench tutorials miss)
@@ -371,7 +371,7 @@ query protocol (`--protocol=extended`).
 
 ### Percentiles: the summary hides the tail
 
-(`sbperf bench` does this for you - every measured run logs per-transaction
+(`pg-analyser bench` does this for you - every measured run logs per-transaction
 data and reports p50/p95/p99. This is the manual equivalent.)
 
 The stdout report gives mean and stddev only - no p95/p99. For tail latency,
@@ -396,24 +396,24 @@ directly plottable.
   printing partial results. What you want in a CI gate: a benchmark that
   silently limps to completion with dead clients is worse than a loud failure
 
-### Bracketing a benchmark with sbperf
+### Bracketing a benchmark with pg-analyser
 
 The verification loop this doc exists for:
 
-1. `sbperf snapshot --ref <ref>` - baseline into the history store
+1. `pg-analyser snapshot --ref <ref>` - baseline into the history store
 2. Run the pgbench workload
 3. Apply the fix (index, config, query rewrite)
 4. Run the same workload again
-5. `sbperf snapshot --ref <ref>` then `sbperf diff --ref <ref>` - per-query
+5. `pg-analyser snapshot --ref <ref>` then `pg-analyser diff --ref <ref>` - per-query
    regressions matched by `queryid` (>=1.5x mean exec time = regression), so
    you see the fix land in pg_stat_statements, not just in pgbench TPS
 
 With a superuser connstring you can also `pg_stat_statements_reset()` right
-before the run so the window contains only the benchmark (sbperf never resets
+before the run so the window contains only the benchmark (pg-analyser never resets
 it itself - do it via your own SQL session).
 
 ## See also
 
 - Official docs: https://www.postgresql.org/docs/current/pgbench.html
 - Fillfactor explainer: https://www.cybertec-postgresql.com/en/what-is-fillfactor-and-how-does-it-affect-postgresql-performance/
-- sbperf `heuristics.md` - the thresholds whose fixes this verifies
+- pg-analyser `heuristics.md` - the thresholds whose fixes this verifies

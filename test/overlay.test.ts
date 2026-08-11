@@ -37,7 +37,7 @@ describe("loadOverlay", () => {
   test("explicit --overlay file wins over ref conventions", async () => {
     const io = harness({
       "/x/custom.json": JSON.stringify({ hide: ["calls"] }),
-      "sbperf.overlays/abc.json": JSON.stringify({ hide: ["outliers"] }),
+      "pg-analyser.overlays/abc.json": JSON.stringify({ hide: ["outliers"] }),
     });
     const o = await loadOverlay({ ref: "abc", file: "/x/custom.json", cwd: ".", ...io, warn });
     expect([...o.hide]).toEqual(["calls"]);
@@ -45,8 +45,8 @@ describe("loadOverlay", () => {
 
   test("local ref convention beats global home path", async () => {
     const io = harness({
-      "sbperf.overlays/abc.json": JSON.stringify({ hide: ["outliers"] }),
-      "/home/u/.sbperf/overlays/abc.json": JSON.stringify({ hide: ["calls"] }),
+      "pg-analyser.overlays/abc.json": JSON.stringify({ hide: ["outliers"] }),
+      "/home/u/.pg-analyser/overlays/abc.json": JSON.stringify({ hide: ["calls"] }),
     });
     const o = await loadOverlay({ ref: "abc", cwd: ".", home: "/home/u", ...io, warn });
     expect([...o.hide]).toEqual(["outliers"]);
@@ -55,24 +55,24 @@ describe("loadOverlay", () => {
   test("unknown hide id is dropped with a warning", async () => {
     const local: string[] = [];
     const io = harness({
-      "sbperf.overlays/abc.json": JSON.stringify({ hide: ["nope", "outliers"] }),
+      "pg-analyser.overlays/abc.json": JSON.stringify({ hide: ["nope", "outliers"] }),
     });
     const o = await loadOverlay({ ref: "abc", cwd: ".", ...io, warn: (m) => local.push(m) });
     expect([...o.hide]).toEqual(["outliers"]);
     expect(local.some((m) => m.includes("nope"))).toBe(true);
   });
 
-  test("SBPERF_OVERLAY env wins over ref conventions but loses to --overlay", async () => {
+  test("PG_ANALYSER_OVERLAY env wins over ref conventions but loses to --overlay", async () => {
     const io = harness({
       "/x/flag.json": JSON.stringify({ hide: ["calls"] }),
       "/env/over.json": JSON.stringify({ hide: ["outliers"] }),
-      "sbperf.overlays/abc.json": JSON.stringify({ hide: ["tables"] }),
+      "pg-analyser.overlays/abc.json": JSON.stringify({ hide: ["tables"] }),
     });
     // env beats the ref convention
     const viaEnv = await loadOverlay({
       ref: "abc",
       cwd: ".",
-      env: { SBPERF_OVERLAY: "/env/over.json" },
+      env: { PG_ANALYSER_OVERLAY: "/env/over.json" },
       ...io,
       warn,
     });
@@ -82,7 +82,7 @@ describe("loadOverlay", () => {
       ref: "abc",
       file: "/x/flag.json",
       cwd: ".",
-      env: { SBPERF_OVERLAY: "/env/over.json" },
+      env: { PG_ANALYSER_OVERLAY: "/env/over.json" },
       ...io,
       warn,
     });
@@ -91,7 +91,7 @@ describe("loadOverlay", () => {
 
   test("falls through to the global home path when no local file exists", async () => {
     const io = harness({
-      "/home/u/.sbperf/overlays/abc.json": JSON.stringify({ hide: ["calls"] }),
+      "/home/u/.pg-analyser/overlays/abc.json": JSON.stringify({ hide: ["calls"] }),
     });
     const o = await loadOverlay({ ref: "abc", cwd: ".", home: "/home/u", ...io, warn });
     expect([...o.hide]).toEqual(["calls"]);
@@ -100,7 +100,7 @@ describe("loadOverlay", () => {
   test("unknown notes key is dropped with a warning; valid notes pass through", async () => {
     const local: string[] = [];
     const io = harness({
-      "sbperf.overlays/abc.json": JSON.stringify({
+      "pg-analyser.overlays/abc.json": JSON.stringify({
         notes: { top: "hi", outliers: "cron", bogus: "x" },
       }),
     });
@@ -111,7 +111,7 @@ describe("loadOverlay", () => {
 
   test("malformed JSON on the convention path warns and falls back to empty", async () => {
     const local: string[] = [];
-    const io = harness({ "sbperf.overlays/abc.json": "{ not json" });
+    const io = harness({ "pg-analyser.overlays/abc.json": "{ not json" });
     const o = await loadOverlay({ ref: "abc", cwd: ".", ...io, warn: (m) => local.push(m) });
     expect(o.hide.size).toBe(0);
     expect(o.notes).toEqual({});

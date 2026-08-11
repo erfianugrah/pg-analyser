@@ -408,7 +408,7 @@ describe("render", () => {
 
   test("sync status is tool provenance - never rendered in the report", () => {
     // The sync check (catalog vintage + vendored-splinter drift) describes
-    // sbperf's own currency, not the audited database, so it lives in
+    // pg-analyser's own currency, not the audited database, so it lives in
     // analysis.json + logs and must NOT leak into the customer-facing report.
     const html = render(
       fixture({
