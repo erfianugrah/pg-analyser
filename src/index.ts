@@ -71,7 +71,7 @@ let activeProfiles: Profile[] = [];
 type SweepTarget = DbTarget & { profile?: Profile };
 
 function usage(code = 1): never {
-  console.log(`pg-analyser ${VERSION} - Supabase performance analysis
+  console.log(`pg-analyser ${VERSION} - Postgres performance analysis (Supabase-native; any Postgres via --db-url)
 
 Usage:
   pg-analyser analyze  --ref <ref> [--out <dir>]   fetch all planes -> analysis.json
