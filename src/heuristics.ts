@@ -1598,6 +1598,32 @@ export const HEURISTICS: Record<string, Heuristic> = {
     docUrl: "https://www.postgresql.org/docs/current/queries-with.html",
     reviewed: R,
   },
+  checkpoint_pressure_counters: {
+    id: "checkpoint_pressure_counters",
+    plane: "Config",
+    sql: "-- spread the checkpoints first, then widen the WAL budget:\nALTER SYSTEM SET max_wal_size = '<4-8x current>';  -- reload-level GUC, no restart\n-- self-hosted only; on hosted Supabase disk/WAL sizing follows the compute add-on",
+    howToVerify:
+      "After the change and some load, re-read the counters (pg_stat_checkpointer on PG17+, pg_stat_bgwriter before): the requested share of new checkpoints should fall well under the timed share. A Prometheus-backed project gets the windowed version of this same signal from the checkpoint_pressure trend finding instead.",
+    whyItMatters:
+      "A requested checkpoint fires because WAL filled max_wal_size before checkpoint_timeout elapsed - the database is being forced to flush on WAL pressure rather than on its own schedule. Each forced checkpoint is a burst of writes + fsyncs, so a high requested share shows up as periodic I/O spikes and latency jitter that point-in-time query stats never explain. These are cumulative counters since stats_reset, so read the SHARE, not the absolute counts.",
+    remediation:
+      "Raise max_wal_size so checkpoints go back to being mostly timed, and keep checkpoint_completion_target at 0.9 so each one spreads its writes over the interval. Complements the trends-based checkpoint_pressure finding (which needs 7+ days of metrics); this counter read is the no-PAT / self-hosted lens.",
+    docUrl: "https://www.postgresql.org/docs/current/wal-configuration.html",
+    reviewed: R,
+  },
+  jit_overhead: {
+    id: "jit_overhead",
+    plane: "Query",
+    sql: "-- OLTP workload paying JIT compile time per call:\nALTER ROLE <app_role> SET jit = off;\n-- or keep JIT for analytics but raise the bar: ALTER SYSTEM SET jit_above_cost = '<higher>';",
+    howToVerify:
+      "Re-run the flagged statement with jit on vs off (SET jit = off in a session) and compare total time - if off is faster, the compile cost was not being repaid. pg_stat_statements jit_* columns should then show ~0 for it.",
+    whyItMatters:
+      "JIT compilation (LLVM) makes long analytical queries faster but charges generation+emission time to EVERY execution of any query the planner estimates above jit_above_cost. On short OLTP statements the estimate can still cross the threshold (wide rows, many expressions), and then each call pays compile time it never recoups - the statement looks slow in pg_stat_statements with no I/O or lock explanation.",
+    remediation:
+      "If the flagged statements are short OLTP queries, disable JIT for the application role (ALTER ROLE ... SET jit = off) rather than globally; if they are genuine analytics, leave it. A middle path is raising jit_above_cost so only heavy plans compile.",
+    docUrl: "https://www.postgresql.org/docs/current/jit-decision.html",
+    reviewed: R,
+  },
   extensions_outdated: {
     id: "extensions_outdated",
     plane: "Config",

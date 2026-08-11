@@ -26,6 +26,7 @@ export const PGSS_KEYS = [
   "queryIoStats",
   "indexAdvisor",
   "topByWal",
+  "jitTopStatements",
 ] as const;
 
 // Rewrite the pgss planes for a resolved extension schema. The schema comes
@@ -1349,6 +1350,77 @@ export const QUERIES = {
       and wal_bytes > 0
     order by wal_bytes desc
     limit 20`,
+
+  // JIT compile time vs execution time, per statement (pg_stat_statements jit
+  // fields, PG15+). JIT pays for itself on long analytics; on short OLTP
+  // queries the generation+emission time is pure overhead charged to every
+  // call. Gated on server_version >= 15 at collect time - on PG14 and earlier
+  // the columns do not exist and the query would 42703. App workload only.
+  jitTopStatements: /* sql */ `
+    select
+      queryid::text as queryid,
+      calls,
+      round(total_exec_time::numeric, 1) as total_ms,
+      round((jit_generation_time + jit_emission_time)::numeric, 1) as jit_ms,
+      round((100 * (jit_generation_time + jit_emission_time)
+        / nullif(total_exec_time, 0))::numeric, 1) as pct_jit,
+      left(regexp_replace(query, '\\s+', ' ', 'g'), 160) as query
+    from extensions.pg_stat_statements
+    where jit_functions > 0
+      and query not ilike all (array[${PLATFORM_NOISE}])
+      and query !~* '${NOT_APP_STATEMENT}'
+    order by (jit_generation_time + jit_emission_time) desc
+    limit 10`,
+
+  // Checkpoint counters, PG17+ shape: the checkpointer stats moved out of
+  // pg_stat_bgwriter into pg_stat_checkpointer in PG17, with renamed columns.
+  // Aliased back to the pre-17 names so findings and history see one shape.
+  // Requested (not timed) checkpoints mean WAL filled max_wal_size before
+  // checkpoint_timeout fired - the undersized-max_wal_size signal.
+  checkpointer: /* sql */ `
+    select
+      num_timed as timed,
+      num_requested as requested,
+      round(write_time::numeric, 1) as write_ms,
+      round(sync_time::numeric, 1) as sync_ms,
+      buffers_written,
+      stats_reset::text as stats_reset
+    from pg_stat_checkpointer`,
+
+  // Same counters, pre-17 shape (pg_stat_bgwriter). collect picks the variant
+  // by server major version.
+  checkpointerPre17: /* sql */ `
+    select
+      checkpoints_timed as timed,
+      checkpoints_req as requested,
+      round(checkpoint_write_time::numeric, 1) as write_ms,
+      round(checkpoint_sync_time::numeric, 1) as sync_ms,
+      buffers_checkpoint as buffers_written,
+      stats_reset::text as stats_reset
+    from pg_stat_bgwriter`,
+
+  // Per-backend-type I/O (pg_stat_io, PG16+): who does the reads, writes and
+  // fsyncs - client backends vs checkpointer vs bgwriter vs autovacuum. Time
+  // columns are 0 unless track_io_timing is on (the config finding nudges
+  // that). Gated on server_version >= 16 at collect time. All values are
+  // cumulative since stats_reset; single-run value is the SHARE between
+  // backend types, the deltas come from the history store.
+  ioByBackend: /* sql */ `
+    select
+      backend_type,
+      sum(reads) as reads,
+      round(sum(read_time)::numeric, 1) as read_ms,
+      sum(writes) as writes,
+      round(sum(write_time)::numeric, 1) as write_ms,
+      sum(writebacks) as writebacks,
+      sum(extends) as extends,
+      sum(hits) as hits,
+      sum(evictions) as evictions,
+      sum(fsyncs) as fsyncs,
+      round(sum(fsync_time)::numeric, 1) as fsync_ms
+    from pg_stat_io
+    group by backend_type
+    order by sum(read_time) + sum(write_time) desc`,
 
   // Visibility-map readiness: large app tables whose all-visible page fraction
   // (pg_class.relallvisible / relpages) is low. The VM gates index-only scans

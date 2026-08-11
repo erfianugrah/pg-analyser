@@ -83,6 +83,9 @@ function base(): Analysis {
       extensions: [],
       unindexedVectors: [],
       vectorIndexes: [],
+      ioByBackend: [],
+      jitTopStatements: [],
+      checkpointer: [],
       sequenceExhaustion: [],
       walArchiving: [],
       hbaRules: [],
@@ -2590,4 +2593,98 @@ test("queue_poll_pressure: same queryid in topByCalls (low share) and topStateme
   ];
   const f = deriveFindings(a).find((x) => x.heuristicId === "queue_poll_pressure");
   expect(f?.severity).toBe("low");
+});
+
+describe("checkpoint + jit counters (version-gated planes)", () => {
+  test("checkpoint_pressure_counters: requested share >= 30% fires, scaled severity", () => {
+    const a = base();
+    a.sql.checkpointer = [
+      {
+        timed: 40,
+        requested: 60,
+        write_ms: 120000,
+        sync_ms: 45000,
+        buffers_written: 500000,
+        stats_reset: "2026-08-01",
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "checkpoint_pressure_counters");
+    expect(f?.severity).toBe("med"); // 60% >= 50%
+    expect(f?.title).toContain("60%");
+    expect(f?.evidence).toContain("timed=40 requested=60");
+  });
+
+  test("checkpoint_pressure_counters: mostly timed -> no finding; idle db -> no finding", () => {
+    const a = base();
+    a.sql.checkpointer = [
+      {
+        timed: 90,
+        requested: 10,
+        write_ms: 1,
+        sync_ms: 1,
+        buffers_written: 5,
+        stats_reset: "2026-08-01",
+      },
+    ];
+    expect(deriveFindings(a).some((x) => x.heuristicId === "checkpoint_pressure_counters")).toBe(
+      false,
+    );
+    const b = base();
+    b.sql.checkpointer = [
+      {
+        timed: 0,
+        requested: 4,
+        write_ms: 0,
+        sync_ms: 0,
+        buffers_written: 0,
+        stats_reset: "2026-08-01",
+      },
+    ];
+    expect(deriveFindings(b).some((x) => x.heuristicId === "checkpoint_pressure_counters")).toBe(
+      false,
+    );
+  });
+
+  test("checkpoint_pressure_counters: suppressed when the trends series exists (windowed rate wins)", () => {
+    const a = base();
+    a.sql.checkpointer = [
+      {
+        timed: 10,
+        requested: 90,
+        write_ms: 1,
+        sync_ms: 1,
+        buffers_written: 5,
+        stats_reset: "2026-08-01",
+      },
+    ];
+    a.trends = [{ title: "Requested checkpoints/s", unit: "", points: [{ t: 1, v: 0.1 }] }];
+    expect(deriveFindings(a).some((x) => x.heuristicId === "checkpoint_pressure_counters")).toBe(
+      false,
+    );
+  });
+
+  test("jit_overhead: >=30% jit share on a meaningful statement -> low finding", () => {
+    const a = base();
+    a.sql.jitTopStatements = [
+      {
+        queryid: "5",
+        calls: 5000,
+        total_ms: 60000,
+        jit_ms: 24000,
+        pct_jit: 40,
+        query: "SELECT ... wide expression ...",
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "jit_overhead");
+    expect(f?.severity).toBe("low");
+    expect(f?.evidence).toContain("40% jit of 60000ms");
+  });
+
+  test("jit_overhead: trivial total time -> suppressed (noise floor)", () => {
+    const a = base();
+    a.sql.jitTopStatements = [
+      { queryid: "5", calls: 2, total_ms: 50, jit_ms: 40, pct_jit: 80, query: "SELECT tiny" },
+    ];
+    expect(deriveFindings(a).some((x) => x.heuristicId === "jit_overhead")).toBe(false);
+  });
 });
