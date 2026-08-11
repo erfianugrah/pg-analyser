@@ -521,6 +521,34 @@ export async function collect(
       ? await safe("sql:bloatExact", () => runner.run(QUERIES.bloatExact), [])
       : [];
 
+  // Version-gated planes. server_version comes from the pgSettings fan-out;
+  // each plane's columns/views only exist at or after a major, and on an older
+  // server the query would hard-error (42703/42P01) rather than fold into the
+  // expected-absence path.
+  const serverMajor = Number(
+    String(pgSettings.find((r) => r.name === "server_version")?.setting ?? "0").split(".")[0],
+  );
+  // pg_stat_io (per-backend-type I/O) landed in PG16.
+  const ioByBackend =
+    serverMajor >= 16
+      ? await safe("sql:ioByBackend", () => runner.run(QUERIES.ioByBackend), [])
+      : [];
+  // pg_stat_statements jit_* fields landed in PG15; the plane is pgss-based so
+  // it goes through the schema-rewritten map like the other pgss planes.
+  const jitTopStatements =
+    serverMajor >= 15
+      ? await safe("sql:jitTopStatements", () => runner.run(sqlQ.jitTopStatements), [])
+      : [];
+  // Checkpointer counters moved from pg_stat_bgwriter to pg_stat_checkpointer
+  // (renamed columns) in PG17; both variants alias to one output shape.
+  const checkpointer = sqlServing
+    ? await safe(
+        "sql:checkpointer",
+        () => runner.run(serverMajor >= 17 ? QUERIES.checkpointer : QUERIES.checkpointerPre17),
+        [],
+      )
+    : [];
+
   // index_advisor CREATE INDEX recommendations - run ONLY on the superuser tier
   // AND when index_advisor + its hypopg dependency are already installed. sbperf
   // never CREATEs them (a write), and the read-only PAT user can't exec the
@@ -917,6 +945,9 @@ export async function collect(
       unloggedTables,
       biggestTables,
       bloatExact,
+      ioByBackend,
+      jitTopStatements,
+      checkpointer,
       indexStats,
       duplicateIndexes,
       rlsUnindexed,

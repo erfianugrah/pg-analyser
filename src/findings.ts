@@ -2370,6 +2370,54 @@ export function deriveFindings(a: Analysis): Finding[] {
       ...meta("recursive_cte_heavy"),
     });
   }
+  // Checkpoint pressure, counter variant: the trends-based checkpoint_pressure
+  // finding needs 7+ days of Prometheus series; this one reads the cumulative
+  // checkpointer counters directly (the only lens available in no-PAT /
+  // self-hosted mode). Same threshold, same meaning. Skipped when the trends
+  // series exists - the windowed rate is the better measurement and only one
+  // should fire.
+  const cp = a.sql.checkpointer[0];
+  const cpTrends = pointsOf("Requested checkpoints/s");
+  if (cp && cpTrends.length === 0) {
+    const timed = num(cp.timed);
+    const req = num(cp.requested);
+    const total = timed + req;
+    const share = total > 0 ? req / total : 0;
+    if (total >= 10 && share >= THRESHOLDS.checkpointReqFrac) {
+      out.push({
+        severity: share >= 0.5 ? "med" : "low",
+        category: "Performance",
+        title: `Checkpoint pressure: ${Math.round(share * 100)}% of checkpoints forced by WAL filling since stats reset (${req} requested of ${total}) - raise max_wal_size`,
+        anchor: "#tables",
+        evidence: `cumulative since ${cp.stats_reset}: timed=${timed} requested=${req}, write ${cp.write_ms}ms + sync ${cp.sync_ms}ms, buffers_written=${cp.buffers_written}`,
+        ...meta("checkpoint_pressure_counters"),
+      });
+    }
+  }
+
+  // JIT overhead: statements whose jit generation+emission time is a large
+  // share of their total exec time. JIT pays off on long analytics; on short
+  // OLTP queries the compile time is pure per-call overhead. jit_* pgss fields
+  // exist PG15+ (the plane is version-gated at collect).
+  const jitHeavy = a.sql.jitTopStatements.filter(
+    (r) => num(r.pct_jit) >= 30 && num(r.total_ms) >= 1000,
+  );
+  if (jitHeavy.length) {
+    out.push({
+      severity: "low",
+      category: "Performance",
+      title: `${jitHeavy.length} statement${jitHeavy.length === 1 ? "" : "s"} spending >=30% of exec time on JIT compilation`,
+      anchor: "#outliers",
+      evidence: jitHeavy
+        .slice(0, 3)
+        .map(
+          (r) =>
+            `${r.pct_jit}% jit of ${r.total_ms}ms over ${r.calls} calls: ${String(r.query).slice(0, 100)}`,
+        )
+        .join(" | "),
+      ...meta("jit_overhead"),
+    });
+  }
   // Scheduled-job failures (pg_cron): a concrete automation outage, upgraded
   // from the generic pg_cron nudge when we can actually see the run log. The
   // nudge only fires as a fallback when there's no run-detail visibility.
