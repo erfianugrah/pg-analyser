@@ -203,7 +203,7 @@ describe("renderDiffText", () => {
     b.sql.cacheHitPct = 70;
     b.sql.topStatements = [{ queryid: "9", mean_ms: 30, calls: 50, query: "select foo" }];
     const txt = renderDiffText(computeDiff(a, b));
-    expect(txt).toContain("sbperf diff: proj");
+    expect(txt).toContain("pg-analyser diff: proj");
     expect(txt).toContain("NEW");
     expect(txt).toContain("SLOWER");
     expect(txt).toContain("Scalars:");

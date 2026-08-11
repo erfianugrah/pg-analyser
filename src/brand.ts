@@ -2,7 +2,7 @@ import { z } from "zod";
 
 /**
  * Report branding. Defaults to Supabase (logo + green colourway); anyone can
- * white-label via a brand file (--brand / SBPERF_BRAND / ./sbperf.brand.json),
+ * white-label via a brand file (--brand / PG_ANALYSER_BRAND / ./pg-analyser.brand.json),
  * overriding any subset of fields. Assets are inlined into the self-contained
  * report, so a logo is an SVG string (or a path we read at load time).
  *
@@ -75,7 +75,7 @@ export function applyBrand(override: BrandOverride): Brand {
 
 /**
  * Resolve the active brand. Precedence: explicit file path (--brand /
- * SBPERF_BRAND) > ./sbperf.brand.json if present > the Supabase default.
+ * PG_ANALYSER_BRAND) > ./pg-analyser.brand.json if present > the Supabase default.
  * `readFile` is injectable for tests.
  */
 export async function loadBrand(
@@ -92,9 +92,9 @@ export async function loadBrand(
   const exists = opts.exists ?? ((p) => Bun.file(p).exists());
   const cwd = opts.cwd ?? ".";
 
-  let path = opts.file ?? env.SBPERF_BRAND;
+  let path = opts.file ?? env.PG_ANALYSER_BRAND;
   if (!path) {
-    const local = `${cwd}/sbperf.brand.json`;
+    const local = `${cwd}/pg-analyser.brand.json`;
     if (await exists(local)) path = local;
   }
   if (!path) return { ...DEFAULT_BRAND };

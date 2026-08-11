@@ -8,7 +8,7 @@ import { jsonResponse } from "./helpers.ts";
 
 const dirs: string[] = [];
 async function tmp(): Promise<string> {
-  const d = await mkdtemp(join(tmpdir(), "sbperf-scraper-"));
+  const d = await mkdtemp(join(tmpdir(), "pg-analyser-scraper-"));
   dirs.push(d);
   return d;
 }
@@ -70,7 +70,7 @@ describe("writeScraper", () => {
       "./alerts.yml:/etc/prometheus/alerts.yml:ro",
     );
     const alerts = await readFile(join(dir, "alerts.yml"), "utf8");
-    expect(alerts).toContain("- name: sbperf-myref");
+    expect(alerts).toContain("- name: pg-analyser-myref");
     expect(alerts).toContain('supabase_project_ref="myref"');
     // alerts.yml carries no credential, so it is NOT gitignored
     expect(await readFile(join(dir, ".gitignore"), "utf8")).not.toContain("alerts.yml");

@@ -1,4 +1,4 @@
-# sbperf
+# pg-analyser
 
 Supabase performance + health analysis tool. Fetches advisors, SQL diagnostics,
 config, and metrics for a project and renders a self-contained HTML + PDF report.
@@ -24,7 +24,7 @@ enumerates + serves API/metrics; matched projects upgrade to superuser SQL).
 | `bun run src/index.ts report <dir>` | `analysis.json` -> `report.html` (combined technical + business pyramid) |
 | `bun run src/index.ts summary <dir>` | `analysis.json` -> `summary.html` (optional standalone plain-language one-pager) |
 | `bun run src/index.ts pdf <dir>` | `analysis.json` -> `report.pdf` |
-| `bun run src/index.ts narrate <dir>` | `analysis.json` -> `narrative.md` (LLM pass; needs `SBPERF_LLM_*`) |
+| `bun run src/index.ts narrate <dir>` | `analysis.json` -> `narrative.md` (LLM pass; needs `PG_ANALYSER_LLM_*`) |
 | `bun run src/index.ts import-trends <dir> <file...>` | merge external CSV/JSON series into `analysis.trends` (vendor-neutral; no dashboard coupling) |
 | `bun run src/index.ts diff <dirA> <dirB>` | findings delta + per-query (queryid) regressions between two runs |
 | `bun run src/index.ts diff --ref <ref>` | same, over the two most recent history-store snapshots |
@@ -32,7 +32,7 @@ enumerates + serves API/metrics; matched projects upgrade to superuser SQL).
 | `bun run src/index.ts bench --db-url <c> [-f x.sql\|-b tpcb-like]` | pgbench with methodology guardrails (client-saturation check, warmup + N runs, exact percentiles from `-l`, pg_settings snapshot) -> bench_runs in the history store. `--list` / `--show <id>` / `--compare <a> <b>` read it. Docs: docs/bench-design.md |
 | `bun run src/index.ts full --ref <ref>` | analyze + report + pdf |
 | `bun run src/index.ts full --ref <r1>,<r2> ...` / `--ref-file <f>` | audit a subset of projects -> combined org/project index (PAT-only). `--ref` repeatable + comma/space lists; `--ref-file` reads a .txt/.csv (ref-shaped tokens only) |
-| `bun run src/index.ts full --all [--org <slug>]` | audit every project -> `index.html`. Projects whose ref matches a connstring (`--db-config` / `--db-url` / `SBPERF_DB_URL` / auto-loaded `sbperf.databases.json`) are AUTO-UPGRADED to the superuser SQL tier (PAT still serves API planes + metrics) - the maximal-coverage fleet command: `full --all --db-config <json> [--amcheck]` |
+| `bun run src/index.ts full --all [--org <slug>]` | audit every project -> `index.html`. Projects whose ref matches a connstring (`--db-config` / `--db-url` / `PG_ANALYSER_DB_URL` / auto-loaded `pg-analyser.databases.json`) are AUTO-UPGRADED to the superuser SQL tier (PAT still serves API planes + metrics) - the maximal-coverage fleet command: `full --all --db-config <json> [--amcheck]` |
 | `bun run src/index.ts full --profile <file.json>` | no-PAT sweep: force-no-PAT + per-region Grafana + target DBs, all in one gitignored JSON -> per-DB reports + index. REPEATABLE: chain `--profile a.json --profile b.json` into ONE combined index, each DB keeping its own mode (PAT vs no-PAT) + Grafana + trend window |
 | `bun run src/index.ts full --db-url <connstr>` | superuser SQL tier (augments the PAT, or SOLE source in no-PAT mode); repeatable / `--db-config <file>` for a multi-DB sweep |
 | `bun run src/index.ts analyze --ref <ref> --db-url <c> --amcheck[ heap]` | opt-in data-integrity: `bt_index_check` on app B-tree indexes (light); `heap` adds `verify_heapam` (heavy). Superuser + amcheck-installed only; never CREATEs the extension |
@@ -48,25 +48,25 @@ enumerates + serves API/metrics; matched projects upgrade to superuser SQL).
 | `bun run check:schemas` | warn when the app-schema denylist (src/appschema.ts) drifts from splinter.sql's unused_index exclusions |
 | `bun run check:docurls` | warn when a finding's layered doc references (Supabase docUrl + Postgres/AWS refs + changelogUrl) 404 or redirect to a renamed path |
 | `bun test` | run tests |
-| `bun run build` | compile a standalone `sbperf` binary |
+| `bun run build` | compile a standalone `pg-analyser` binary |
 
-PDF needs a system Chrome/Chromium on PATH (`chromium`, `google-chrome`, ...) or `SBPERF_CHROME=/path/to/chrome`. `analyze`/`report` need no browser.
+PDF needs a system Chrome/Chromium on PATH (`chromium`, `google-chrome`, ...) or `PG_ANALYSER_CHROME=/path/to/chrome`. `analyze`/`report` need no browser.
 
 ## Auth
 
 Set `SUPABASE_ACCESS_TOKEN` (Personal Access Token), or run `supabase login` and
-sbperf reads `~/.supabase/access-token` automatically. Hits `api.supabase.com`
+pg-analyser reads `~/.supabase/access-token` automatically. Hits `api.supabase.com`
 and the `<ref>.supabase.co` metrics endpoint (service_role auto-fetched per run
 via the Management API, never stored). The `Transport` interface exists mainly
 so tests can inject a fake; there is one impl (`DirectTransport`).
 
 **No-PAT mode** (`collect(ref, null, ...)`): with NO PAT resolvable but a
-superuser `--db-url` (or `SBPERF_DB_URL` / `sbperf.databases.json`), `collect`
+superuser `--db-url` (or `PG_ANALYSER_DB_URL` / `pg-analyser.databases.json`), `collect`
 runs transport-free - `loadConfigOptional()` returns null instead of throwing,
 every Management-API plane is skipped (returns its fallback, one summary
 collection note - NOT per-plane 401 spam), advisors come from the self-hosted
 splinter lints (`collectSplinterLints` fills BOTH performance and security), SQL
-from the injected `DirectSqlRunner`, trends from Grafana if `SBPERF_PROMETHEUS_*`
+from the injected `DirectSqlRunner`, trends from Grafana if `PG_ANALYSER_PROMETHEUS_*`
 is set. `meta.managementApi=false` drives a report banner + footer stating what
 was NOT collected (provisioning/backups/pooler/metrics/analytics). This is the
 no-PAT path (continued below).
@@ -151,7 +151,7 @@ of planes, so a superuser `--db-url` reaches that data directly):
 The no-PAT path: a DB connstring + optional Grafana cookie, no PAT -
 equivalent to `supabase inspect db` plus ranked findings, splinter advisors, and
 trends. `--all` still needs a PAT (it enumerates projects via the Management
-API); the explicit `--db-url` / `sbperf.databases.json` sweep (`doAllDbs`) is the
+API); the explicit `--db-url` / `pg-analyser.databases.json` sweep (`doAllDbs`) is the
 no-PAT multi-DB path. The db-url SQL + splinter are drift-synced by
 `check:inspect` + `check:lints` + `check:schemas` (all advisory) - this mode's
 sync guarantee the way `check:api` is for PAT mode.
@@ -166,7 +166,7 @@ index, and each target carries its OWNING profile (`SweepTarget.profile`) so a
 chained DB keeps its own mode, regional Grafana, and trend window. In a mixed
 run (some PAT profiles, some no-PAT) the PAT still resolves for the PAT profiles
 while `doAllDbs` passes a `null` transport per-target for the no-PAT ones - the
-progress banner reads `mixed - PAT for N, no-PAT for M`. `SBPERF_NO_PAT` is
+progress banner reads `mixed - PAT for N, no-PAT for M`. `PG_ANALYSER_NO_PAT` is
 forced globally ONLY when EVERY chained profile is no-PAT (otherwise the PAT
 profiles could not reach the Management API). Each
 regional Grafana is a separate ALB (per-region session cookie), so trends are
@@ -176,8 +176,8 @@ connstring, `resolveGrafana` maps it to that region's host/uid/cookie (host from
 templated in the matcher. A region absent from the map -> that project's trends
 are skipped (SQL/advisors still run). Nothing internal is baked into the repo:
 hosts, UIDs, cookies and connstrings all live in the gitignored profile
-(`sbperf.profile.json` / `sbperf.*.profile.json`; keep `.example`). Supersedes
-`sbperf.databases.json` for the work case (it's a superset); overlays are a
+(`pg-analyser.profile.json` / `pg-analyser.*.profile.json`; keep `.example`). Supersedes
+`pg-analyser.databases.json` for the work case (it's a superset); overlays are a
 separate presentation layer and untouched.
 
 ### SQL tiers (PAT vs superuser)
@@ -186,7 +186,7 @@ SQL diagnostics run through a `SqlRunner` (`sqlrunner.ts`):
 - **PAT (default)** - `ManagementSqlRunner` -> the read-only SQL endpoint
   (`supabase_read_only_user`). No password; audits a project you only
   have a PAT for.
-- **Superuser (`--db-url` or `SBPERF_DB_URL`)** - `DirectSqlRunner` runs each
+- **Superuser (`--db-url` or `PG_ANALYSER_DB_URL`)** - `DirectSqlRunner` runs each
   query directly over a Postgres connstring (e.g. Supabase's `supabase_admin`
   pooler connstring, or ANY Postgres) via `Bun.SQL` (`prepare:false` for
   transaction-pooler safety). Full access: real inspect, all schemas, multiple/
@@ -203,14 +203,14 @@ src/
   config.ts      zod env -> Config (access token)
   log.ts         zero-dep structured logger (NOT pino - worker-thread
                  transports don't survive `bun build --compile`). stderr only
-                 (stdout reserved for report/JSON); SBPERF_LOG_LEVEL +
-                 SBPERF_LOG=json; .child() binds fields, .time() emits
+                 (stdout reserved for report/JSON); PG_ANALYSER_LOG_LEVEL +
+                 PG_ANALYSER_LOG=json; .child() binds fields, .time() emits
                  durationMs. collect() logs per-plane timing + a summary and
                  records meta.collectionMs (shown in the report footer).
                  collect() takes opts.logger (defaults to the process `log`);
                  multi-project sweeps (doAllDbs/doAll) inject a warn-floor
                  logger via sweepLogger() so routine per-plane INFO doesn't
-                 clutter the progress bar - an explicit SBPERF_LOG_LEVEL wins.
+                 clutter the progress bar - an explicit PG_ANALYSER_LOG_LEVEL wins.
                  bindProgress() lets the makeProgress bar and the logger
                  cooperate on a TTY: the sink erases the bar's un-terminated
                  line before each log line and repaints after, so WARN/ERROR
@@ -230,7 +230,7 @@ src/
                  the simple-query protocol, as a fallback when the hosted
                  advisors/performance endpoint 400s (the 42601 lint bug).
   dbtargets.ts   multi-DB: parse repeatable --db-url + --db-config (gitignored
-                 sbperf.databases.json); refFromConnstring auto-derives the
+                 pg-analyser.databases.json); refFromConnstring auto-derives the
                  Supabase ref (pooler role.ref / db.<ref> host). `full` sweeps
                  targets -> per-DB reports + index; `snapshot` records each.
   sql.ts         the perf query set - superset of `supabase inspect db`:
@@ -259,7 +259,7 @@ src/
                  indexAdvisor (Supabase's index_advisor run server-side via
                  LATERAL over the top-N heavy pg_stat_statements entries -
                  concrete CREATE INDEX DDL; superuser tier AND index_advisor +
-                 hypopg already installed, gated like bloatExact, sbperf never
+                 hypopg already installed, gated like bloatExact, pg-analyser never
                  CREATEs them). Wraparound forensics (2026-08) adds FOUR holder
                  planes: databaseFreezeAge (datfrozenxid + remaining XIDs vs 2^31
                  ceiling), preparedXacts (2PC xid horizon), xminHolders
@@ -268,7 +268,7 @@ src/
                  Also freezeLog (pg_read_file server-log warnings, freezelog.ts).
                  All are READ-ONLY SELECT queries. Remediation mentions DROP
                  REPLICATION SLOT, ROLLBACK PREPARED, pg_terminate_backend for
-                 the user to execute - sbperf never writes. The auth/
+                 the user to execute - pg-analyser never writes. The auth/
                  cron/queryIoStats queries run in BOTH modes (pure SQL) - part of
                  keeping no-PAT at feature parity with PAT. bloat carries a 10MB
                  table-size floor (the pg_stats estimator throws absurd bloat_x
@@ -276,11 +276,11 @@ src/
                  total_bytes/index_bytes (for storage attribution). bloatExact
                  (pgstattuple_approx) is EXACT reclaimable space, run only when
                  the extension is already installed + superuser SQL (collect.ts
-                 gates it; sbperf never CREATEs an extension - that's a write);
+                 gates it; pg-analyser never CREATEs an extension - that's a write);
                  findings prefer it over the estimate, else label the estimate.
                  tableIoStats (pg_statio_user_tables) is per-table IO
                  attribution - heap/idx/TOAST blocks read-from-disk vs cache-hit
-                 ratios; sbperf-ORIGINAL (no upstream inspect equivalent), the
+                 ratios; pg-analyser-ORIGINAL (no upstream inspect equivalent), the
                  layer the GLOBAL cache-hit ratio lacks. A low toast_hit_pct +
                  high toast_blks_read is de-toasting an out-of-line column from
                  disk every scan (the large-blob / large-vector IO trap) ->
@@ -357,7 +357,7 @@ src/
                  config/auth (GoTrue: MFA/password/signup/anon/jwt_exp),
                  network-restrictions (DB IP allowlist), ssl-enforcement - into
                  analysis.security (null in no-PAT mode). findings.ts's
-                 securityConfigFindings() turns these into sbperf-ORIGINAL
+                 securityConfigFindings() turns these into pg-analyser-ORIGINAL
                  Security findings (network open to any IP, SSL off, email auto-
                  confirm, no MFA, weak password policy, anon sign-ins, long JWT) -
                  the first Security findings that aren't advisor-lint passthrough.
@@ -436,31 +436,31 @@ src/
                  missing panel isn't misread as healthy.
                  render(a,{narrative}) embeds the narrative; renderNarrativePage
                  is the standalone narrative.html.
-  extensions/    sbperf.pi.ts - pi tool wrapper (analyze/full/report/pdf/summary
+  extensions/    pg-analyser.pi.ts - pi tool wrapper (analyze/full/report/pdf/summary
                  + narrate_prompt/narrate_import copy-paste round-trip, pi as LLM).
   report/markdown minimal, HTML-escaping Markdown->HTML for the narrate subset
                  (headings/lists/bold/code/fenced/links); NOT a general parser
   brand.ts       report branding: Supabase default (official mark + green) +
-                 loadBrand precedence (--brand > SBPERF_BRAND > ./sbperf.brand.json
+                 loadBrand precedence (--brand > PG_ANALYSER_BRAND > ./pg-analyser.brand.json
                  > default); partial-override merge, logoPath/faviconPath inlined.
                  render(a,{brand}) / renderSummary/Index/NarrativePage(...,brand)
                  apply the favicon, header logo, and --accent/--link colours.
-                 sbperf.brand.json is gitignored (keep the .example).
+                 pg-analyser.brand.json is gitignored (keep the .example).
   overlay.ts     ref-keyed review overlay (hide drill sections + append markdown
                  notes), loaded with loadBrand-style precedence (--overlay >
-                 SBPERF_OVERLAY > ./sbperf.overlays/<ref>.json >
-                 ~/.sbperf/overlays/<ref>.json > empty) and merged at render
+                 PG_ANALYSER_OVERLAY > ./pg-analyser.overlays/<ref>.json >
+                 ~/.pg-analyser/overlays/<ref>.json > empty) and merged at render
                  time via the drill() choke-point. Presentation-only: never
                  touches analysis.json or the narrate input. Hideable ids are
                  the drill() section ids. Overlays gitignored (keep .example).
   report/pdf     HTML -> PDF via headless Chromium --print-to-pdf (no Playwright
-                 dep; system Chrome discovered on PATH or SBPERF_CHROME)
+                 dep; system Chrome discovered on PATH or PG_ANALYSER_CHROME)
   narrate.ts     LLM pass over the corpus + enriched findings -> narrative.md.
                  Grounded: hands the model the ranked findings (with catalogued
                  remediation + doc URL), positives, and a BOUNDED evidence digest
                  (not the whole corpus); system prompt forbids inventing facts.
                  OpenAI-compatible client (OpenAI / local llama-server / ...),
-                 injectable for tests; SBPERF_LLM_BASE_URL + _MODEL (+ _API_KEY).
+                 injectable for tests; PG_ANALYSER_LLM_BASE_URL + _MODEL (+ _API_KEY).
                  buildNarrativeInput is the SOLE digest projection (feeds both
                  the direct-LLM path and the `narrate --print-prompt` pi round-
                  trip). Evidence carries: query outliers/frequent/IO, biggest
@@ -481,10 +481,10 @@ src/
                  read-only (logs accessible via SQL) and superuser tiers.
   store.ts       SQLite history store (bun:sqlite): `snapshot` appends full
                  Analysis + denormalized metric_samples/sql_scalars; keyed by
-                 ref at ~/.sbperf/history.db; prune to retention. Also holds
-                 bench_runs (sbperf bench history; independent of snapshots)
+                 ref at ~/.pg-analyser/history.db; prune to retention. Also holds
+                 bench_runs (pg-analyser bench history; independent of snapshots)
   bench.ts       `bench` - pgbench wrapper with methodology guardrails: binary
-                 discovery via SBPERF_PGBENCH/PATH (findChrome-style), client
+                 discovery via PG_ANALYSER_PGBENCH/PATH (findChrome-style), client
                  load preflight + mid-run taint detection, warmup + N measured
                  runs with tps-spread stability check, exact p50/p95/p99 parsed
                  from the -l per-transaction log (field 3 = microseconds;
@@ -535,7 +535,7 @@ src/
 ## Conventions
 
 - **Derive checks from upstream source; never depend on the CLI at runtime.**
-  sbperf stays API-first (Management API + read-only/superuser SQL + the metrics
+  pg-analyser stays API-first (Management API + read-only/superuser SQL + the metrics
   endpoint) so it syncs with upstream and doesn't inherit the CLI's release lag.
   But when writing a diagnostic, PORT the actual query from the canonical source
   rather than hand-rolling: `supabase/cli` `apps/cli-go/internal/inspect/*/*.sql`
@@ -551,7 +551,7 @@ src/
   fingerprints each upstream inspect query in `scripts/inspect-baseline.json` and
   WARNS (advisory) when upstream changes, so you re-review the derived query in
   `sql.ts`. When you adapt a new inspect query, add it to that script's MANIFEST
-  and run `SBPERF_INSPECT_UPDATE=1 bun run check:inspect` to record the baseline.
+  and run `PG_ANALYSER_INSPECT_UPDATE=1 bun run check:inspect` to record the baseline.
 
 
 - Every API response has a zod schema in `schemas.ts`. **Never use `.default([])`
@@ -604,8 +604,8 @@ src/
     GoTrue-config findings are the sole source - hence fallback, not removal).
   Non-overlapping advisor lints (`rls_enabled_no_policy`,
   `multiple_permissive_policies`, `extension_in_public`,
-  `auth_db_connections_absolute`) have NO sbperf finding, so nothing to dedup;
-  `rls_col_unindexed` is sbperf-original (no advisor equivalent).
+  `auth_db_connections_absolute`) have NO pg-analyser finding, so nothing to dedup;
+  `rls_col_unindexed` is pg-analyser-original (no advisor equivalent).
 - **The narrate digest is app-scoped; the report shows all schemas. This is
   deliberate - don't "fix" the inconsistency.** buildNarrativeInput scopes
   index/RLS/dead-tuple/write-profile evidence to application schemas; the report
@@ -646,7 +646,7 @@ src/
 - Metrics endpoint is point-in-time (scrape target), not a TSDB, and takes NO
   time param; the analytics endpoints cap ~24h (verified 2026-07: interval=1day
   returns 24 hourly buckets). So NO single API call yields 30 days of anything -
-  time series must be accumulated going forward. sbperf does this itself via
+  time series must be accumulated going forward. pg-analyser does this itself via
   `snapshot` -> SQLite (`store.ts`); no Prometheus/Grafana required. For full
   Grafana dashboards, `export-prometheus` renders the store as OpenMetrics with
   timestamps (`promexport.ts`, TYPE=unknown to sidestep OM suffix strictness);
@@ -675,14 +675,14 @@ src/
   are point-in-time and pg_stat_statements is cumulative-since-reset.
 - `supabase inspect report` (the CLI's all-in-one) requires a DB connection
   string (`--db-url`/`--linked` = a password) and emits raw CSV - no findings.
-  sbperf is PAT-only + ranked findings, and additionally has advisors, metrics,
+  pg-analyser is PAT-only + ranked findings, and additionally has advisors, metrics,
   RLS audit, txid wraparound, and edge-function stats the CLI lacks. Coverage was
   compared against the CLI's ACTUAL query source
   (github.com/supabase/cli `apps/cli-go/internal/inspect/*/*.sql`), not its help
   text. NOTE: the CLI's vacuum-stats has NO txid/relfrozenxid logic (it is
-  autovacuum-threshold analysis) - sbperf's txid check is original. Remaining
+  autovacuum-threshold analysis) - pg-analyser's txid check is original. Remaining
   CLI-only gaps deliberately left: real bloat estimation, traffic-profile.
-- The endpoints sbperf depends on are asserted against the upstream OpenAPI spec
+- The endpoints pg-analyser depends on are asserted against the upstream OpenAPI spec
   by `scripts/check-api-drift.ts` in CI - this is how we stay in sync without a
   CLI dependency or manual tracking. Two layers: PRIMARY (pass/fail) checks the
   LIVE served spec (`api.supabase.com/api/v1-json`) - ground truth for what the
@@ -694,7 +694,7 @@ src/
 ## See also
 
 - `docs/pgbench.md` - tested pgbench verification companion (benchmark a fix,
-  then `sbperf diff` to see it land in pg_stat_statements)
+  then `pg-analyser diff` to see it land in pg_stat_statements)
 - `~/.pi/agent/skills/supabase-postgres-best-practices` - source of the perf queries
 - `~/.pi/agent/skills/supabase` - API/CLI/auth reference
 - `~/.pi/agent/skills/design-utilitarian` - report visual ethos

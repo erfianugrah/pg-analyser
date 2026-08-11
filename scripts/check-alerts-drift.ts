@@ -17,13 +17,13 @@
  * recapturing the corpus promotes entries instead of rotting them.
  *
  *   bun run scripts/check-alerts-drift.ts        # warn on drift, exit 0
- *   SBPERF_ALERTS_STRICT=1 bun run ...           # exit 1 on drift (gated job)
+ *   PG_ANALYSER_ALERTS_STRICT=1 bun run ...           # exit 1 on drift (gated job)
  */
 
 import { buildAlertRules, CORPUS_GAPS, unclassifiedHeuristics } from "../src/alerts.ts";
 
 const IN_GHA = process.env.GITHUB_ACTIONS === "true";
-const STRICT = process.env.SBPERF_ALERTS_STRICT === "1";
+const STRICT = process.env.PG_ANALYSER_ALERTS_STRICT === "1";
 const warn = (m: string): void => console.error(IN_GHA ? `::warning::${m}` : `warning: ${m}`);
 let drifted = false;
 

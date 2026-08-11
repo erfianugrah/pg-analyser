@@ -175,7 +175,7 @@ const SEV_MARK: Record<Severity, string> = { high: "[H]", med: "[M]", low: "[L]"
 /** Render a diff as a plain-text report for the terminal / CI logs. */
 export function renderDiffText(d: AnalysisDiff): string {
   const L: string[] = [];
-  L.push(`sbperf diff: ${d.refA} @ ${d.collectedA}  ->  ${d.refB} @ ${d.collectedB}`);
+  L.push(`pg-analyser diff: ${d.refA} @ ${d.collectedA}  ->  ${d.refB} @ ${d.collectedB}`);
   L.push("");
 
   const { appeared, resolved, changed, unchanged } = d.findings;

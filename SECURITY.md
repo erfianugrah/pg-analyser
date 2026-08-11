@@ -9,7 +9,7 @@ few days.
 
 ## Threat model
 
-sbperf is a local CLI that reads from a Supabase project and renders a report.
+pg-analyser is a local CLI that reads from a Supabase project and renders a report.
 It handles several secrets; understanding where they flow is the core of the
 threat model.
 
@@ -18,8 +18,8 @@ threat model.
 - **Personal Access Token (PAT)** - `SUPABASE_ACCESS_TOKEN`, or read from
   `~/.supabase/access-token`. Grants Management API + read-only SQL access to
   your projects.
-- **Superuser connection string** (`--db-url` / `SBPERF_DB_URL` /
-  `sbperf.databases.json`) - full Postgres access. The most sensitive input.
+- **Superuser connection string** (`--db-url` / `PG_ANALYSER_DB_URL` /
+  `pg-analyser.databases.json`) - full Postgres access. The most sensitive input.
 - **Auto-fetched `service_role` key** - resolved per run via the Management API
   to scrape the metrics endpoint. Never written to disk.
 - **Grafana session cookie** (`--prometheus-cookie` / profile JSON) - per-region
@@ -33,12 +33,12 @@ threat model.
   duration of the metrics scrape and is discarded.
 - **Generated reports contain live query text** and are gitignored (`reports/`).
 - **Secret-bearing config is gitignored**: `.env*` (except `.env.example`),
-  `sbperf.databases.json` and numbered variants, `sbperf.profile.json` /
-  `sbperf.*.profile.json`, `sbperf.brand.json`, `sbperf.overlays/`, and the
+  `pg-analyser.databases.json` and numbered variants, `pg-analyser.profile.json` /
+  `pg-analyser.*.profile.json`, `pg-analyser.brand.json`, `pg-analyser.overlays/`, and the
   `scraper/` scratch dir (its generated `prometheus.yml` embeds a credential).
   Keep the committed `.example` files placeholder-only.
 
-### What sbperf does NOT do
+### What pg-analyser does NOT do
 
 - It does not exfiltrate data anywhere. All network calls go to
   `api.supabase.com`, the `<ref>.supabase.co` metrics endpoint, your own
@@ -49,23 +49,23 @@ threat model.
   `SET lock_timeout` guards. It never `INSERT`/`UPDATE`/`DELETE`s, never runs
   DDL, never `CREATE`s an extension, and does not reset your query statistics.
 
-### How sbperf protects the target database
+### How pg-analyser protects the target database
 
-sbperf is designed to be safe to run against a live production primary:
+pg-analyser is designed to be safe to run against a live production primary:
 
 - **Bounded runtime.** The superuser runner prepends `statement_timeout`
   (default 120s) and `lock_timeout` (default 15s) to *every* query, sent in the
   same message so they bind to the same pooled backend. No diagnostic can run
-  unbounded. Override with `SBPERF_STATEMENT_TIMEOUT` / `SBPERF_LOCK_TIMEOUT`
+  unbounded. Override with `PG_ANALYSER_STATEMENT_TIMEOUT` / `PG_ANALYSER_LOCK_TIMEOUT`
   (`0` disables a cap).
-- **Read-only, non-blocking locks.** Being SELECT-only, sbperf takes only
+- **Read-only, non-blocking locks.** Being SELECT-only, pg-analyser takes only
   `AccessShareLock`, which does not block reads or writes; `lock_timeout` makes
   it fail fast rather than queue behind someone's `ALTER`.
 - **Heavy checks are opt-in and gated.** The integrity checks
   (`bt_index_check`, `verify_heapam`) run only under `--amcheck` and only when
   the `amcheck` extension is already installed; exact bloat (`pgstattuple`) runs
   only when that extension is already installed. amcheck additionally bounds
-  each index check separately (`SBPERF_AMCHECK_TIMEOUT`, default 300s) and
+  each index check separately (`PG_ANALYSER_AMCHECK_TIMEOUT`, default 300s) and
   records a timeout as a skip, not a corruption result.
 - **Connection-frugal.** The pool is capped at 2 connections
   (`prepare:false, max:2`) so an audit cannot exhaust connection slots.

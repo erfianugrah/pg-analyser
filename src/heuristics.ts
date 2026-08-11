@@ -1658,7 +1658,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
     howToVerify:
       "Query cron.job_run_details for recent status='failed' rows or runs whose duration approaches the schedule interval; a healthy job shows status='succeeded' and finishes well inside its window.",
     whyItMatters:
-      "Scheduled jobs fail or overrun silently - a failing nightly job or one that runs longer than its interval (piling up overlapping runs) is invisible until data is stale or the DB is under load. sbperf can't read run history over the read-only endpoint, so this is a prompt to check it.",
+      "Scheduled jobs fail or overrun silently - a failing nightly job or one that runs longer than its interval (piling up overlapping runs) is invisible until data is stale or the DB is under load. pg-analyser can't read run history over the read-only endpoint, so this is a prompt to check it.",
     remediation:
       "Review cron.job_run_details for failed or overrunning jobs (SELECT jobid, status, start_time, end_time FROM cron.job_run_details ORDER BY start_time DESC).",
     docUrl: "https://supabase.com/docs/guides/database/extensions/pg_cron",

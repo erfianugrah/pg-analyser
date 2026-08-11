@@ -9,18 +9,18 @@ import { join } from "node:path";
  * standalone and small. Page geometry is controlled by the report's `@page`
  * CSS rule, which headless `--print-to-pdf` honours.
  *
- * Discovery order: SBPERF_CHROME env, then a Playwright-installed
+ * Discovery order: PG_ANALYSER_CHROME env, then a Playwright-installed
  * chrome-headless-shell, then common system binaries.
  */
 export async function htmlToPdf(html: string, outPath: string): Promise<void> {
   const chrome = await findChrome();
   if (!chrome) {
     throw new Error(
-      "no Chrome/Chromium found. Install chromium, or set SBPERF_CHROME=/path/to/chrome",
+      "no Chrome/Chromium found. Install chromium, or set PG_ANALYSER_CHROME=/path/to/chrome",
     );
   }
 
-  const dir = await mkdtemp(join(tmpdir(), "sbperf-"));
+  const dir = await mkdtemp(join(tmpdir(), "pg-analyser-"));
   const htmlPath = join(dir, "report.html");
   try {
     await Bun.write(htmlPath, html);
@@ -47,7 +47,7 @@ export async function htmlToPdf(html: string, outPath: string): Promise<void> {
 }
 
 async function findChrome(): Promise<string | null> {
-  const env = process.env.SBPERF_CHROME;
+  const env = process.env.PG_ANALYSER_CHROME;
   if (env && existsSync(env)) return env;
 
   // Playwright-installed chrome-headless-shell (if the user has playwright elsewhere).

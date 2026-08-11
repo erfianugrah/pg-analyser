@@ -1,13 +1,13 @@
 {
-  "name": "sbperf",
+  "name": "pg-analyser",
   "version": "0.10.1",
-  "description": "Supabase performance analysis tool - PAT-only, generates self-contained HTML + PDF reports",
+  "description": "Postgres performance analysis tool - Supabase-native (PAT-only) or any Postgres via superuser connstring; generates self-contained HTML + PDF reports",
   "license": "MIT",
   "author": "Erfi Anugrah",
   "type": "module",
   "module": "src/index.ts",
   "bin": {
-    "sbperf": "src/index.ts"
+    "pg-analyser": "src/index.ts"
   },
   "scripts": {
     "start": "bun run src/index.ts",
@@ -23,7 +23,7 @@
     "check:schemas": "bun run scripts/check-schemas-drift.ts",
     "check:docurls": "bun run scripts/check-docurls.ts",
     "smoke": "bun run smoke.ts",
-    "build": "bun build ./src/index.ts --compile --outfile sbperf",
+    "build": "bun build ./src/index.ts --compile --outfile pg-analyser",
     "test:live": "bun acceptance/live-sql.ts && bun acceptance/live-catalogue-sql.ts && bun acceptance/live-promtool.ts"
   },
   "dependencies": {

@@ -1,7 +1,7 @@
 /**
  * Lightweight structured logger.
  *
- * Deliberately NOT pino. sbperf compiles to a standalone binary via
+ * Deliberately NOT pino. pg-analyser compiles to a standalone binary via
  * `bun build --compile`, and pino's transports + pretty-printer run on worker
  * threads that don't survive single-file compile (its JSON-to-fd core would
  * work, but the value-add is exactly the part that breaks). Our logging need is
@@ -10,8 +10,8 @@
  *
  * Everything goes to STDERR: stdout is reserved for report/JSON output and
  * piping (`diff`, `check`, and any `... > out.json`). Config via env:
- *   SBPERF_LOG_LEVEL = debug | info | warn | error   (default: info)
- *   SBPERF_LOG       = json                            (default: pretty)
+ *   PG_ANALYSER_LOG_LEVEL = debug | info | warn | error   (default: info)
+ *   PG_ANALYSER_LOG       = json                            (default: pretty)
  * `error` is the effective floor when a level is unrecognised.
  */
 
@@ -46,17 +46,17 @@ export interface LoggerOptions {
 }
 
 export function envLevel(): Level {
-  const v = (process.env.SBPERF_LOG_LEVEL ?? "info").toLowerCase();
+  const v = (process.env.PG_ANALYSER_LOG_LEVEL ?? "info").toLowerCase();
   return (LEVELS as readonly string[]).includes(v) ? (v as Level) : "info";
 }
 
 /**
- * The level the user explicitly set via SBPERF_LOG_LEVEL, or null if unset /
+ * The level the user explicitly set via PG_ANALYSER_LOG_LEVEL, or null if unset /
  * unrecognised. Lets a multi-project sweep quiet routine INFO by default while
- * still honouring an explicit `SBPERF_LOG_LEVEL=info` (or debug).
+ * still honouring an explicit `PG_ANALYSER_LOG_LEVEL=info` (or debug).
  */
 export function envLevelExplicit(): Level | null {
-  const raw = process.env.SBPERF_LOG_LEVEL;
+  const raw = process.env.PG_ANALYSER_LOG_LEVEL;
   if (!raw) return null;
   const v = raw.toLowerCase();
   return (LEVELS as readonly string[]).includes(v) ? (v as Level) : null;
@@ -104,7 +104,7 @@ function fmtVal(v: unknown): string {
 
 export function makeLogger(opts: LoggerOptions = {}): Logger {
   const level = opts.level ?? envLevel();
-  const json = opts.json ?? process.env.SBPERF_LOG === "json";
+  const json = opts.json ?? process.env.PG_ANALYSER_LOG === "json";
   const sink = opts.sink ?? defaultSink;
   const now = opts.now ?? (() => performance.now());
   const bound = opts.bound ?? {};
