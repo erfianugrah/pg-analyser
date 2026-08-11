@@ -1564,7 +1564,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
     plane: "Query",
     sql: "-- confirm the ANN index survives the filter:\nEXPLAIN (ANALYZE, BUFFERS)\nSELECT ... FROM <table> WHERE <filter> ORDER BY <vec> <=> $1 LIMIT k;\n-- look for an Index Scan using the hnsw/ivfflat index, NOT a Seq Scan + top-N heapsort",
     howToVerify:
-      "EXPLAIN the flagged statement: the plan must show the ANN index being scanned. If it seq-scans + sorts, restructure: move the vector search into a CROSS JOIN LATERAL against the filtered row set, or use pgvector's iterative index scans (strict_order/relaxed_order) so post-filtering happens inside the scan.",
+      "EXPLAIN the flagged statement: the plan must show the ANN index being scanned. If it seq-scans + sorts, restructure: move the vector search into a CROSS JOIN LATERAL against the filtered row set, or use pgvector's iterative index scans (strict_order/relaxed_order) so post-filtering happens inside the scan. Caveat: pg_stat_statements.track=top records only top-level statements - distance queries inside SQL functions are invisible here.",
     whyItMatters:
       "HNSW/IVFFlat indexes accelerate ORDER BY distance LIMIT k, but a WHERE filter can silently defeat them: Postgres applies the filter as a post-index predicate (returning too few rows) or falls back to an exact scan + sort. Query SHAPES matter too - a WITH/materialized CTE or correlated subquery around the distance ordering blocks index pushdown entirely (measured: a source-filtered vector search went 8.4s -> 0.21s once the materialized CTE was removed). pg_stat_statements shows the statement is slow; only the plan shows why.",
     remediation:
@@ -1590,7 +1590,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
     plane: "Query",
     sql: "-- the recursive term's join/lookup columns need a plain b-tree:\nEXPLAIN (ANALYZE) <the recursive query>;\n-- the Recursive Union's inner scan should be an Index Scan, not a Seq Scan of the edge table",
     howToVerify:
-      "EXPLAIN the statement: the recursive term (the part under Recursive Union that re-reads the working table) should hit an index on the join columns. If it seq-scans, add the index on the traversal key (for an edge table, the direction you traverse: (source) for outbound, (target) for inbound).",
+      "EXPLAIN the statement: the recursive term (the part under Recursive Union that re-reads the working table) should hit an index on the join columns. If it seq-scans, add the index on the traversal key (for an edge table, the direction you traverse: (source) for outbound, (target) for inbound). Caveat: pg_stat_statements.track=top (the common default) records only top-level statements - a recursive CTE inside a SQL function is invisible here, so absence of a hit does not prove absence of the workload.",
     whyItMatters:
       "WITH RECURSIVE queries (graph traversal, hierarchy walks) execute their recursive term once per level; if that term seq-scans the edge/table relation, cost multiplies by depth. A recursive CTE appearing in the top-by-time statements means the traversal itself is a first-class workload and worth indexing for directly.",
     remediation:
