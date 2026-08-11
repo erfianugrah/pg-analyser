@@ -1147,6 +1147,12 @@ export const QUERIES = {
   // (to find referencing rows) and escalates locks - slow cascades + contention.
   // A covering index = the FK columns are a leading prefix of some valid index.
   // App-scoped. Standard check (Postgres wiki "unindexed foreign keys").
+  // GOTCHA (2026-08-11): indkey casts to a ZERO-based array ([0:1]={1,2}), so
+  // the prefix slice must be [0:cardinality-1] as on the wiki - a 1-based slice
+  // compares the FK against the index's SECOND column (or {} for a single-col
+  // index), which flagged every FK as unindexed. Expression/partial indexes are
+  // excluded: indkey 0 keys can't prefix-match and a partial index can't serve
+  // the FK enforcement scan of every child row.
   fkUnindexed: /* sql */ `
     select
       n.nspname as schema,
@@ -1162,7 +1168,9 @@ export const QUERIES = {
         select 1 from pg_index i
         where i.indrelid = con.conrelid
           and i.indisvalid
-          and (i.indkey::smallint[])[1:cardinality(con.conkey)] @> con.conkey
+          and i.indpred is null
+          and i.indexprs is null
+          and (i.indkey::smallint[])[0:cardinality(con.conkey)-1] @> con.conkey
       )
     order by 1, 2
     limit 30`,
