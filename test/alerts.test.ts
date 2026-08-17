@@ -96,6 +96,19 @@ describe("rules carry the catalogue, not a copy of it", () => {
     }
   });
 
+  test("the scrape-down and connection-ceiling rules join the core group", () => {
+    const rules = buildAlertRules({ refMatcher: 'supabase_project_ref=~".+"' });
+    const down = rules.find((r) => r.alert === "SupabaseScrapeDown");
+    expect(down?.expr).toBe('(up{supabase_project_ref=~".+"}) < 1');
+    expect(down?.for).toBe(ALERT_HOLD);
+    expect(down?.requires).toBeUndefined();
+    const ceil = rules.find((r) => r.alert === "SupabaseConnectionCeiling");
+    expect(ceil?.expr).toContain("max_connections_connection_count");
+    expect(ceil?.expr).toContain(`>= ${THRESHOLDS.connectionsCeilingFrac * 100}`);
+    expect(ceil?.for).toBe(ALERT_HOLD);
+    expect(ceil?.requires).toBeUndefined();
+  });
+
   test("the CPU and disk thresholds trace to THRESHOLDS", () => {
     const rules = buildAlertRules();
     const cpu = rules.find((r) => r.alert === "SupabaseCpuSaturated");

@@ -1,5 +1,39 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { fetchIncidentSeries, fetchTrends } from "../src/prometheus.ts";
+import { buildPanels, fetchIncidentSeries, fetchTrends } from "../src/prometheus.ts";
+
+describe("buildPanels aggregate grouping follows the matcher's label", () => {
+  test("a project-ref matcher groups aggregates by that label", () => {
+    const panels = buildPanels('supabase_project_ref=~".+"');
+    const cpu = panels.find((p) => p.title === "CPU utilization (%)")?.query ?? "";
+    expect(cpu).toContain("avg by (supabase_project_ref) (");
+    expect(panels.find((p) => p.title === "Database size")?.query).toBe(
+      'sum by (supabase_project_ref) (pg_database_size_bytes{supabase_project_ref=~".+"})',
+    );
+  });
+
+  test("a matcher on any other label groups by that label instead", () => {
+    const panels = buildPanels('node_name="host-x"');
+    const cpu = panels.find((p) => p.title === "CPU utilization (%)")?.query ?? "";
+    expect(cpu).toContain("avg by (node_name) (");
+    for (const p of panels) expect(p.query).not.toContain("supabase_project_ref");
+  });
+
+  test("no matcher keeps the bare single-project form", () => {
+    const panels = buildPanels("");
+    for (const p of panels) expect(p.query).not.toContain(" by (");
+    expect(panels.map((p) => p.query)).toContain("sum(pg_database_size_bytes)");
+  });
+
+  test("the scrape-health and connection-ceiling panels exist", () => {
+    const titles = new Set(buildPanels("").map((p) => p.title));
+    expect(titles.has("Scrape target up")).toBe(true);
+    expect(titles.has("Connection ceiling (%)")).toBe(true);
+    const up = buildPanels('supabase_project_ref="abc"').find(
+      (p) => p.title === "Scrape target up",
+    );
+    expect(up?.query).toBe('up{supabase_project_ref="abc"}');
+  });
+});
 
 const realFetch = globalThis.fetch;
 afterEach(() => {

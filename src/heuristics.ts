@@ -51,6 +51,14 @@ export const THRESHOLDS = {
   roleConnShowFrac: 0.5,
   /** Disk used / total warning fraction. */
   diskFullFrac: 0.8,
+  /** Connection ceiling: backends summed across databases at/above this
+   * fraction of the configured max_connections. Past the ceiling new
+   * connections are refused outright (53300), so the warning must fire well
+   * before 1.0. */
+  connectionsCeilingFrac: 0.8,
+  /** Expected value of the per-target `up` gauge for a healthy scrape; the
+   * scrape-down alert fires below it. */
+  scrapeUpExpected: 1,
   /** Disk over-provisioned (downsize candidate): filesystem used at/below this
    * fraction of the provisioned volume, AND at least diskOversizeMinWasteGb of
    * unused headroom (so a small volume with natural slack isn't flagged). */
@@ -1876,6 +1884,18 @@ VACUUM (FREEZE, VERBOSE, ANALYZE) <schema>.<oldest_table>;`,
     remediation:
       "Priority one: run anti-wraparound vacuum as a superuser immediately. First clear any xmin holders (old replication slots, prepared transactions, long-running backends, hot standby feedback) per xmin_horizon_blocked. Then VACUUM the oldest tables repeatedly until datfrozenxid stops advancing and no more warnings appear in the log. An anti-wraparound vacuum cannot be killed, so let it run to completion.",
     docUrl: "https://www.postgresql.org/docs/current/routine-vacuuming.html",
+    reviewed: R,
+  },
+  scrape_down: {
+    id: "scrape_down",
+    plane: "Config",
+    howToVerify:
+      "Check Prometheus /targets - the project job must read UP; then query up for the job and confirm it is 1.",
+    whyItMatters:
+      "A dead scrape takes every other rule no-data at once - the dashboard reads green while the project is unwatched. The usual cause is a rotated or expired credential: the endpoint answers 401 and the target flips to down.",
+    remediation:
+      "Read the target's last error on Prometheus' Status > Targets page. A 401 means the credential rotated - update the scrape job's basic-auth password. Confirm by hand: curl -u service_role:<key> https://<ref>.supabase.co/customer/v1/privileged/metrics should return 200.",
+    docUrl: "https://supabase.com/docs/guides/monitoring-and-debugging/metrics",
     reviewed: R,
   },
 };
