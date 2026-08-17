@@ -571,6 +571,7 @@ rule and the report card behind it cannot disagree:
 
 ```bash
 bun run src/index.ts alerts-init --ref <ref>   # writes alerts-pack/alerts.yml + EXCLUSIONS.md
+bun run src/index.ts alerts-init --ref '~.+'   # multi-project: label-present matcher (supabase jobs only)
 ```
 
 No PAT and no database - it is pure generation. `scrape-init` ships the same
