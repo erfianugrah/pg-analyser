@@ -37,12 +37,21 @@ describe("every heuristic is classified", () => {
       expect(why.length, `plane ${plane} has no reason`).toBeGreaterThan(15);
   });
 
-  test("the three look-alertable-but-are-not cases are excluded on purpose", () => {
+  test("the look-alertable-but-are-not cases are excluded on purpose", () => {
     // Named in the plan: each would page on a healthy project.
-    for (const id of ["cache_hit_low", "disk_fill_projection", "connections_ceiling"]) {
+    // connections_ceiling WAS the third: excluded because the endpoint served
+    // no max_connections metric. Verified live 2026-08-18 that the endpoint now
+    // exports the configured limit (max_connections_connection_count), so the
+    // exclusion was promoted to a real rule (SupabaseConnectionCeiling).
+    for (const id of ["cache_hit_low", "disk_fill_projection"]) {
       expect(EXCLUSIONS[id], `${id} must be explicitly excluded`).toBeDefined();
       expect(EXCLUSIONS[id]?.why.length).toBeGreaterThan(15);
     }
+  });
+
+  test("connections_ceiling is no longer excluded - the endpoint serves the limit", () => {
+    expect(EXCLUSIONS.connections_ceiling).toBeUndefined();
+    expect(ALERT_SPECS.some((s) => s.heuristicId === "connections_ceiling")).toBe(true);
   });
 
   test("an exclusion cannot name a heuristic that does not exist", () => {

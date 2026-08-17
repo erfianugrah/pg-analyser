@@ -29,7 +29,7 @@ import { buildPanels } from "./prometheus.ts";
  * - `ratio`: num / (sum of den) - the checkpoint requested-share shape.
  */
 export type AlertExpr =
-  | { kind: "threshold"; panel: string; op: ">=" | "<="; value: number }
+  | { kind: "threshold"; panel: string; op: ">=" | "<=" | "<" | ">"; value: number }
   | { kind: "mean"; panel: string; op: ">=" | ">"; value: number }
   | { kind: "sustained"; panel: string; value: number; frac: number }
   | { kind: "ratio"; num: string; den: string[]; op: ">="; value: number };
@@ -235,6 +235,32 @@ export const ALERT_SPECS: AlertSpec[] = [
     },
     threshold: "THRESHOLDS.walPendingMax",
     summary: "WAL archival falling behind - PITR and disk headroom at risk",
+  },
+  {
+    name: "SupabaseScrapeDown",
+    heuristicId: "scrape_down",
+    severity: "high",
+    expr: {
+      kind: "threshold",
+      panel: "Scrape target up",
+      op: "<",
+      value: THRESHOLDS.scrapeUpExpected,
+    },
+    threshold: "THRESHOLDS.scrapeUpExpected",
+    summary: "Metrics scrape failing - the project is currently unwatched",
+  },
+  {
+    name: "SupabaseConnectionCeiling",
+    heuristicId: "connections_ceiling",
+    severity: "med",
+    expr: {
+      kind: "threshold",
+      panel: "Connection ceiling (%)",
+      op: ">=",
+      value: THRESHOLDS.connectionsCeilingFrac * 100,
+    },
+    threshold: "THRESHOLDS.connectionsCeilingFrac",
+    summary: "Backends approaching max_connections - refusals start at the ceiling",
   },
 ];
 
@@ -496,10 +522,6 @@ export const EXCLUSIONS: Record<string, { clause: ExclusionClause; why: string }
     clause: "not-an-alert",
     why: "downsize recommendation - a cost finding for the report, never a page",
   },
-  connections_ceiling: {
-    clause: "no-metric",
-    why: "the denominator is max_connections from pg_settings; pg_stat_database_num_backends has no max_connections counterpart on the scrape",
-  },
   // --- Storage -------------------------------------------------------------
   disk_oversized: {
     clause: "not-an-alert",
@@ -657,6 +679,11 @@ export const CORPUS_GAPS: Record<string, string> = {
     "postgres_exporter bgwriter collector; past the truncation point of the committed corpus capture",
   pg_ls_archive_statusdir_wal_pending_count:
     "postgres_exporter archive-statusdir collector; past the truncation point of the committed corpus capture",
+  up: "synthesised by Prometheus per scrape target on every scrape; the endpoint itself never serves it",
+  pg_stat_database_num_backends:
+    "past the truncation point of the committed corpus capture; verified live 2026-08-18 across three projects",
+  max_connections_connection_count:
+    "not in the committed corpus capture (predates it); verified live 2026-08-18 across three projects - the endpoint's export of the configured max_connections",
   aws_ec2_ebsiobalance_percent_minimum:
     "CloudWatch, not the Supabase metrics endpoint - present only when the Prometheus also scrapes cloudwatch_exporter, so this rule is inert otherwise",
   aws_ec2_ebsbyte_balance_percent_minimum:
