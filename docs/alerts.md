@@ -9,10 +9,16 @@ justification, in `src/heuristics.ts`.
 `alerts-init` emits those thresholds as Prometheus alerting rules:
 
 ```bash
-bun run src/index.ts alerts-init --ref <ref>            # writes alerts-pack/
+bun run src/index.ts alerts-init --ref <ref>            # writes alerts-pack/, rules pinned to one project
+bun run src/index.ts alerts-init --ref '~.+'            # label-present matcher: multi-project, supabase jobs only
 bun run src/index.ts alerts-init                        # unscoped (single-project scraper)
 bun run src/index.ts alerts-init --ref <ref> --dir /tmp/pack
 ```
+
+`--ref '~<regex>'` emits `supabase_project_ref=~"<regex>"` instead of equality.
+`'~.+'` (label present) is the right shape for a multi-project scraper whose
+Prometheus also scrapes other node/postgres exporters: the fully unscoped form
+fires the node_* rules on every scraped host, not just Supabase projects.
 
 No PAT, no database, no network - it is pure generation from the catalogue. The
 `scrape-init` stack already ships the same pack and mounts it, so a fresh
