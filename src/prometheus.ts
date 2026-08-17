@@ -29,6 +29,17 @@ export function buildPanels(refMatcher: string): TrendPanel[] {
   };
   const rate5 = (metric: string, ...extra: string[]): string =>
     `rate(${sel(metric, ...extra)}[5m])`;
+  // When a project-identity matcher is pinned, group aggregates by its label:
+  // a matcher that selects many projects then yields one series per project
+  // instead of blending them all into one line. No matcher = bare aggregates
+  // (unscoped single-project scraper, backward compatible).
+  const byLabel = refMatcher.match(/^\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*(?:=~?|!~?)/)?.[1];
+  const agg = (fn: "avg" | "sum" | "max" | "min", inner: string): string =>
+    byLabel ? `${fn} by (${byLabel}) (${inner})` : `${fn}(${inner})`;
+  const avgs = (inner: string): string => agg("avg", inner);
+  const sums = (inner: string): string => agg("sum", inner);
+  const maxs = (inner: string): string => agg("max", inner);
+  const mins = (inner: string): string => agg("min", inner);
   // Utilization %/rates over raw values - a 30-day view of "load 0.4" / "7.4GB
   // free" reads far worse than "CPU 26%" / "disk 4% full". These are the standard
   // node_exporter + postgres_exporter panels a Grafana infra dashboard charts,
@@ -39,22 +50,22 @@ export function buildPanels(refMatcher: string): TrendPanel[] {
     {
       title: "CPU utilization (%)",
       unit: "%",
-      query: `clamp_min(100 - (avg(${rate5("node_cpu_seconds_total", 'mode="idle"')}) * 100), 0)`,
+      query: `clamp_min(100 - (${avgs(rate5("node_cpu_seconds_total", 'mode="idle"'))} * 100), 0)`,
     },
     {
       title: "Memory used (%)",
       unit: "%",
-      query: `(1 - avg(${sel("node_memory_MemAvailable_bytes")}) / avg(${sel("node_memory_MemTotal_bytes")})) * 100`,
+      query: `(1 - ${avgs(sel("node_memory_MemAvailable_bytes"))} / ${avgs(sel("node_memory_MemTotal_bytes"))}) * 100`,
     },
     {
       title: "Disk used (%)",
       unit: "%",
-      query: `100 - (avg(${sel("node_filesystem_avail_bytes", 'mountpoint="/data"')}) * 100 / avg(${sel("node_filesystem_size_bytes", 'mountpoint="/data"')}))`,
+      query: `100 - (${avgs(sel("node_filesystem_avail_bytes", 'mountpoint="/data"'))} * 100 / ${avgs(sel("node_filesystem_size_bytes", 'mountpoint="/data"'))})`,
     },
     {
       title: "Root FS used (%)",
       unit: "%",
-      query: `100 - (avg(${sel("node_filesystem_avail_bytes", 'mountpoint="/"', 'fstype!="rootfs"')}) * 100 / avg(${sel("node_filesystem_size_bytes", 'mountpoint="/"', 'fstype!="rootfs"')}))`,
+      query: `100 - (${avgs(sel("node_filesystem_avail_bytes", 'mountpoint="/"', 'fstype!="rootfs"'))} * 100 / ${avgs(sel("node_filesystem_size_bytes", 'mountpoint="/"', 'fstype!="rootfs"'))})`,
     },
     {
       // Provisioned volume size - the denominator behind "Disk used (%)".
@@ -62,87 +73,103 @@ export function buildPanels(refMatcher: string): TrendPanel[] {
       // against real bytes rather than the %, which resets on every expansion.
       title: "Disk size (bytes)",
       unit: "bytes",
-      query: `avg(${sel("node_filesystem_size_bytes", 'mountpoint="/data"')})`,
+      query: avgs(sel("node_filesystem_size_bytes", 'mountpoint="/data"')),
     },
-    { title: "Database size", unit: "bytes", query: `sum(${sel("pg_database_size_bytes")})` },
-    { title: "DB connections", unit: "", query: `sum(${sel("pg_stat_database_num_backends")})` },
+    { title: "Database size", unit: "bytes", query: sums(sel("pg_database_size_bytes")) },
+    { title: "DB connections", unit: "", query: sums(sel("pg_stat_database_num_backends")) },
     {
       title: "Transaction rate (/s)",
       unit: "",
-      query: `sum(${rate5("pg_stat_database_xact_commit_total")})`,
+      query: sums(rate5("pg_stat_database_xact_commit_total")),
     },
     {
       title: "Cache hit (%)",
       unit: "%",
-      query: `sum(${rate5("pg_stat_database_blks_hit_total")}) / (sum(${rate5("pg_stat_database_blks_hit_total")}) + sum(${rate5("pg_stat_database_blks_read_total")})) * 100`,
+      query: `${sums(rate5("pg_stat_database_blks_hit_total"))} / (${sums(rate5("pg_stat_database_blks_hit_total"))} + ${sums(rate5("pg_stat_database_blks_read_total"))}) * 100`,
     },
     {
       title: "Disk read IOPS",
       unit: "",
-      query: `sum(${rate5("node_disk_reads_completed_total")})`,
+      query: sums(rate5("node_disk_reads_completed_total")),
     },
     {
       title: "Disk write IOPS",
       unit: "",
-      query: `sum(${rate5("node_disk_writes_completed_total")})`,
+      query: sums(rate5("node_disk_writes_completed_total")),
     },
-    { title: "Deadlocks/s", unit: "", query: `sum(${rate5("pg_stat_database_deadlocks_total")})` },
+    { title: "Deadlocks/s", unit: "", query: sums(rate5("pg_stat_database_deadlocks_total")) },
     // Checkpoints: requested (WAL filled before the interval) vs timed (regular
     // checkpoint_timeout). A high requested share -> raise max_wal_size.
     {
       title: "Requested checkpoints/s",
       unit: "",
-      query: `sum(${rate5("pg_stat_bgwriter_checkpoints_req_total")})`,
+      query: sums(rate5("pg_stat_bgwriter_checkpoints_req_total")),
     },
     {
       title: "Timed checkpoints/s",
       unit: "",
-      query: `sum(${rate5("pg_stat_bgwriter_checkpoints_timed_total")})`,
+      query: sums(rate5("pg_stat_bgwriter_checkpoints_timed_total")),
     },
     // WAL files waiting to be archived - sustained > 0 = archival lagging
     // (PITR / backup risk).
     {
       title: "WAL files pending archival",
       unit: "",
-      query: `max(${sel("pg_ls_archive_statusdir_wal_pending_count")})`,
+      query: maxs(sel("pg_ls_archive_statusdir_wal_pending_count")),
     },
     // Memory-pressure evidence: sustained major page faults / swap-in mean the
     // working set doesn't fit RAM (invisible to a MemAvailable snapshot).
-    { title: "Major page faults/s", unit: "", query: `sum(${rate5("node_vmstat_pgmajfault")})` },
-    { title: "Swap-in pages/s", unit: "", query: `sum(${rate5("node_vmstat_pswpin")})` },
+    { title: "Major page faults/s", unit: "", query: sums(rate5("node_vmstat_pgmajfault")) },
+    { title: "Swap-in pages/s", unit: "", query: sums(rate5("node_vmstat_pswpin")) },
     // PSI (Linux /proc/pressure): fraction of time tasks stalled waiting on a
     // resource, as a %. The truest saturation signal - a CPU-idle or
     // MemAvailable snapshot can read healthy while work is stalling.
     {
       title: "CPU stall (PSI %)",
       unit: "%",
-      query: `avg(${rate5("node_pressure_cpu_waiting_seconds_total")}) * 100`,
+      query: `${avgs(rate5("node_pressure_cpu_waiting_seconds_total"))} * 100`,
     },
     {
       title: "Memory stall (PSI %)",
       unit: "%",
-      query: `avg(${rate5("node_pressure_memory_waiting_seconds_total")}) * 100`,
+      query: `${avgs(rate5("node_pressure_memory_waiting_seconds_total"))} * 100`,
     },
     {
       title: "I/O stall (PSI %)",
       unit: "%",
-      query: `avg(${rate5("node_pressure_io_waiting_seconds_total")}) * 100`,
+      query: `${avgs(rate5("node_pressure_io_waiting_seconds_total"))} * 100`,
     },
     // OOM killer firing means memory was genuinely exhausted (a far stronger
     // signal than a high memory %); any nonzero rate = kills happened.
-    { title: "OOM kills/s", unit: "", query: `sum(${rate5("node_vmstat_oom_kill")})` },
+    { title: "OOM kills/s", unit: "", query: sums(rate5("node_vmstat_oom_kill")) },
     // EBS burst balance (%): AWS gp2/gp3 throttle HARD when I/O or throughput
     // credits deplete - a latency cliff invisible to in-guest metrics. Lower =
     // worse; min() picks the worst instance.
     {
       title: "EBS IOPS balance (%)",
       unit: "%",
-      query: `min(${sel("aws_ec2_ebsiobalance_percent_minimum")})`,
+      query: mins(sel("aws_ec2_ebsiobalance_percent_minimum")),
     },
     {
       title: "EBS throughput balance (%)",
       unit: "%",
-      query: `min(${sel("aws_ec2_ebsbyte_balance_percent_minimum")})`,
+      query: mins(sel("aws_ec2_ebsbyte_balance_percent_minimum")),
+    },
+    {
+      // Scrape health itself: up drops to 0 when the target errors (expired
+      // credential, endpoint down) - the condition that silently no-datas
+      // every other panel. No aggregation: per-target series, labels carried.
+      title: "Scrape target up",
+      unit: "",
+      query: sel("up"),
+    },
+    {
+      // Summed backends vs the configured limit, exported by the endpoint as
+      // max_connections_connection_count. Approaching 100% = new connections
+      // refused outright.
+      title: "Connection ceiling (%)",
+      unit: "%",
+      query: `(${sums(sel("pg_stat_database_num_backends"))}) / (${maxs(sel("max_connections_connection_count"))}) * 100`,
     },
   ];
 }
