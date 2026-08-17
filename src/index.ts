@@ -1391,10 +1391,16 @@ async function doNarrate(
  * omit it for a single-project scraper.
  */
 async function doAlertsInit(ref: string | undefined, dir: string): Promise<void> {
-  const rules = buildAlertRules({ refMatcher: ref ? `supabase_project_ref="${ref}"` : "" });
+  // --ref '~<regex>' produces a regex matcher instead of equality. The common
+  // case is '~.+' (label present) for multi-project scrapers sharing a TSDB
+  // with other node/postgres exporters: without it, node_* rules fire on ANY
+  // scraped host (edge routers, memledger postgres), not just Supabase projects.
+  const regex = ref?.startsWith("~") ? ref.slice(1) : undefined;
+  const matcher = regex ? `supabase_project_ref=~"${regex}"` : ref ? `supabase_project_ref="${ref}"` : "";
+  const rules = buildAlertRules({ refMatcher: matcher });
   await mkdir(dir, { recursive: true });
   const yamlPath = join(dir, "alerts.yml");
-  await Bun.write(yamlPath, renderAlertsYaml(rules, ref ? `pg-analyser-${ref}` : "pg-analyser"));
+  await Bun.write(yamlPath, renderAlertsYaml(rules, ref && !regex ? `pg-analyser-${ref}` : "pg-analyser"));
   await Bun.write(
     join(dir, "EXCLUSIONS.md"),
     `# Findings deliberately NOT alerted on\n\n${renderExclusions()}\n`,
