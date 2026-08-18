@@ -59,7 +59,7 @@ Eight rules over families the Supabase metrics endpoint serves:
 | `SupabaseMajorPageFaults` | `mem_pressure_paging` | `majorFaultsPerSec` | mean over the window |
 | `SupabaseSwapIn` | `mem_pressure_paging` | `swapInPagesPerSec` | mean over the window |
 | `SupabaseOomKill` | `oom_kill` | any nonzero rate | mean over the window |
-| `SupabaseCheckpointPressure` | `checkpoint_pressure` | `checkpointReqFrac` | requested / (requested + timed) |
+| `SupabaseCheckpointPressure` | `checkpoint_pressure` | `checkpointReqFrac` | requested / (requested + timed), window-smoothed |
 | `SupabaseWalArchivalBacklog` | `wal_archival_backlog` | `walPendingMax` | mean over the window |
 
 Five more in a separate `-optional` group, because their families are NOT on the
@@ -82,6 +82,19 @@ FRACTION of samples past the threshold, not consecutive time. `for:` requires an
 unbroken run, so it answers a different question. Those rules carry the count
 ratio in the expression and no `for:`. Only the point-in-time gauge comparisons
 (`SupabaseDiskFull`, the two EBS rules) use `for:`, to survive one bad scrape.
+
+### Ratio rules smooth each leg before dividing
+
+The ratio form (only `SupabaseCheckpointPressure` today) applies the
+`avg_over_time` window to the numerator and each denominator BEFORE dividing.
+That matches `findings.ts`, which takes the mean of each rate over the trend
+window and then divides. It is not cosmetic: the checkpoint counters increment
+in impulses (one timed checkpoint per `checkpoint_timeout`), so a bare
+`rate(...[5m])` ratio is 0 or 1 at almost every evaluation - a single forced
+checkpoint flips an unsmoothed share to 1 for one evaluation, and with no
+`for:` hold that is one firing/resolved flap. Smoothed, the share is the
+window's requested proportion and only sustained WAL pressure keeps it past
+`checkpointReqFrac`.
 
 ### The three tunables
 

@@ -31,7 +31,7 @@ describe("renderExpr - the four expression forms", () => {
     );
   });
 
-  test("ratio divides by the SUM of the denominators", () => {
+  test("ratio window-averages each leg, then divides by the SUM of the denominators", () => {
     expect(
       renderExpr(
         { kind: "ratio", num: "A", den: ["A", "B"], op: ">=", value: 0.3 },
@@ -39,7 +39,9 @@ describe("renderExpr - the four expression forms", () => {
         "1h",
         "5m",
       ),
-    ).toBe('((metric_a{x="1"}) / ((metric_a{x="1"}) + (metric_b{x="1"}))) >= 0.3');
+    ).toBe(
+      '((avg_over_time((metric_a{x="1"})[1h:5m])) / (avg_over_time((metric_a{x="1"})[1h:5m]) + avg_over_time((metric_b{x="1"})[1h:5m]))) >= 0.3',
+    );
   });
 
   test("the window and resolution are honoured, not hardcoded", () => {
