@@ -42,7 +42,7 @@ describe("renderExpr", () => {
     );
   });
 
-  test("ratio divides by the sum of the denominators", () => {
+  test("ratio window-averages each leg before dividing (impulse counters flap otherwise)", () => {
     expect(
       renderExpr(
         { kind: "ratio", num: "A", den: ["A", "B"], op: ">=", value: 0.3 },
@@ -50,7 +50,9 @@ describe("renderExpr", () => {
         "1h",
         "5m",
       ),
-    ).toBe('((metric_a{x="1"}) / ((metric_a{x="1"}) + (metric_b{x="1"}))) >= 0.3');
+    ).toBe(
+      '((avg_over_time((metric_a{x="1"})[1h:5m])) / (avg_over_time((metric_a{x="1"})[1h:5m]) + avg_over_time((metric_b{x="1"})[1h:5m]))) >= 0.3',
+    );
   });
 
   test("an unknown panel throws rather than emitting an empty expression", () => {
