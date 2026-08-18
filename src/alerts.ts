@@ -26,7 +26,10 @@ import { buildPanels } from "./prometheus.ts";
  * - `sustained`: the FRACTION of window samples past the threshold - mirrors
  *   trendstats.ts sustainedFrac(), which counts points, not consecutive time,
  *   so `for:` is the wrong operator for these.
- * - `ratio`: num / (sum of den) - the checkpoint requested-share shape.
+ * - `ratio`: avg_over_time window of num, divided by the sum of each
+ *   denominator's window - mirrors findings.ts avgTrend()-then-divide, which
+ *   is what stops impulse counters (one checkpoint per scrape) from flipping
+ *   the share to 1 for a single evaluation and flap-firing the alert.
  */
 export type AlertExpr =
   | { kind: "threshold"; panel: string; op: ">=" | "<=" | "<" | ">"; value: number }
@@ -288,8 +291,13 @@ export function renderExpr(
       return `(${hits} / ${all}) >= ${expr.frac}`;
     }
     case "ratio": {
-      const num = panelQuery(panels, expr.num);
-      const den = expr.den.map((t) => `(${panelQuery(panels, t)})`).join(" + ");
+      // Window-average each leg BEFORE dividing: a bare `rate(...[5m])` ratio
+      // on impulse counters (checkpoints, one per ~5min) is 0 or 1 almost
+      // everywhere, so the unsmoothed share flap-fires on a single checkpoint.
+      const num = `avg_over_time((${panelQuery(panels, expr.num)})[${window}:${resolution}])`;
+      const den = expr.den
+        .map((t) => `avg_over_time((${panelQuery(panels, t)})[${window}:${resolution}])`)
+        .join(" + ");
       return `((${num}) / (${den})) ${expr.op} ${expr.value}`;
     }
   }
