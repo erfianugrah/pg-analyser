@@ -65,6 +65,33 @@ const num = (v: unknown): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
+// Count only client backends against max_connections: auxiliary processes
+// (checkpointer, walwriter, archiver, ...) and background workers are allocated
+// their own slots (max_worker_processes / max_wal_senders) and never consume
+// max_connections. Fail-open on a missing backend_type so pre-backend_type
+// snapshots in the history store are still counted.
+const clientBackendCount = (rows: SqlRow[]): number =>
+  rows.reduce(
+    (s, r) =>
+      r.backend_type == null || r.backend_type === "client backend" ? s + num(r.connections) : s,
+    0,
+  );
+
+// Name the roles carrying a role-scoped GUC override (pg_roles.rolconfig), so a
+// cluster-level "X is disabled" finding cannot be over-read as "no role has a
+// cap" when roleConfig shows one (e.g. supabase_auth_admin carries
+// idle_in_transaction_session_timeout=60s while the cluster default is 0).
+const roleOverrideNote = (a: Analysis, guc: string): string | undefined => {
+  const hits: string[] = [];
+  for (const r of a.sql.roleConfig ?? []) {
+    const cfg = (r as { rolconfig?: unknown }).rolconfig;
+    if (!Array.isArray(cfg)) continue;
+    const found = cfg.find((c) => String(c).toLowerCase().startsWith(`${guc}=`));
+    if (found) hits.push(`${String((r as { role?: unknown }).role)} (${String(found)})`);
+  }
+  return hits.length ? `role overrides: ${hits.join(", ")}` : undefined;
+};
+
 /**
  * Present a count derived from a LIMIT-capped SQL result. When the source array
  * hit its cap the count is a FLOOR, not a total, so append "+" - "20" tables
@@ -1166,26 +1193,30 @@ export function deriveFindings(a: Analysis): Finding[] {
     }
   }
   if (set.get("idle_in_transaction_session_timeout") === "0") {
+    const evidence = roleOverrideNote(a, "idle_in_transaction_session_timeout");
     out.push({
       severity: "low",
       category: "Performance",
       title: "idle_in_transaction_session_timeout disabled (idle txns can block autovacuum)",
       anchor: "#config",
+      ...(evidence ? { evidence } : {}),
       ...meta("idle_in_txn_timeout_off"),
     });
   }
   if (set.get("statement_timeout") === "0") {
+    const evidence = roleOverrideNote(a, "statement_timeout");
     out.push({
       severity: "low",
       category: "Performance",
       title: "statement_timeout disabled (runaway queries not capped)",
       anchor: "#config",
+      ...(evidence ? { evidence } : {}),
       ...meta("statement_timeout_off"),
     });
   }
 
   // Capacity
-  const conns = a.sql.connections.reduce((s, r) => s + num(r.connections), 0);
+  const conns = clientBackendCount(a.sql.connections);
   const maxConn = num(set.get("max_connections"));
   if (maxConn > 0 && conns / maxConn >= THRESHOLDS.directConnFrac) {
     out.push({
@@ -2855,7 +2886,7 @@ export function derivePositives(a: Analysis): Positive[] {
       });
     }
   }
-  const conns = a.sql.connections.reduce((s, r) => s + num(r.connections), 0);
+  const conns = clientBackendCount(a.sql.connections);
   const maxConn = num(set.get("max_connections"));
   if (
     !errored.has("sql:connections") &&

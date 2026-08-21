@@ -791,6 +791,73 @@ describe("deriveFindings", () => {
     expect(f?.title).toContain("83%");
   });
 
+  test("connection counts ignore auxiliary + background workers (they never consume max_connections slots)", () => {
+    const a = base();
+    a.sql.pgSettings = [{ name: "max_connections", setting: "60", unit: null }];
+    // 30 client backends + 8 always-on background processes (checkpointer,
+    // walwriter, ...) - 38/60 would trip the threshold if summed raw, but only
+    // the 30 client backends draw from max_connections (50% < 70%).
+    a.sql.connections = [
+      { state: "idle", backend_type: "client backend", connections: 30, max_state_age_s: 100 },
+      { state: "(none)", backend_type: "checkpointer", connections: 1, max_state_age_s: null },
+      { state: "(none)", backend_type: "walwriter", connections: 1, max_state_age_s: null },
+      { state: "(none)", backend_type: "background writer", connections: 1, max_state_age_s: null },
+      { state: "(none)", backend_type: "archiver", connections: 1, max_state_age_s: null },
+      {
+        state: "(none)",
+        backend_type: "autovacuum launcher",
+        connections: 1,
+        max_state_age_s: null,
+      },
+      {
+        state: "(none)",
+        backend_type: "logical replication launcher",
+        connections: 1,
+        max_state_age_s: null,
+      },
+      { state: "(none)", backend_type: "pg_cron launcher", connections: 1, max_state_age_s: null },
+      { state: "idle", backend_type: "pg_net 0.20.3 worker", connections: 1, max_state_age_s: 5 },
+    ];
+    expect(deriveFindings(a).some((x) => x.heuristicId === "direct_conn_high")).toBe(false);
+    // The positive line reports the client-backend figure (50%), not the raw
+    // row sum (63%).
+    expect(derivePositives(a).some((p) => p.title === "Connections at 50% of max (30/60)")).toBe(
+      true,
+    );
+  });
+
+  test("timeout-off findings name role-level overrides as evidence", () => {
+    const a = base();
+    a.sql.pgSettings = [
+      { name: "idle_in_transaction_session_timeout", setting: "0", unit: null },
+      { name: "statement_timeout", setting: "0", unit: null },
+    ];
+    a.sql.roleConfig = [
+      { role: "supabase_auth_admin", rolconfig: ["idle_in_transaction_session_timeout=90000"] },
+      { role: "authenticator", rolconfig: ["statement_timeout=15000", "lock_timeout=15000"] },
+    ];
+    const fs = deriveFindings(a);
+    const iit = fs.find((x) => x.heuristicId === "idle_in_txn_timeout_off");
+    expect(iit?.evidence).toContain("supabase_auth_admin");
+    expect(iit?.evidence).toContain("idle_in_transaction_session_timeout=90000");
+    expect(iit?.evidence).not.toContain("statement_timeout");
+    const st = fs.find((x) => x.heuristicId === "statement_timeout_off");
+    expect(st?.evidence).toContain("authenticator (statement_timeout=15000)");
+    expect(st?.evidence).not.toContain("lock_timeout");
+  });
+
+  test("timeout-off findings carry no evidence when no role override exists", () => {
+    const a = base();
+    a.sql.pgSettings = [
+      { name: "idle_in_transaction_session_timeout", setting: "0", unit: null },
+      { name: "statement_timeout", setting: "0", unit: null },
+    ];
+    a.sql.roleConfig = [{ role: "authenticator", rolconfig: ["lock_timeout=15000"] }];
+    const fs = deriveFindings(a);
+    expect(fs.find((x) => x.heuristicId === "idle_in_txn_timeout_off")?.evidence).toBeUndefined();
+    expect(fs.find((x) => x.heuristicId === "statement_timeout_off")?.evidence).toBeUndefined();
+  });
+
   test("disk IOPS headroom flagged from trend rates", () => {
     const a = base();
     a.disk = {

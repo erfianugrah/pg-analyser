@@ -379,6 +379,17 @@ describe("render", () => {
     for (const h of gated) expect(full).toContain(h);
   });
 
+  test("role connection table renders even when no role nears its limit", () => {
+    const a = fixture();
+    a.sql.roleStats = [
+      { role: "authenticator", connections: 14, conn_limit: 60 },
+      { role: "postgres", connections: 1, conn_limit: 60 },
+    ];
+    const html = render(a);
+    expect(html).toContain("Role connection usage");
+    expect(html).toContain("authenticator");
+  });
+
   test("pooler config renders a section when a pooler is configured", () => {
     const a = fixture();
     a.pooler = [
