@@ -888,13 +888,11 @@ export function render(
   // still shows (so "not collected" is visible). Threshold-gated sections only
   // appear when they approach the threshold worth acting on.
   const show = {
-    roles:
-      errored.has("sql:roleStats") ||
-      a.sql.roleStats.some((r) => {
-        const c = Number(r.connections) || 0;
-        const l = Number(r.conn_limit) || 0;
-        return l > 0 && c / l >= THRESHOLDS.roleConnShowFrac;
-      }),
+    // Always shown when collected: the per-role breakdown is the answer to
+    // "where are my connections going" (authenticator = PostgREST,
+    // supabase_storage_admin = Storage, ...), which is load-bearing even when
+    // no role is near its limit. Gated only on absent data / collection error.
+    roles: errored.has("sql:roleStats") || a.sql.roleStats.length > 0,
     txid:
       errored.has("sql:txidWraparound") ||
       a.sql.txidWraparound.some(
@@ -1085,7 +1083,7 @@ ${a.sql.tableIoStats.length ? drill("tableio", "Per-table I/O (cache hit)", "hea
 ${drill("deadtuples", "Dead tuples / autovacuum", "overdue = dead tuples past the table's autovacuum threshold", sec(a.sql.deadTuples, "sql:deadTuples", { mono: ["table"], hide: ["schema"] }))}
 ${a.sql.neverVacuumed.length ? drill("nevervacuumed", "Never vacuumed", "tables autovacuum has never touched (>=10k rows) - no visibility map, stale planner stats", sqlTable(a.sql.neverVacuumed, { mono: ["table"], hide: ["schema"] })) : ""}
 ${a.sql.hotUpdates.length ? drill("hotupdates", "Low HOT-update ratio", "high-update tables where few UPDATEs were HOT (heap-only) - each non-HOT update adds an entry to every index and leaves a dead heap tuple; caused by an updated column that is indexed, or full pages (fillfactor)", sqlTable(a.sql.hotUpdates, { mono: ["table"], hide: ["schema"] })) : ""}
-${show.roles ? drill("roles", "Role connection usage", "active connections vs each role's limit (shown when a role nears its limit)", sec(a.sql.roleStats, "sql:roleStats", { mono: ["role"] })) : ""}
+${show.roles ? drill("roles", "Role connection usage", "active connections vs each role's limit - which service (PostgREST, Storage, pooler) holds the connections", sec(a.sql.roleStats, "sql:roleStats", { mono: ["role"] })) : ""}
 ${
   show.txid
     ? drill(
