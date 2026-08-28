@@ -23,11 +23,11 @@ jobs:
         with:
           bun-version: 1.3.13
       - run: bun install --frozen-lockfile
-      - run: bun build ./src/index.ts --compile --target=${{ matrix.target }} --outfile sbperf-${{ matrix.target }}
+      - run: bun build ./src/index.ts --compile --target=${{ matrix.target }} --outfile pg-analyser-${{ matrix.target }}
       - uses: actions/upload-artifact@v7
         with:
-          name: sbperf-${{ matrix.target }}
-          path: sbperf-${{ matrix.target }}
+          name: pg-analyser-${{ matrix.target }}
+          path: pg-analyser-${{ matrix.target }}
 
   release:
     needs: build
@@ -39,7 +39,7 @@ jobs:
           merge-multiple: true
       - name: Generate SHA256 checksums
         working-directory: dist
-        run: sha256sum sbperf-* > SHA256SUMS
+        run: sha256sum pg-analyser-* > SHA256SUMS
       - uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
