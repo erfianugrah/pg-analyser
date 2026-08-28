@@ -75,6 +75,7 @@ const BASE: Raw = {
     publicSchemaCreate: [],
     replicationSlots: [],
     rlsPolicies: [],
+    rlsPolicyDeps: [],
     connections: [],
     roleStats: [],
     roleConfig: [],
