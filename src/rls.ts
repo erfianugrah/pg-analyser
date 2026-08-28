@@ -37,7 +37,11 @@ export function referencesOwnTable(
   qual?: string | null,
   withCheck?: string | null,
 ): boolean {
-  const expr = `${qual ?? ""} ${withCheck ?? ""}`;
+  // Strip string literals first: 'from my_table' inside a literal is data,
+  // not a table reference, and would false-positive (verified on PG17:
+  // note <> 'from t_lit' deparses with the literal intact).
+  const raw = `${qual ?? ""} ${withCheck ?? ""}`;
+  const expr = raw.replace(/'(?:[^']|'')*'/g, "''");
   if (!/\b(?:from|join|update|into)\b/i.test(expr)) return false;
   const parts = table.split(".");
   const tbl = parts[parts.length - 1];
@@ -45,7 +49,10 @@ export function referencesOwnTable(
   const schema = parts.length > 1 ? parts.slice(0, -1).join(".") : null;
   const namePat = escapeRe(tbl);
   const schemaPat = schema ? `(?:"?${escapeRe(schema)}"?.)?` : "(?:[\\w$]+.)?";
-  return new RegExp(`\\b(?:from|join|update|into)\\s+${schemaPat}"?${namePat}"?\\b`, "i").test(
-    expr,
-  );
+  // The FROM target may open a parenthesised join group (verified PG17:
+  // `FROM (joint j JOIN other o ...)`) - allow (s between keyword and name.
+  return new RegExp(
+    `\\b(?:from|join|update|into)\\s+\\(*\\s*${schemaPat}"?${namePat}"?\\b`,
+    "i",
+  ).test(expr);
 }
