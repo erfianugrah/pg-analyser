@@ -600,6 +600,83 @@ export const HEURISTICS: Record<string, Heuristic> = {
     docUrl: "https://supabase.com/docs/guides/database/postgres/row-level-security#add-indexes",
     reviewed: R,
   },
+  rls_self_reference: {
+    id: "rls_self_reference",
+    plane: "RLS",
+    sql: "CREATE SCHEMA private;\nCREATE FUNCTION private.<helper>() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER AS $$ select exists (select 1 from <table> where <condition>) $$;\n-- then DROP + recreate the policy calling private.<helper>() instead of the subquery",
+    howToVerify:
+      "Run a query that fires the policy as an affected role - it should return rows instead of error 42P17 (infinite recursion detected in policy).",
+    whyItMatters:
+      "A policy whose USING/WITH CHECK subqueries the policy's own table loops on itself and Postgres aborts every query that fires it with 42P17 (infinite recursion detected in policy) - the table is fully broken for the affected roles, not just slow.",
+    remediation:
+      "Move the self-referencing lookup into a SECURITY DEFINER function in a private (non-API-exposed) schema and rewrite the policy to call it. The definer function runs as its owner and bypasses RLS on the table, breaking the recursion.",
+    docUrl: "https://supabase.com/docs/guides/database/postgres/row-level-security",
+    reviewed: R,
+  },
+  rls_cross_table: {
+    id: "rls_cross_table",
+    plane: "RLS",
+    sql: "CREATE FUNCTION private.<helper>(<args>) RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER AS $$ select exists (select 1 from <other_table> where <condition>) $$;",
+    howToVerify:
+      "EXPLAIN a query that fires the policy - the lookup should appear as one function call, not a subplan per row against the referenced table.",
+    whyItMatters:
+      "When a policy subqueries another table directly, that table is read as the invoker, so its own RLS is evaluated too - two policy evaluations per row, and a mutual reference between two tables' policies is an infinite recursion. A SECURITY DEFINER helper runs the lookup once with the definer's privileges and hides the second table's RLS entirely.",
+    remediation:
+      "Wrap the cross-table lookup in a SECURITY DEFINER function in a private schema (SQL language, STABLE) and rewrite the policy to call it. Grant EXECUTE to the client roles but do not expose the schema through the API.",
+    docUrl: "https://supabase.com/docs/guides/database/postgres/row-level-security",
+    reviewed: R,
+  },
+  rls_volatile_function: {
+    id: "rls_volatile_function",
+    plane: "RLS",
+    sql: "ALTER FUNCTION <schema>.<fn>(<args>) STABLE; -- only if the result truly cannot change mid-query",
+    howToVerify:
+      "Check pg_proc.provolatile for the function (should be 's') and EXPLAIN the policy query - the per-row function evaluation should become a single InitPlan.",
+    whyItMatters:
+      "A VOLATILE function in a policy is re-evaluated for every row scanned and can never be cached by the planner (no InitPlan, no index condition), so latency scales with table size instead of result size. Most policy helper functions only read session state or membership tables - they are STABLE by semantics but default to VOLATILE when written.",
+    remediation:
+      "Mark the function STABLE (only if its result genuinely cannot change mid-query), write it in SQL rather than plpgsql so the planner can inline it, and wrap the call in a subselect in the policy ((select my_helper())) so it is evaluated once per query.",
+    docUrl: "https://www.postgresql.org/docs/current/xfunc-volatility.html",
+    reviewed: R,
+  },
+  rls_restrictive_only: {
+    id: "rls_restrictive_only",
+    plane: "RLS",
+    howToVerify:
+      "Query the table as an affected role - it should return rows again once at least one PERMISSIVE policy exists (or the RESTRICTIVE policies are dropped).",
+    whyItMatters:
+      "RESTRICTIVE policies only narrow access that a PERMISSIVE policy already granted; with no permissive policy on the table, every affected role gets zero rows for the targeted commands. The table looks protected but is silently locked out - usually a migration that dropped the permissive policy and left the restrictive one behind.",
+    remediation:
+      "Add at least one PERMISSIVE policy granting the intended access, or drop the RESTRICTIVE policies if the table should stay locked (RLS with no policies is already default-deny).",
+    docUrl: "https://www.postgresql.org/docs/current/sql-createpolicy.html",
+    reviewed: R,
+  },
+  rls_no_role_target: {
+    id: "rls_no_role_target",
+    plane: "RLS",
+    sql: "ALTER POLICY <policy> ON <table> TO authenticated;",
+    howToVerify:
+      "Check pg_policies.roles for the policy - it should list only the intended roles, not {public}.",
+    whyItMatters:
+      "A policy with no TO clause applies to PUBLIC, so the planner evaluates it for every role that touches the table - including roles the condition was never written for (anon, service_role, future custom roles). That is planner overhead on every query and an access grant wider than intended.",
+    remediation:
+      "Add an explicit TO clause to the policy (TO authenticated, or the specific roles) so it is only evaluated for the roles it was written for.",
+    docUrl: "https://supabase.com/docs/guides/database/postgres/row-level-security",
+    reviewed: R,
+  },
+  rls_update_no_withcheck: {
+    id: "rls_update_no_withcheck",
+    plane: "RLS",
+    sql: "ALTER POLICY <policy> ON <table> WITH CHECK (<explicit write condition>);",
+    howToVerify:
+      "Check pg_policies.with_check for the policy - it should show the explicit expression, not NULL.",
+    whyItMatters:
+      "When an UPDATE policy omits WITH CHECK, Postgres silently reuses the USING expression as the write check. The policy then behaves as written today, but a later ALTER POLICY that loosens USING (which rows are visible) quietly loosens what may be written too - an unintended write-permission change hidden in a read-permission edit.",
+    remediation:
+      "Add an explicit WITH CHECK to the policy so the write rule stands on its own and survives later edits to USING.",
+    docUrl: "https://www.postgresql.org/docs/current/sql-createpolicy.html",
+    reviewed: R,
+  },
 
   // --- Connections & pooler ---
   direct_conn_high: {

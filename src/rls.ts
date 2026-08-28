@@ -16,3 +16,36 @@ export function isUnwrappedAuth(qual?: string | null, withCheck?: string | null)
   const wrapped = /\(\s*select\s+auth\./i.test(expr);
   return !wrapped;
 }
+
+function escapeRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * True when a policy expression subqueries the policy's OWN table - the
+ * infinite-recursion pattern (Postgres error 42P17 at runtime). This is NOT
+ * detectable via pg_depend: verified on PG17, a policy's normal deps are all
+ * column-level (refobjsubid = attnum), so a plain own-column compare and an
+ * own-table subquery produce identical dep rows. The deparsed expression is
+ * the discriminator: an own-table subquery prints `FROM org_user org_user_1`
+ * (bare name + auto-alias) or schema-qualified, while a plain column compare
+ * has no FROM at all. Matches FROM/JOIN/UPDATE/INTO followed by the own table
+ * name (optionally quoted, optionally prefixed by its own schema).
+ */
+export function referencesOwnTable(
+  table: string,
+  qual?: string | null,
+  withCheck?: string | null,
+): boolean {
+  const expr = `${qual ?? ""} ${withCheck ?? ""}`;
+  if (!/\b(?:from|join|update|into)\b/i.test(expr)) return false;
+  const parts = table.split(".");
+  const tbl = parts[parts.length - 1];
+  if (!tbl) return false;
+  const schema = parts.length > 1 ? parts.slice(0, -1).join(".") : null;
+  const namePat = escapeRe(tbl);
+  const schemaPat = schema ? `(?:"?${escapeRe(schema)}"?.)?` : "(?:[\\w$]+.)?";
+  return new RegExp(`\\b(?:from|join|update|into)\\s+${schemaPat}"?${namePat}"?\\b`, "i").test(
+    expr,
+  );
+}

@@ -189,12 +189,12 @@ function rlsTable(rows: SqlRow[]): string {
   const body = sorted
     .map(
       (r) => `<tr class="${r.unwrapped_auth === true ? "flag" : ""}">
-      <td class=mono>${esc(r.table)}</td><td>${esc(r.policyname)}</td><td>${esc(r.cmd)}</td>
+      <td class=mono>${esc(r.table)}</td><td>${esc(r.policyname)}</td><td>${esc(r.permissive)}</td><td>${esc(r.cmd)}</td>
       <td>${r.unwrapped_auth === true ? '<span class="badge warn">per-row auth</span>' : '<span class="badge ok">ok</span>'}</td>
     </tr>`,
     )
     .join("");
-  return `<table><thead><tr><th>table</th><th>policy</th><th>cmd</th><th>auth eval</th></tr></thead><tbody>${body}</tbody></table>`;
+  return `<table><thead><tr><th>table</th><th>policy</th><th>kind</th><th>cmd</th><th>auth eval</th></tr></thead><tbody>${body}</tbody></table>`;
 }
 
 function functionsSection(a: Analysis): string {
@@ -1071,6 +1071,7 @@ ${drill("extensions", "Extensions", "installed extensions + versions; pgvector A
 ${drill("unused", "Index usage", "all indexes by size; unused = never scanned, non-constraint", sec(a.sql.indexStats, "sql:indexStats", { mono: ["index", "table"], hide: ["schema"] }))}
 ${drill("dupidx", "Duplicate indexes", "identical index definitions on one table - keep one, drop the rest", errored.has("sql:duplicateIndexes") ? '<p class="empty warn-text">not collected</p>' : a.sql.duplicateIndexes.length ? sqlTable(a.sql.duplicateIndexes, { mono: ["indexes"], hide: ["schema"] }) : "<p class=empty>none found</p>")}
 ${drill("rlsunindexed", "RLS columns without an index", "policy-compared column with no covering index -> seq scan per row check", errored.has("sql:rlsUnindexed") ? '<p class="empty warn-text">not collected</p>' : a.sql.rlsUnindexed.length ? sqlTable(a.sql.rlsUnindexed, { mono: ["table", "column"], hide: ["schema"] }) : "<p class=empty>none found</p>")}
+${drill("rlsdeps", "RLS policy dependencies", "tables/functions each policy's USING/WITH CHECK references (pg_depend); self-reference is detected from the policy text (42P17 recursion), a table dep means no security-definer wrapper", errored.has("sql:rlsPolicyDeps") ? '<p class="empty warn-text">not collected</p>' : a.sql.rlsPolicyDeps.length ? sqlTable(a.sql.rlsPolicyDeps, { mono: ["table", "policy", "dep"], hide: ["permissive", "cmd", "dep_rls", "dep_volatility", "dep_sec_def"] }) : "<p class=empty>no cross-table or function dependencies</p>")}
 ${drill("seqscan", "Sequential-scan heavy", "seq_scan > idx_scan, >1k rows", sec(a.sql.seqScanHeavy, "sql:seqScanHeavy", { mono: ["table"], hide: ["schema"] }))}
 ${a.sql.fkUnindexed.length ? drill("fkunindexed", "Unindexed foreign keys", "FK referencing columns with no covering index - seq scan of the child on every parent UPDATE/DELETE", sqlTable(a.sql.fkUnindexed, { mono: ["table", "constraint", "definition"], hide: ["schema"] })) : ""}
 ${a.sql.invalidIndexes.length ? drill("invalididx", "Invalid indexes", "failed CONCURRENTLY builds - ignored by the planner but still write overhead; drop + rebuild", sqlTable(a.sql.invalidIndexes, { mono: ["index", "table"], hide: ["schema"] })) : ""}
