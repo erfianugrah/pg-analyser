@@ -66,4 +66,30 @@ describe("referencesOwnTable", () => {
       referencesOwnTable("public.my table", '(id in (select id from "my table" t))', null),
     ).toBe(true);
   });
+
+  // All expressions below are verbatim deparsed pg_policies output captured
+  // from a live PG17 instance (edge-case fixtures).
+  test("flags a schema-qualified own-table subquery (app1.orders)", () => {
+    const qual =
+      "(org_id IN ( SELECT orders_1.org_id            +\n    FROM app1.orders orders_1))";
+    expect(referencesOwnTable("app1.orders", qual, null)).toBe(true);
+  });
+
+  test("does NOT flag 'from t' inside a string literal", () => {
+    expect(referencesOwnTable("public.t_lit", "(note <> 'from t_lit'::text)", null)).toBe(false);
+    expect(referencesOwnTable("public.t_lit", "(note = 'join t_lit')", null)).toBe(false);
+    // escaped quote inside the literal still stripped
+    expect(referencesOwnTable("public.t", "(note = 'it''s from t')", null)).toBe(false);
+  });
+
+  test("flags a parenthesised join-form self-reference", () => {
+    const qual =
+      "(EXISTS ( SELECT 1                             +\n    FROM (joint j                               +\n      JOIN other o ON ((o.org_id = j.org_id)))))";
+    expect(referencesOwnTable("public.joint", qual, null)).toBe(true);
+  });
+
+  test("flags a WITH CHECK self-reference (no USING)", () => {
+    const wc = "(NOT (role IN ( SELECT t_wc_1.role             +\n    FROM t_wc t_wc_1)))";
+    expect(referencesOwnTable("public.t_wc", null, wc)).toBe(true);
+  });
 });
