@@ -73,6 +73,7 @@ function base(): Analysis {
       replicationXmin: [],
       antiWraparoundVacuums: [],
       rlsPolicies: [],
+      rlsPolicyDeps: [],
       connections: [],
       roleStats: [],
       roleConfig: [],
@@ -546,6 +547,203 @@ describe("deriveFindings", () => {
     const f = deriveFindings(a).find((x) => x.anchor === "#rls");
     expect(f?.category).toBe("Performance");
     expect(f?.title).toContain("2 RLS");
+  });
+
+  test("RLS self-reference (policy subqueries own table) -> high Security finding", () => {
+    const a = base();
+    // Deparsed pg_policies output captured live on PG17
+    a.sql.rlsPolicies = [
+      {
+        table: "public.org_user",
+        policyname: "p_self",
+        permissive: "PERMISSIVE",
+        cmd: "SELECT",
+        roles: "authenticated",
+        qual: "(org_id IN ( SELECT org_user_1.org_id                   +\n    FROM org_user org_user_1))",
+        unwrapped_auth: false,
+      },
+      {
+        table: "public.org_user",
+        policyname: "p_plain",
+        permissive: "PERMISSIVE",
+        cmd: "SELECT",
+        roles: "authenticated",
+        qual: "(user_id = '00000000-0000-0000-0000-000000000001'::uuid)",
+        unwrapped_auth: false,
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "rls_self_reference");
+    expect(f?.severity).toBe("high");
+    expect(f?.title).toContain("1 RLS");
+    expect(f?.evidence).toContain("public.org_user.p_self");
+    expect(f?.evidence).not.toContain("p_plain");
+  });
+
+  test("RLS cross-table dep: med when referenced table has RLS, low otherwise", () => {
+    const a = base();
+    a.sql.rlsPolicyDeps = [
+      {
+        table: "public.profiles",
+        policy: "p_cross",
+        dep_kind: "table",
+        dep: "public.teams",
+        dep_rls: true,
+      },
+      // security-definer wrapper -> function dep only, must NOT be counted
+      {
+        table: "public.profiles",
+        policy: "p_definer",
+        dep_kind: "function",
+        dep: "private.has_team",
+        dep_volatility: "s",
+        dep_sec_def: true,
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "rls_cross_table");
+    expect(f?.severity).toBe("med");
+    expect(f?.title).toContain("1 RLS");
+    expect(f?.title).toContain("double policy evaluation");
+    // non-RLS referenced table -> low
+    a.sql.rlsPolicyDeps[0] = { ...a.sql.rlsPolicyDeps[0], dep_rls: false };
+    const g = deriveFindings(a).find((x) => x.heuristicId === "rls_cross_table");
+    expect(g?.severity).toBe("low");
+    expect(g?.title).toContain("security definer helper");
+  });
+
+  test("RLS volatile function dep -> med Performance; stable/definer not flagged", () => {
+    const a = base();
+    a.sql.rlsPolicyDeps = [
+      {
+        table: "public.profiles",
+        policy: "p_vol",
+        dep_kind: "function",
+        dep: "public.my_flag",
+        dep_volatility: "v",
+        dep_sec_def: false,
+      },
+      {
+        table: "public.profiles",
+        policy: "p_stable",
+        dep_kind: "function",
+        dep: "public.my_stable",
+        dep_volatility: "s",
+        dep_sec_def: false,
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "rls_volatile_function");
+    expect(f?.severity).toBe("med");
+    expect(f?.title).toContain("1 RLS");
+    expect(f?.evidence).toContain("my_flag");
+    expect(f?.evidence).not.toContain("my_stable");
+  });
+
+  test("RESTRICTIVE-only table -> med Security lockout finding", () => {
+    const a = base();
+    a.sql.rlsPolicies = [
+      {
+        table: "public.restr",
+        policyname: "p_rest",
+        permissive: "RESTRICTIVE",
+        cmd: "DELETE",
+        roles: "authenticated",
+        qual: "false",
+        unwrapped_auth: false,
+      },
+      // a second table with both kinds -> NOT flagged
+      {
+        table: "public.ok",
+        policyname: "p_perm",
+        permissive: "PERMISSIVE",
+        cmd: "SELECT",
+        roles: "authenticated",
+        qual: "true",
+        unwrapped_auth: false,
+      },
+      {
+        table: "public.ok",
+        policyname: "p_restr",
+        permissive: "RESTRICTIVE",
+        cmd: "SELECT",
+        roles: "authenticated",
+        qual: "x = 1",
+        unwrapped_auth: false,
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "rls_restrictive_only");
+    expect(f?.severity).toBe("med");
+    expect(f?.title).toContain("1 table has");
+    expect(f?.evidence).toContain("public.restr");
+    expect(f?.evidence).not.toContain("public.ok");
+  });
+
+  test("policy with no TO clause (roles public) -> low Performance finding", () => {
+    const a = base();
+    a.sql.rlsPolicies = [
+      {
+        table: "public.profiles",
+        policyname: "p_noto",
+        permissive: "PERMISSIVE",
+        cmd: "ALL",
+        roles: "public",
+        qual: "true",
+        with_check: "true",
+        unwrapped_auth: false,
+      },
+      {
+        table: "public.profiles",
+        policyname: "p_scoped",
+        permissive: "PERMISSIVE",
+        cmd: "SELECT",
+        roles: "authenticated",
+        qual: "true",
+        unwrapped_auth: false,
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "rls_no_role_target");
+    expect(f?.severity).toBe("low");
+    expect(f?.evidence).toContain("p_noto");
+    expect(f?.evidence).not.toContain("p_scoped");
+  });
+
+  test("UPDATE/ALL policy without WITH CHECK -> low Security finding", () => {
+    const a = base();
+    a.sql.rlsPolicies = [
+      {
+        table: "public.x",
+        policyname: "p_upd",
+        permissive: "PERMISSIVE",
+        cmd: "UPDATE",
+        roles: "authenticated",
+        qual: "(true)",
+        unwrapped_auth: false,
+      },
+      {
+        table: "public.x",
+        policyname: "p_upd_ok",
+        permissive: "PERMISSIVE",
+        cmd: "UPDATE",
+        roles: "authenticated",
+        qual: "(true)",
+        with_check: "(true)",
+        unwrapped_auth: false,
+      },
+      // SELECT-only policy without with_check is normal -> not flagged
+      {
+        table: "public.x",
+        policyname: "p_sel",
+        permissive: "PERMISSIVE",
+        cmd: "SELECT",
+        roles: "authenticated",
+        qual: "(true)",
+        unwrapped_auth: false,
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "rls_update_no_withcheck");
+    expect(f?.severity).toBe("low");
+    expect(f?.title).toContain("1 RLS");
+    expect(f?.evidence).toContain("p_upd");
+    expect(f?.evidence).not.toContain("p_upd_ok");
+    expect(f?.evidence).not.toContain("p_sel");
   });
 
   test("low cache hit flagged", () => {

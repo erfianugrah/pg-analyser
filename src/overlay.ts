@@ -19,6 +19,7 @@ export const HIDEABLE_SECTIONS = [
   "unused",
   "dupidx",
   "rlsunindexed",
+  "rlsdeps",
   "seqscan",
   "bloat",
   "traffic",
