@@ -1,6 +1,6 @@
 {
   "name": "pg-analyser",
-  "version": "0.10.1",
+  "version": "0.12.0",
   "description": "Postgres performance analysis tool - Supabase-native (PAT-only) or any Postgres via superuser connstring; generates self-contained HTML + PDF reports",
   "license": "MIT",
   "author": "Erfi Anugrah",
