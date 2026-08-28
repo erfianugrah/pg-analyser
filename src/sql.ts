@@ -737,6 +737,7 @@ export const QUERIES = {
     select
       schemaname || '.' || tablename as table,
       policyname,
+      permissive,
       cmd,
       array_to_string(roles, ',') as roles,
       qual,
@@ -744,6 +745,97 @@ export const QUERIES = {
     from pg_policies
     where schemaname not in ('pg_catalog', 'information_schema')
     order by 1, 2`,
+
+  // RLS policy dependency graph (pg_depend normal deps): which OTHER tables
+  // and which functions each policy's USING/WITH CHECK expressions reference.
+  // Powers two findings splinter can't reach (it reads pg_policies text, not
+  // the dependency graph):
+  //   - cross-table reference: dep on another table (the referenced table's
+  //     own RLS applies to the invoker's subquery, so both tables pay; the fix
+  //     is a security definer helper in a private schema)
+  //   - volatile function: dep on a VOLATILE user function (re-evaluates per
+  //     row; can never InitPlan/index-cache)
+  // Self-reference (infinite recursion) is NOT detectable here: empirically
+  // verified on PG17, a policy's 'n' deps are ALL column-level (refobjsubid =
+  // attnum), so a plain own-column compare and an own-table subquery produce
+  // identical dep rows (the only refobjsubid=0 table dep is the AUTO polrelid
+  // one). Self-reference is detected textually from pg_policies.qual instead
+  // (see rls.ts). Also verified: a SECURITY DEFINER wrapper hides the
+  // underlying table dep - the policy then depends only on the function - so a
+  // cross-table dep's existence already means "no definer wrapper".
+  // pg_catalog function deps (casts/operators) are excluded; auth.* helpers are
+  // kept (they are STABLE + non-definer, so the volatile/sec-def columns tell
+  // the story).
+  rlsPolicyDeps: /* sql */ `
+    with pol as (
+      select
+        p.oid as policy_oid,
+        p.polname,
+        p.polrelid,
+        p.polpermissive,
+        p.polcmd,
+        n.nspname as schema,
+        c.relname as tbl
+      from pg_policy p
+      join pg_class c on c.oid = p.polrelid
+      join pg_namespace n on n.oid = c.relnamespace
+      where n.nspname not in ('pg_catalog', 'information_schema')
+    ),
+    deps as (
+      select d.objid as policy_oid, d.refobjid, d.refclassid
+      from pg_depend d
+      where d.classid = 'pg_policy'::regclass
+        and d.deptype = 'n'
+    ),
+    table_refs as (
+      select distinct
+        pol.schema, pol.tbl, pol.polname, pol.polpermissive, pol.polcmd,
+        'table'::text as dep_kind,
+        rn.nspname || '.' || rc.relname as dep,
+        rc.relrowsecurity as dep_rls,
+        null::text as dep_volatility,
+        null::boolean as dep_sec_def
+      from pol
+      join deps on deps.policy_oid = pol.policy_oid
+        and deps.refclassid = 'pg_class'::regclass
+      join pg_class rc on rc.oid = deps.refobjid and rc.relkind in ('r', 'p')
+      join pg_namespace rn on rn.oid = rc.relnamespace
+      where rc.oid <> pol.polrelid
+        and rn.nspname not in ('pg_catalog', 'information_schema')
+    ),
+    func_refs as (
+      select distinct
+        pol.schema, pol.tbl, pol.polname, pol.polpermissive, pol.polcmd,
+        'function'::text as dep_kind,
+        fn.nspname || '.' || pr.proname as dep,
+        null::boolean as dep_rls,
+        pr.provolatile::text as dep_volatility,
+        pr.prosecdef as dep_sec_def
+      from pol
+      join deps on deps.policy_oid = pol.policy_oid
+        and deps.refclassid = 'pg_proc'::regclass
+      join pg_proc pr on pr.oid = deps.refobjid
+      join pg_namespace fn on fn.oid = pr.pronamespace
+      where fn.nspname <> 'pg_catalog'
+    )
+    select
+      schema || '.' || tbl as table,
+      polname as policy,
+      case when polpermissive then 'PERMISSIVE' else 'RESTRICTIVE' end as permissive,
+      case polcmd when 'r' then 'SELECT' when 'a' then 'INSERT' when 'w' then 'UPDATE'
+        when 'd' then 'DELETE' else 'ALL' end as cmd,
+      dep_kind,
+      dep,
+      dep_rls,
+      dep_volatility,
+      dep_sec_def
+    from (
+      select * from table_refs
+      union all
+      select * from func_refs
+    ) x
+    order by 1, 2, dep_kind, dep
+    limit 200`,
 
   storageUsage: /* sql */ `
     select

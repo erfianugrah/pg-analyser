@@ -405,6 +405,27 @@ export const EXCLUSIONS: Record<string, { clause: ExclusionClause; why: string }
     why: "pg_policies + pg_index catalogue analysis; no metric family",
   },
   rls_initplan: { clause: "no-metric", why: "pg_policies catalogue analysis; no metric family" },
+  rls_cross_table: { clause: "no-metric", why: "pg_depend catalogue analysis; no metric family" },
+  rls_no_role_target: {
+    clause: "no-metric",
+    why: "pg_policies catalogue analysis; no metric family",
+  },
+  rls_restrictive_only: {
+    clause: "no-metric",
+    why: "pg_policies catalogue analysis; no metric family",
+  },
+  rls_self_reference: {
+    clause: "no-metric",
+    why: "pg_policies expression analysis; no metric family",
+  },
+  rls_update_no_withcheck: {
+    clause: "no-metric",
+    why: "pg_policies catalogue analysis; no metric family",
+  },
+  rls_volatile_function: {
+    clause: "no-metric",
+    why: "pg_depend catalogue analysis; no metric family",
+  },
   // --- Vacuum plane ---
   autovacuum_freeze_tuning: {
     clause: "no-metric",

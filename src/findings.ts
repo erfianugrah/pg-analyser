@@ -1,8 +1,9 @@
-import { appRows } from "./appschema.ts";
+import { appRows, isAppSchema } from "./appschema.ts";
 import { type DocRef, meta, THRESHOLDS } from "./heuristics.ts";
 import { lintFix } from "./lints.ts";
 import { classifyLockWave } from "./locklog.ts";
 import { minorsBehind } from "./pgversions.ts";
+import { referencesOwnTable } from "./rls.ts";
 import type { Analysis, SqlRow } from "./schemas.ts";
 import {
   detectResizes,
@@ -1155,6 +1156,137 @@ export function deriveFindings(a: Analysis): Finding[] {
       title: `${rlsUnindexed} RLS policy ${rlsUnindexed === 1 ? "column" : "columns"} lack a covering index (seq scan per check)`,
       anchor: "#rlsunindexed",
       ...meta("rls_col_unindexed"),
+    });
+  }
+  // Self-referencing policy: the expression subqueries the policy's own
+  // table -> 42P17 infinite recursion at runtime. Detected from the deparsed
+  // qual text (pg_depend can't tell an own-table subquery from an own-column
+  // compare - verified PG17). No splinter lint covers this.
+  // rlsPolicies/rlsPolicyDeps rows carry a qualified schema.table string, no
+  // schema column - scope with isAppSchema on the prefix (AGENTS.md pattern).
+  const rlsPols = a.sql.rlsPolicies.filter((r) => isAppSchema(String(r.table ?? "").split(".")[0]));
+  const selfRef = rlsPols.filter((r) =>
+    referencesOwnTable(
+      String(r.table ?? ""),
+      r.qual as string | null,
+      r.with_check as string | null,
+    ),
+  );
+  if (selfRef.length > 0) {
+    out.push({
+      severity: "high",
+      category: "Security",
+      title: `${selfRef.length} RLS ${selfRef.length === 1 ? "policy subqueries its own table" : "policies subquery their own table"} (infinite recursion 42P17 at runtime)`,
+      anchor: "#rlsdeps",
+      evidence: selfRef
+        .slice(0, 5)
+        .map((r) => `${r.table}.${r.policyname}`)
+        .join(", "),
+      ...meta("rls_self_reference"),
+    });
+  }
+  // Cross-table policy references without a security-definer wrapper. A
+  // SECURITY DEFINER helper hides the underlying table dep (verified PG17),
+  // so a table dep's existence already means no wrapper. Med when the
+  // referenced table is RLS-enabled (the invoker's subquery pays both tables'
+  // policy evaluation); low otherwise. No splinter lint covers this.
+  const rlsDeps = a.sql.rlsPolicyDeps.filter((r) =>
+    isAppSchema(String(r.table ?? "").split(".")[0]),
+  );
+  const crossRows = rlsDeps.filter((r) => r.dep_kind === "table");
+  if (crossRows.length > 0) {
+    const rlsTargets = crossRows.filter((r) => r.dep_rls === true);
+    const n = rlsTargets.length > 0 ? rlsTargets.length : crossRows.length;
+    const names = [...new Set(crossRows.map((r) => `${r.table}.${r.policy} -> ${r.dep}`))]
+      .slice(0, 5)
+      .join(", ");
+    out.push({
+      severity: rlsTargets.length > 0 ? "med" : "low",
+      category: "Performance",
+      title: `${n} RLS ${n === 1 ? "policy cross-references" : "policies cross-reference"} another table directly${rlsTargets.length > 0 ? " (referenced table has RLS - double policy evaluation)" : " (wrap the lookup in a security definer helper)"}`,
+      anchor: "#rlsdeps",
+      evidence: names,
+      ...meta("rls_cross_table"),
+    });
+  }
+  // Volatile user function in a policy: re-evaluates per row and can never be
+  // InitPlan/index-cached. No splinter lint covers this.
+  const volRows = rlsDeps.filter((r) => r.dep_kind === "function" && r.dep_volatility === "v");
+  if (volRows.length > 0) {
+    out.push({
+      severity: "med",
+      category: "Performance",
+      title: `${volRows.length} RLS ${volRows.length === 1 ? "policy calls a volatile function" : "policies call volatile functions"} (re-evaluated per row, never cached)`,
+      anchor: "#rlsdeps",
+      evidence: [...new Set(volRows.map((r) => `${String(r.dep)} in ${r.table}.${r.policy}`))]
+        .slice(0, 5)
+        .join(", "),
+      ...meta("rls_volatile_function"),
+    });
+  }
+  // RESTRICTIVE policies with no PERMISSIVE policy on the table: restrictive
+  // only narrows what a permissive granted, so restrictive-only is a
+  // default-deny lockout of every affected role. No splinter lint covers it.
+  const permByTable = new Map<string, { perm: number; restr: number }>();
+  for (const r of rlsPols) {
+    const key = String(r.table ?? "");
+    const e = permByTable.get(key) ?? { perm: 0, restr: 0 };
+    if (String(r.permissive).toUpperCase() === "RESTRICTIVE") e.restr += 1;
+    else e.perm += 1;
+    permByTable.set(key, e);
+  }
+  const restrOnly = [...permByTable.entries()].filter(([, e]) => e.restr > 0 && e.perm === 0);
+  if (restrOnly.length > 0) {
+    out.push({
+      severity: "med",
+      category: "Security",
+      title: `${restrOnly.length} ${restrOnly.length === 1 ? "table has" : "tables have"} RESTRICTIVE RLS ${restrOnly.length === 1 ? "policy" : "policies"} but no PERMISSIVE policy (default-deny lockout)`,
+      anchor: "#rls",
+      evidence: restrOnly
+        .slice(0, 5)
+        .map(([t]) => t)
+        .join(", "),
+      ...meta("rls_restrictive_only"),
+    });
+  }
+  // Policy with no TO clause: pg_policies reports roles={public}, so it is
+  // evaluated for every role (planner overhead) and is usually unintentional.
+  const publicRole = rlsPols.filter((r) =>
+    String(r.roles ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .includes("public"),
+  );
+  if (publicRole.length > 0) {
+    out.push({
+      severity: "low",
+      category: "Performance",
+      title: `${publicRole.length} RLS ${publicRole.length === 1 ? "policy has" : "policies have"} no TO clause (targets public - every role)`,
+      anchor: "#rls",
+      evidence: publicRole
+        .slice(0, 5)
+        .map((r) => `${r.table}.${r.policyname}`)
+        .join(", "),
+      ...meta("rls_no_role_target"),
+    });
+  }
+  // UPDATE (or ALL) policy with no explicit WITH CHECK: Postgres silently
+  // reuses USING as the write check, so a later ALTER POLICY of USING quietly
+  // changes write rules too.
+  const noWithCheck = rlsPols.filter(
+    (r) => ["UPDATE", "ALL"].includes(String(r.cmd ?? "").toUpperCase()) && !r.with_check,
+  );
+  if (noWithCheck.length > 0) {
+    out.push({
+      severity: "low",
+      category: "Security",
+      title: `${noWithCheck.length} RLS ${noWithCheck.length === 1 ? "policy" : "policies"} reuses USING as the UPDATE write check (no explicit WITH CHECK)`,
+      anchor: "#rls",
+      evidence: noWithCheck
+        .slice(0, 5)
+        .map((r) => `${r.table}.${r.policyname}`)
+        .join(", "),
+      ...meta("rls_update_no_withcheck"),
     });
   }
   if (

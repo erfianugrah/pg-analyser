@@ -90,6 +90,7 @@ function fixture(overrides: Partial<Analysis> = {}): Analysis {
       rlsPolicies: [
         { table: "public.pastes", policyname: "view own", cmd: "SELECT", unwrapped_auth: true },
       ],
+      rlsPolicyDeps: [],
       connections: [{ state: "idle", connections: 3 }],
       roleStats: [],
       roleConfig: [],
@@ -709,6 +710,7 @@ describe("renderSummary", () => {
         replicationXmin: [],
         antiWraparoundVacuums: [],
         rlsPolicies: [],
+        rlsPolicyDeps: [],
         connections: [],
         roleStats: [],
         roleConfig: [],

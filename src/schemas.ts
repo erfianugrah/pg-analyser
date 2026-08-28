@@ -434,6 +434,10 @@ export const Analysis = z.object({
     // Forced anti-wraparound autovacuum workers in flight. Back-compat default.
     antiWraparoundVacuums: SqlRows.default([]),
     rlsPolicies: SqlRows,
+    // RLS policy dependency graph (pg_depend): which tables/functions each
+    // policy's expressions reference. Powers the self-reference / cross-table /
+    // volatile-function findings. Back-compat default.
+    rlsPolicyDeps: SqlRows.default([]),
     connections: SqlRows,
     roleStats: SqlRows,
     // Role-scoped GUC overrides (pg_roles.rolconfig): whether a role carries a
