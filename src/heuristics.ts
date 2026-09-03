@@ -220,6 +220,13 @@ export const THRESHOLDS = {
   /** bloat_x below this = estimator says "not bloated" (so a huge bytes/row is
    * the estimator's blind spot, not a caught bloat). */
   spacePerRowEstMax: 1.5,
+  /** Dead-row floor for the autovacuum-overdue finding. A tiny table can sit
+   * "past its trigger" with a few dozen dead rows between naptime ticks; that
+   * is autovacuum working normally, not falling behind. */
+  autovacuumOverdueMinDeadRows: 1000,
+  /** Minimum sequential-scan count (in the stats window) before a table is
+   * called seq-scan heavy. A handful of scans is not a workload pattern. */
+  seqScanMinScans: 100,
 } as const;
 
 export type Plane =
@@ -350,9 +357,9 @@ export const HEURISTICS: Record<string, Heuristic> = {
     howToVerify:
       "Run pgstattuple(<table>) (or pgstattuple_approx) for the exact live/dead/free bytes; compare against the pg_stats estimate to see which is right.",
     whyItMatters:
-      "This table's on-disk footprint per live row is far larger than its column widths explain, yet the pg_stats bloat estimator reports it as roughly un-bloated. The estimator is structurally unreliable here (wide TOAST, or dead space it cannot see), so its ~1.0x reading should not be trusted for a downsize/repack decision.",
+      "This table's heap footprint per live row - indexes and TOAST already excluded - is far larger than inline column widths can explain (values wider than ~2 KB are TOASTed out of the heap, and a heap tuple can never span the 8 kB page), yet the pg_stats bloat estimator reports it as roughly un-bloated. The estimator is structurally unreliable here (dead or free space it cannot see, or a badly stale n_live_tup), so its ~1.0x reading should not be trusted for a downsize/repack decision.",
     remediation:
-      "Do not rely on the estimate for this table. ANALYZE, then measure exactly with pgstattuple; if it is dead space, VACUUM (or repack); if it is legitimately wide (large TOAST values), the footprint is real.",
+      "Do not rely on the estimate for this table. ANALYZE (so n_live_tup is current), then measure exactly with pgstattuple; if it is dead or free space, VACUUM (or repack).",
     docUrl: "https://www.postgresql.org/docs/current/pgstattuple.html",
     reviewed: R,
   },
@@ -461,9 +468,9 @@ export const HEURISTICS: Record<string, Heuristic> = {
     howToVerify:
       "After ANALYZE, pg_stat_user_tables.n_live_tup for the affected tables should reflect the real row count (no longer 0), and per-table counter-based signals become trustworthy.",
     whyItMatters:
-      "A table reporting 0 live rows while holding real data means its pg_stat counters were reset (or never populated) - the planner and every counter-derived signal (unused index, dead tuples, cache hit) are working off blank statistics, so their verdicts cannot be trusted until stats are rebuilt.",
+      "A table reporting 0 live rows while holding real data, with no vacuum or analyze on record, has had its pg_stat counters reset (or never populated): a reset clears the counters and the maintenance timestamps together, and any later VACUUM or ANALYZE would have re-counted the live rows. Postgres resets all cumulative statistics whenever it starts from an unclean shutdown - an immediate shutdown, a crash, a base backup or point-in-time recovery - and pg_upgrade before v18 does not carry them over, so a busy table recovers on its next autovacuum while a quiet one sits at zero. Until then the planner and every counter-derived signal (unused index, dead tuples, cache hit) for that table are working off blank statistics. (A table whose rows were all deleted also shows 0 live rows, but keeps its vacuum/analyze timestamps - that is bloat, not stale stats, and is not flagged here.)",
     remediation:
-      "Run ANALYZE (or VACUUM ANALYZE) on the affected tables so per-table counters and planner estimates are repopulated; the counters were reset recently.",
+      "Run ANALYZE (or VACUUM ANALYZE) on the affected tables so per-table counters and planner estimates are repopulated.",
     sql: "VACUUM (ANALYZE) <schema>.<table>;",
     docUrl: "https://www.postgresql.org/docs/current/monitoring-stats.html",
     reviewed: R,
@@ -607,9 +614,22 @@ export const HEURISTICS: Record<string, Heuristic> = {
     howToVerify:
       "Run a query that fires the policy as an affected role - it should return rows instead of error 42P17 (infinite recursion detected in policy).",
     whyItMatters:
-      "A policy whose USING/WITH CHECK subqueries the policy's own table loops on itself and Postgres aborts every query that fires it with 42P17 (infinite recursion detected in policy) - the table is fully broken for the affected roles, not just slow.",
+      "A policy whose USING/WITH CHECK subqueries the policy's own table loops on itself and Postgres aborts every query that fires it with 42P17 (infinite recursion detected in policy) - the table is fully broken for the affected roles, not just slow. This fires when the policy applies to the inner SELECT itself (FOR SELECT or FOR ALL, either clause), or when a write-only policy self-references and any SELECT policy on the same table also contains a subquery (verified on PG 17).",
     remediation:
       "Move the self-referencing lookup into a SECURITY DEFINER function in a private (non-API-exposed) schema and rewrite the policy to call it. The definer function runs as its owner and bypasses RLS on the table, breaking the recursion.",
+    docUrl: "https://supabase.com/docs/guides/database/postgres/row-level-security",
+    reviewed: R,
+  },
+  rls_self_reference_latent: {
+    id: "rls_self_reference_latent",
+    plane: "RLS",
+    sql: "-- for a duplicate check, a constraint is the right tool:\nALTER TABLE <schema>.<table> ADD CONSTRAINT <name> UNIQUE (<column>);\n-- for an ownership/lookup check, a definer helper in a private schema:\nCREATE FUNCTION private.<helper>(<args>) RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER AS $$ select exists (select 1 from <table> where <condition>) $$;",
+    howToVerify:
+      "As the client role, attempt the write the check is meant to block (for example a duplicate row) - it should be rejected, not silently accepted; and the policy text should no longer subquery its own table.",
+    whyItMatters:
+      "The policy subqueries its own table but only fires on INSERT/UPDATE/DELETE, and no SELECT policy on the table contains a subquery, so Postgres does not recurse today (verified on PG 17). Two problems remain. The inner lookup runs as the invoking role under the table's SELECT policies: with no SELECT policy it sees zero rows, so a NOT EXISTS duplicate check always passes and an EXISTS ownership check always fails - the guard is a silent no-op. And the moment any SELECT policy on the table gains a subquery, every write through this policy starts failing with 42P17.",
+    remediation:
+      "Replace the self-lookup: use a UNIQUE constraint for duplicate checks, or move the lookup into a SECURITY DEFINER function in a private (non-API-exposed) schema and call it from the policy, so the check sees the real rows and cannot recurse.",
     docUrl: "https://supabase.com/docs/guides/database/postgres/row-level-security",
     reviewed: R,
   },
@@ -824,7 +844,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
     howToVerify:
       "After a manual VACUUM ANALYZE, confirm pg_stat_user_tables.last_vacuum / last_analyze are set and the planner has fresh row estimates.",
     whyItMatters:
-      "A table autovacuum has never touched has never had its visibility map or statistics maintained: index-only scans cannot skip heap fetches, and the planner costs queries off stale/absent estimates - both silently slow. It usually means the table only ever grows (insert-only) so the dead-tuple trigger never fires, while analyze still matters.",
+      "A table with no vacuum on record has had no visibility map or statistics maintenance for as long as the cumulative-stats window reaches (a stats reset - unclean restart, recovery, explicit reset - clears every vacuum timestamp, so 'on record' is bounded by that window, not the table's lifetime): index-only scans cannot skip heap fetches, and the planner costs queries off stale/absent estimates - both silently slow. It usually means the table only ever grows (insert-only) so the dead-tuple trigger never fires, while analyze still matters.",
     remediation:
       "Run VACUUM (ANALYZE) once to seed the visibility map + stats. For insert-only tables, set autovacuum_vacuum_insert_scale_factor / _threshold so autovacuum maintains them going forward.",
     docUrl: "https://www.postgresql.org/docs/current/routine-vacuuming.html",
@@ -1819,7 +1839,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
     howToVerify:
       "EXPLAIN (ANALYZE, BUFFERS) the query before and after creating the index - total cost and runtime should drop (index_advisor's own total_cost_after is below total_cost_before). Re-running the advisor should then return no suggestion for it.",
     whyItMatters:
-      "Supabase's own index_advisor (backed by hypopg hypothetical indexes) found concrete indexes that lower this heavy statement's planner cost. Unlike the generic 'add an index' guidance, this is the exact CREATE INDEX DDL, derived from the real query plan - the highest-confidence, lowest-effort tuning win.",
+      "Supabase's own index_advisor (backed by hypopg hypothetical indexes) found concrete indexes that lower this heavy statement's planner cost. Unlike the generic 'add an index' guidance, this is the exact CREATE INDEX DDL, derived from the real query plan - the highest-confidence, lowest-effort tuning win. Weigh it against the statement's share of database time (shown with the query): hypopg will also shave cost off a sub-millisecond lookup, and that is not worth an index. Suggestions targeting Supabase-managed schemas (auth, storage, realtime) are not shown - those tables are not yours to index.",
     remediation:
       "Review each suggested index and create it with CONCURRENTLY (index_advisor emits a plain CREATE INDEX; add CONCURRENTLY so it doesn't lock writes on a live table): CREATE INDEX CONCURRENTLY ON <table> (<col>). index_advisor only suggests single-column B-tree indexes - if several are suggested on one table, a single composite index ordered by selectivity is often better, so confirm with EXPLAIN before committing to all of them.",
     docUrl: "https://supabase.com/docs/guides/database/extensions/index_advisor",

@@ -1041,7 +1041,12 @@ export function deriveFindings(a: Analysis): Finding[] {
       ...meta("rls_initplan"),
     });
   }
-  const seqScanRows = appRows(a.sql.seqScanHeavy);
+  // Scan-count floor: the SQL ranks by seq_scan desc with no minimum, so a
+  // table read ten times in the whole stats window would otherwise be called
+  // "heavy". The drill-down still shows every row.
+  const seqScanRows = appRows(a.sql.seqScanHeavy).filter(
+    (r) => num(r.seq_scan) >= THRESHOLDS.seqScanMinScans,
+  );
   const seqScan = seqScanRows.length;
   if (seqScan > 0) {
     out.push({
@@ -1165,13 +1170,35 @@ export function deriveFindings(a: Analysis): Finding[] {
   // rlsPolicies/rlsPolicyDeps rows carry a qualified schema.table string, no
   // schema column - scope with isAppSchema on the prefix (AGENTS.md pattern).
   const rlsPols = a.sql.rlsPolicies.filter((r) => isAppSchema(String(r.table ?? "").split(".")[0]));
-  const selfRef = rlsPols.filter((r) =>
+  const selfRefAll = rlsPols.filter((r) =>
     referencesOwnTable(
       String(r.table ?? ""),
       r.qual as string | null,
       r.with_check as string | null,
     ),
   );
+  // When does a self-reference actually recurse? Verified on PG 17.11 by
+  // running each shape: the rewriter re-enters the table while its own RLS
+  // expansion is in flight, and errors only if that re-entered expansion again
+  // carries a subquery. So: (a) the policy applies to the inner SELECT itself -
+  // cmd SELECT or ALL, either clause (an ALL policy's WITH CHECK self-ref fails
+  // on INSERT too); or (b) it is write-only (INSERT/UPDATE/DELETE) and some
+  // SELECT/ALL policy on the same table contains ANY subquery (even to another
+  // table). A write-only self-reference whose table has only subquery-free
+  // SELECT policies - or none - runs fine; with none, the inner lookup sees
+  // zero rows (default deny) and the check is a silent no-op. Latent -> low.
+  const stripLits = (s: unknown): string => String(s ?? "").replace(/'(?:[^']|'')*'/g, "''");
+  const hasSubquery = (r: SqlRow): boolean =>
+    /\bselect\b/i.test(`${stripLits(r.qual)} ${stripLits(r.with_check)}`);
+  const isReadCmd = (r: SqlRow): boolean => /^(select|all)$/i.test(String(r.cmd ?? "").trim());
+  const tablesWithReadPolicy = new Set(rlsPols.filter(isReadCmd).map((r) => String(r.table)));
+  const tablesWithReadSubquery = new Set(
+    rlsPols.filter((r) => isReadCmd(r) && hasSubquery(r)).map((r) => String(r.table)),
+  );
+  const selfRef = selfRefAll.filter(
+    (r) => isReadCmd(r) || tablesWithReadSubquery.has(String(r.table)),
+  );
+  const selfRefLatent = selfRefAll.filter((r) => !selfRef.includes(r));
   if (selfRef.length > 0) {
     out.push({
       severity: "high",
@@ -1183,6 +1210,30 @@ export function deriveFindings(a: Analysis): Finding[] {
         .map((r) => `${r.table}.${r.policyname}`)
         .join(", "),
       ...meta("rls_self_reference"),
+    });
+  }
+  if (selfRefLatent.length > 0) {
+    const noRead = selfRefLatent.filter((r) => !tablesWithReadPolicy.has(String(r.table)));
+    const n = selfRefLatent.length;
+    const tail =
+      noRead.length === n
+        ? "no SELECT policy on the table, so the lookup sees no rows and the check is a no-op"
+        : noRead.length > 0
+          ? `${noRead.length} of them see no rows (no SELECT policy) and are a no-op; all break with 42P17 if a SELECT policy gains a subquery`
+          : "runs today, but breaks with 42P17 the moment a SELECT policy on the table gains a subquery";
+    out.push({
+      severity: "low",
+      category: "Security",
+      title: `${n} write-only RLS ${n === 1 ? "policy subqueries" : "policies subquery"} ${n === 1 ? "its" : "their"} own table (${tail})`,
+      anchor: "#rlsdeps",
+      evidence: selfRefLatent
+        .slice(0, 5)
+        .map(
+          (r) =>
+            `${r.table}.${r.policyname} (${String(r.cmd ?? "").toUpperCase()}${tablesWithReadPolicy.has(String(r.table)) ? "" : "; no SELECT policy - inner lookup returns nothing"})`,
+        )
+        .join(", "),
+      ...meta("rls_self_reference_latent"),
     });
   }
   // Cross-table policy references without a security-definer wrapper. A
@@ -1401,7 +1452,18 @@ export function deriveFindings(a: Analysis): Finding[] {
       }
     }
   }
-  const overdue = a.sql.deadTuples.filter((r) => r.overdue === "yes").length;
+  // App-scoped with a dead-row floor: a managed table (realtime.subscription,
+  // cron.job_run_details) is not user-actionable, and a tiny table "past its
+  // trigger" by a few dozen rows between naptime ticks is autovacuum working,
+  // not falling behind. The drill-down still lists every overdue row.
+  const schemaOf = (r: SqlRow): unknown =>
+    r.schema ?? (String(r.table ?? "").includes(".") ? String(r.table).split(".")[0] : undefined);
+  const overdue = a.sql.deadTuples.filter(
+    (r) =>
+      r.overdue === "yes" &&
+      isAppSchema(schemaOf(r)) &&
+      num(r.dead_rows) >= THRESHOLDS.autovacuumOverdueMinDeadRows,
+  ).length;
   if (overdue > 0) {
     out.push({
       severity: "med",
@@ -1412,14 +1474,28 @@ export function deriveFindings(a: Analysis): Finding[] {
       ...meta("autovacuum_overdue"),
     });
   }
-  // Tables never (auto)vacuumed - no visibility map / stats maintenance.
+  // Tables with no (auto)vacuum on record - no visibility map / stats
+  // maintenance. "On record" is bounded by the cumulative-stats window: an
+  // unclean restart wipes every last_vacuum timestamp (measured: a 10-day-old
+  // window made 20+ busy tables read as "never vacuumed"), so the title names
+  // the window when it is known instead of claiming "never".
   const neverVac = appRows(a.sql.neverVacuumed).length;
   if (neverVac > 0) {
+    const winDays = statsWindowDays(a);
+    const window =
+      winDays == null
+        ? "never been vacuumed"
+        : `no vacuum on record in the ~${winDays < 1 ? `${Math.round(winDays * 24)}h` : `${Math.round(winDays)}d`} stats window`;
     out.push({
       severity: "low",
       category: "Capacity",
-      title: `${countCapped(a.sql.neverVacuumed.length, neverVac)} ${neverVac === 1 ? "table has" : "tables have"} never been vacuumed (stale stats / no visibility map)`,
+      title: `${countCapped(a.sql.neverVacuumed.length, neverVac)} ${neverVac === 1 ? "table has" : "tables have"} ${window} (stale stats / no visibility map)`,
       anchor: "#nevervacuumed",
+      ...(winDays != null
+        ? {
+            evidence: `Cumulative statistics started ${winDays.toFixed(1)} days ago (pg_stat reset - an unclean restart, recovery, or explicit reset clears every table's vacuum/analyze timestamps), so "no vacuum on record" means none since then, not never.`,
+          }
+        : {}),
       ...meta("never_autovacuumed"),
     });
   }
@@ -1891,8 +1967,19 @@ export function deriveFindings(a: Analysis): Finding[] {
   // disk means its pg_stat counters were reset (size + pg_statistic survive a
   // reset), so every counter-derived signal for it is blind. This is a data
   // CONTRADICTION, not emptiness - worth surfacing before trusting the numbers.
+  // A table whose rows were all DELETEd also reports 0 live rows, but it keeps
+  // its vacuum/analyze timestamps - and any VACUUM or ANALYZE re-counts
+  // n_live_tup, so 0 live rows WITH maintenance on record is a genuinely empty
+  // table (bloat, covered by the bloat / dead-tuple signals). A reset clears the
+  // timestamps along with the counters (verified PG17; a queue table that was
+  // emptied and vacuumed keeps them), so "reset" is only claimed when no
+  // vacuum or analyze is on record at all. Rows from a fixture without the
+  // `maintained` column fall through to the reset reading.
   const staleTables = a.sql.biggestTables.filter(
-    (r) => num(r.live_rows) === 0 && num(r.total_bytes) >= THRESHOLDS.staleStatsMinBytes,
+    (r) =>
+      num(r.live_rows) === 0 &&
+      num(r.total_bytes) >= THRESHOLDS.staleStatsMinBytes &&
+      r.maintained !== true,
   );
   if (staleTables.length > 0) {
     const worst = staleTables[0] as SqlRow;
@@ -1901,7 +1988,7 @@ export function deriveFindings(a: Analysis): Finding[] {
       category: "Performance",
       title: `Table statistics look stale (${staleTables.length} ${staleTables.length === 1 ? "table shows" : "tables show"} 0 live rows but ${staleTables.length === 1 ? "holds" : "hold"} data)`,
       anchor: "#tables",
-      evidence: `Largest: ${String(worst.table)} at ${String(worst.total_size)} with 0 reported live rows - pg_stat counters were likely reset recently.`,
+      evidence: `Largest: ${String(worst.table)} at ${String(worst.total_size)} with 0 reported live rows${worst.dead_rows != null ? ` and ${num(worst.dead_rows).toLocaleString()} dead` : ""}, no vacuum or analyze on record${worst.est_rows != null ? `, while the catalog estimate (pg_class.reltuples) is ${num(worst.est_rows) < 0 ? "unknown (never vacuumed or analyzed)" : num(worst.est_rows).toLocaleString()}` : ""} - the signature of pg_stat counters that were reset (or never populated) with no vacuum or analyze since to re-count them${statsWindowDays(a) != null ? ` (cumulative statistics started ${statsWindowDays(a)?.toFixed(1)} days ago)` : ""}. Whether the table is also genuinely empty cannot be told from counters - ANALYZE it.`,
       ...meta("stale_table_stats"),
     });
   }
@@ -1922,16 +2009,22 @@ export function deriveFindings(a: Analysis): Finding[] {
       ...meta("cron_history_unpruned"),
     });
   }
-  // Bloat-estimator blind spot: an app table whose bytes-per-row is far larger
-  // than column widths explain, yet the pg_stats estimator still calls it
-  // ~un-bloated - the estimate is structurally untrustworthy there. Cross-check
-  // and nudge to pgstattuple. Skipped when the estimator DID flag bloat (it
-  // caught it) so this only fires on the blind spot. Capped worst-first.
+  // Bloat-estimator blind spot: an app table whose HEAP bytes-per-row is far
+  // larger than inline column widths can explain, yet the pg_stats estimator
+  // still calls it ~un-bloated - the estimate is structurally untrustworthy
+  // there. Indexes and TOAST are subtracted first: a table of 768-dim vectors
+  // legitimately carries ~3 KB/row in TOAST plus an ANN index that rivals the
+  // heap, and biggestTables already reports both, so counting them here would
+  // send the reader to pgstattuple for a footprint the report can explain.
+  // Cross-check and nudge to pgstattuple. Skipped when the estimator DID flag
+  // bloat (it caught it) so this only fires on the blind spot. Capped worst-first.
   const bloatByName = new Map(a.sql.bloat.map((r) => [String(r.name), num(r.bloat_x)]));
+  const heapBytesOf = (r: SqlRow): number =>
+    Math.max(0, num(r.total_bytes) - num(r.index_bytes) - num(r.toast_bytes));
   const inconsistent = appRows(a.sql.biggestTables)
     .filter((r) => {
       const rows = num(r.live_rows);
-      const bytes = num(r.total_bytes);
+      const bytes = heapBytesOf(r);
       if (rows < THRESHOLDS.spacePerRowMinRows || bytes < THRESHOLDS.spacePerRowMinBytes)
         return false;
       const est = bloatByName.get(String(r.table));
@@ -1940,15 +2033,15 @@ export function deriveFindings(a: Analysis): Finding[] {
         (est == null || est < THRESHOLDS.spacePerRowEstMax)
       );
     })
-    .sort((x, y) => num(y.total_bytes) - num(x.total_bytes))
+    .sort((x, y) => heapBytesOf(y) - heapBytesOf(x))
     .slice(0, 3);
   if (inconsistent.length) {
     const worst = inconsistent[0] as SqlRow;
-    const perRowKb = Math.round(num(worst.total_bytes) / num(worst.live_rows) / 1024);
+    const perRowKb = Math.round(heapBytesOf(worst) / num(worst.live_rows) / 1024);
     out.push({
       severity: "low",
       category: "Capacity",
-      title: `${inconsistent.length} table${inconsistent.length === 1 ? "" : "s"} with a footprint the bloat estimate can't explain (worst ${String(worst.table)}: ~${perRowKb} KB/row, estimator says un-bloated)`,
+      title: `${inconsistent.length} table${inconsistent.length === 1 ? "" : "s"} with a heap footprint the bloat estimate can't explain (worst ${String(worst.table)}: ~${perRowKb} KB/row of heap excluding indexes + TOAST, estimator says un-bloated)`,
       anchor: "#tables",
       ...meta("bloat_estimate_suspect"),
     });
@@ -2063,10 +2156,18 @@ export function deriveFindings(a: Analysis): Finding[] {
     if (majorFaults >= THRESHOLDS.majorFaultsPerSec)
       bits.push(`${Math.round(majorFaults)} major faults/s`);
     if (swapIn >= THRESHOLDS.swapInPagesPerSec) bits.push(`${Math.round(swapIn)} swap-ins/s`);
+    // These are window AVERAGES (the current sample can be near zero while the
+    // 30d mean is high), so say so - the tile next to this finding shows "now".
+    const pagingTs = (a.trends.find((t) => t.title === "Major page faults/s")?.points ?? []).map(
+      (p) => p.t,
+    );
+    const pagingSpanDays =
+      pagingTs.length > 1 ? (Math.max(...pagingTs) - Math.min(...pagingTs)) / 86400 : 0;
+    const pagingWindow = pagingSpanDays >= 1 ? ` over ${Math.round(pagingSpanDays)}d` : "";
     out.push({
       severity: "med",
       category: "Capacity",
-      title: `Memory pressure: working set paging to disk (${bits.join(", ")})`,
+      title: `Memory pressure: working set paging to disk (avg ${bits.join(", ")}${pagingWindow})`,
       anchor: "#trends",
       ...meta("mem_pressure_paging"),
     });
@@ -2797,16 +2898,33 @@ export function deriveFindings(a: Analysis): Finding[] {
   // Cap to the top few to avoid flooding a report with a wall of DDL.
   const toArr = (v: unknown): string[] =>
     Array.isArray(v) ? v.map(String) : typeof v === "string" && v.length > 0 ? [v] : [];
+  // Skip DDL that targets a managed schema (auth., storage., realtime., ...):
+  // the user does not own those tables, platform migrations may fight a
+  // hand-added index, and the statements there are typically sub-ms lookups
+  // that hypopg can always shave a little cost off. Unqualified DDL is kept.
+  const ddlSchema = (s: string): string | undefined =>
+    /\bon\s+(?:only\s+)?(?:"([^"]+)"|([A-Za-z_][\w$]*))\s*\./i.exec(s)?.slice(1).find(Boolean);
   for (const r of (a.sql.indexAdvisor ?? []).slice(0, 5)) {
-    const stmts = toArr(r.index_statements).filter((s) => /create index/i.test(s));
+    const stmts = toArr(r.index_statements)
+      .filter((s) => /create index/i.test(s))
+      .filter((s) => {
+        const schema = ddlSchema(s);
+        return schema == null || isAppSchema(schema);
+      });
     if (stmts.length === 0) continue;
     const ddl = stmts.join(";\n");
+    const calls = r.calls != null ? num(r.calls) : null;
+    const meanMs = r.mean_ms != null ? num(r.mean_ms) : null;
+    const shape =
+      calls != null && meanMs != null
+        ? ` (${calls.toLocaleString()} calls, ${meanMs.toFixed(2)} ms mean in the stats window)`
+        : "";
     out.push({
       severity: "med",
       category: "Performance",
       title: `index_advisor suggests ${stmts.length} index${stmts.length === 1 ? "" : "es"} for a heavy query`,
       anchor: "#outliers",
-      evidence: `${ddl}\n\nFor query: ${String(r.query ?? "")}`,
+      evidence: `${ddl}\n\nFor query${shape}: ${String(r.query ?? "")}`,
       ...meta("index_advisor_rec"),
     });
   }
@@ -3055,7 +3173,8 @@ export function derivePositives(a: Analysis): Positive[] {
     ) {
       out.push({
         category: "Capacity",
-        title: "Continuous WAL archiving is active (archive_mode=on) - PITR-style recoverability",
+        title:
+          "Continuous WAL archiving is active (archive_mode=on, archiver healthy) - the WAL shipping PITR relies on; the PITR add-on itself is only visible with a PAT",
       });
     }
   }
