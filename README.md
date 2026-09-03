@@ -730,6 +730,19 @@ a sweep.
 | Report shows a degraded/empty state                  | Project is paused or unreachable - empty sections mean "not collected", not "clean". The collection-notes section lists why.         |
 | A sweep is too quiet / you want per-plane detail     | Set `PG_ANALYSER_LOG_LEVEL=info` (or `debug`); a multi-project sweep quiets routine INFO by default (see Logging).                        |
 
+## Reading counter-derived findings
+
+Anything derived from `pg_stat_*` counters (unused indexes, dead tuples,
+cache hit, "no vacuum on record", "0 live rows") is relative to the
+**cumulative-statistics window**, shown in the report's Infrastructure panel
+as "Stats window". Postgres resets every counter and every vacuum/analyze
+timestamp when it starts from an unclean shutdown, a crash or a recovery, so a
+10-day window means "since then", not "ever". Titles say so where it matters
+("no vacuum on record in the ~10d stats window"), and findings carry a
+low-confidence caveat below a 7-day window. The report footer names the
+pg-analyser version that produced it; if it is behind the tree you are
+reading, rebuild before attributing a finding to a rule.
+
 ## Staying in sync with the API
 
 pg-analyser curates its own set of Management API endpoints (PAT-only, no DB
@@ -763,6 +776,8 @@ bun run check:api    # upstream Management API drift check (live spec, pass/fail
 bun run check:inspect # advisory: warn when upstream CLI inspect SQL drifts from our derived baseline
 bun run check:lints  # advisory: warn when splinter lints drift from src/lints.ts fix catalog
 bun run check:schemas # advisory: warn when the app-schema denylist drifts from splinter.sql
+bun run check:pgversions # advisory: warn when src/pgversions.ts lags endoflife.date (PG_ANALYSER_PGVER_UPDATE=1 prints the refreshed table; apply it by hand)
+bun run check:alerts  # advisory: Prometheus rule pack vs the threshold catalogue
 bun run build        # standalone binary
 ```
 
