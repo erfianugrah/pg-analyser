@@ -3184,9 +3184,7 @@ describe("rls_self_reference: only the shapes that actually recurse are HIGH (ve
 
   test("INSERT-only self-reference with NO select policy -> latent LOW, says the check is a no-op", () => {
     const a = base();
-    a.sql.rlsPolicies = [
-      pol("public.signups", "anyone can sign up", "INSERT", null, selfWc),
-    ];
+    a.sql.rlsPolicies = [pol("public.signups", "anyone can sign up", "INSERT", null, selfWc)];
     const f = deriveFindings(a);
     expect(f.some((x) => x.heuristicId === "rls_self_reference")).toBe(false);
     const l = f.find((x) => x.heuristicId === "rls_self_reference_latent");
