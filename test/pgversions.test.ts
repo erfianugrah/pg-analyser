@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { minorsBehind, parsePgVersion } from "../src/pgversions.ts";
+import { minorsBehind, PG_LATEST_MINOR, parsePgVersion } from "../src/pgversions.ts";
 
 describe("parsePgVersion", () => {
   test("parses modern version strings incl. the Ubuntu suffix", () => {
@@ -16,11 +16,13 @@ describe("minorsBehind", () => {
     const lag = minorsBehind("15.1 (Ubuntu 15.1-1.pgdg20.04+1)");
     expect(lag?.major).toBe("15");
     expect(lag?.current).toBe("15.1");
-    // 15.1 vs the vendored 15.18 latest -> 17 behind (asserts direction + math)
+    // 15.1 vs the vendored latest 15.x -> well over 10 behind (asserts direction + math)
     expect(lag?.behind).toBeGreaterThan(10);
+    expect(lag?.latest).toBe(PG_LATEST_MINOR["15"]?.latest);
   });
   test("null when current (or ahead)", () => {
-    expect(minorsBehind("15.18")).toBeNull();
+    // Derived from the vendored table so refreshing it never breaks this test.
+    expect(minorsBehind(PG_LATEST_MINOR["15"]?.latest ?? "")).toBeNull();
     expect(minorsBehind("15.99")).toBeNull();
   });
   test("null for a major not in the table", () => {

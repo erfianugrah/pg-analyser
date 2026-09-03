@@ -188,7 +188,14 @@ describe("stale-stats contradiction finding", () => {
   test("0 live rows on a multi-MB table flags stale statistics", () => {
     const a = base();
     a.sql.biggestTables = [
-      { table: "public.orders", total_size: "17 GB", total_bytes: 17 * 1024 ** 3, live_rows: 0 },
+      {
+        table: "public.orders",
+        total_size: "17 GB",
+        total_bytes: 17 * 1024 ** 3,
+        live_rows: 0,
+        dead_rows: 0,
+        est_rows: 120_000_000, // catalog still knows the rows exist
+      },
     ];
     const f = deriveFindings(a).find((x) => x.heuristicId === "stale_table_stats");
     expect(f?.title).toContain("Table statistics look stale");
@@ -2951,5 +2958,355 @@ describe("checkpoint + jit counters (version-gated planes)", () => {
       { queryid: "5", calls: 2, total_ms: 50, jit_ms: 40, pct_jit: 80, query: "SELECT tiny" },
     ];
     expect(deriveFindings(a).some((x) => x.heuristicId === "jit_overhead")).toBe(false);
+  });
+});
+
+describe("report-review fixes (2026-09-03): rules that overreached their evidence", () => {
+  test("stale_table_stats: an emptied table (0 live rows, vacuum/analyze on record) is NOT called a stats reset", () => {
+    const a = base();
+    // Bulk-deleted queue table: autovacuum has run, so n_live_tup was re-counted
+    // to 0 by VACUUM itself - that is emptiness + bloat, not blank counters.
+    a.sql.biggestTables = [
+      {
+        schema: "net",
+        table: "net._http_response",
+        total_size: "146 MB",
+        total_bytes: 152_223_744,
+        live_rows: 0,
+        dead_rows: 0,
+        est_rows: 2946, // reltuples is an extrapolation after a page-skipping vacuum
+        maintained: true,
+      },
+    ];
+    expect(deriveFindings(a).some((x) => x.heuristicId === "stale_table_stats")).toBe(false);
+  });
+
+  test("stale_table_stats: 0 live rows with NO vacuum/analyze on record fires, evidence carries dead rows + reltuples", () => {
+    const a = base();
+    a.sql.biggestTables = [
+      {
+        schema: "public",
+        table: "public.ledger",
+        total_size: "184 MB",
+        total_bytes: 192_856_064,
+        live_rows: 0,
+        dead_rows: 345, // DML resumed after the reset - does not disqualify
+        est_rows: 334_480,
+        maintained: false,
+      },
+    ];
+    let f = deriveFindings(a).find((x) => x.heuristicId === "stale_table_stats");
+    expect(f?.title).toContain("1 table shows 0 live rows");
+    expect(f?.evidence).toContain("345 dead");
+    expect(f?.evidence).toContain("no vacuum or analyze on record");
+    expect(f?.evidence).toContain("pg_class.reltuples) is 334,480");
+    expect(f?.evidence).not.toContain("recently");
+    (a.sql.biggestTables[0] as Record<string, unknown>).est_rows = -1;
+    f = deriveFindings(a).find((x) => x.heuristicId === "stale_table_stats");
+    expect(f?.evidence).toContain("unknown (never vacuumed or analyzed)");
+  });
+
+  test("bloat_estimate_suspect: TOAST + index bytes are excluded - a vector table is explained, not suspect", () => {
+    const a = base();
+    a.sql.dbSizeBytes = 500_000_000_000;
+    // Real shape from a 768-dim pgvector table: 4.7 GB total = 2.3 GB TOAST +
+    // 2.3 GB ivfflat index + ~131 MB heap over 558k rows (~246 B/row of heap).
+    a.sql.biggestTables = [
+      {
+        schema: "public",
+        table: "public.documents",
+        total_size: "4774 MB",
+        total_bytes: 5_005_606_912,
+        index_bytes: 2_428_960_768,
+        toast_bytes: 2_438_840_320,
+        live_rows: 558_809,
+      },
+    ];
+    a.sql.bloat = [{ name: "public.documents", bloat_x: 1.0, waste_bytes: 0 }];
+    expect(deriveFindings(a).some((x) => x.heuristicId === "bloat_estimate_suspect")).toBe(false);
+  });
+
+  test("bloat_estimate_suspect: a genuinely fat heap (no TOAST, small indexes) still fires, quoting heap KB/row", () => {
+    const a = base();
+    a.sql.dbSizeBytes = 500_000_000_000;
+    a.sql.biggestTables = [
+      {
+        schema: "public",
+        table: "public.fat",
+        total_size: "10 GB",
+        total_bytes: 10_000_000_000,
+        index_bytes: 100_000_000,
+        toast_bytes: 8192,
+        live_rows: 100_000, // ~99 KB/row of heap
+      },
+    ];
+    a.sql.bloat = [{ name: "public.fat", bloat_x: 1.1, waste_bytes: 0 }];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "bloat_estimate_suspect");
+    expect(f?.title).toContain("public.fat");
+    expect(f?.title).toContain("of heap excluding indexes + TOAST");
+  });
+
+  test("autovacuum_overdue: a managed-schema table or a tiny dead-row count does not fire", () => {
+    const a = base();
+    // realtime.subscription: 105 dead rows past a 78-row trigger, vacuumed this minute.
+    a.sql.deadTuples = [
+      {
+        schema: "realtime",
+        table: "realtime.subscription",
+        live_rows: 107,
+        dead_rows: 105,
+        autovacuum_at: 78,
+        overdue: "yes",
+      },
+      {
+        schema: "public",
+        table: "public.small",
+        dead_rows: 120,
+        autovacuum_at: 60,
+        overdue: "yes",
+      },
+    ];
+    expect(deriveFindings(a).some((x) => x.heuristicId === "autovacuum_overdue")).toBe(false);
+    // An app table with a real backlog still fires.
+    a.sql.deadTuples = [
+      {
+        schema: "public",
+        table: "public.big",
+        dead_rows: 632_567,
+        autovacuum_at: 500,
+        overdue: "yes",
+      },
+    ];
+    expect(deriveFindings(a).some((x) => x.heuristicId === "autovacuum_overdue")).toBe(true);
+  });
+
+  test("seq_scan_heavy: a table scanned a handful of times is not 'heavy'", () => {
+    const a = base();
+    a.sql.seqScanHeavy = [
+      {
+        schema: "public",
+        table: "public.metrics_small",
+        seq_scan: 10,
+        idx_scan: 0,
+        live_rows: 51_513,
+      },
+    ];
+    expect(deriveFindings(a).some((x) => x.heuristicId === "seq_scan_heavy")).toBe(false);
+    a.sql.seqScanHeavy = [
+      {
+        schema: "public",
+        table: "public.hot",
+        seq_scan: 148_486,
+        idx_scan: 1_475,
+        live_rows: 4_456,
+      },
+      {
+        schema: "public",
+        table: "public.metrics_small",
+        seq_scan: 10,
+        idx_scan: 0,
+        live_rows: 51_513,
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "seq_scan_heavy");
+    expect(f?.title).toContain("1 table sequential-scan heavy");
+  });
+
+  test("index_advisor_rec: DDL targeting a managed schema is dropped; app DDL keeps calls + mean in evidence", () => {
+    const a = base();
+    a.sql.indexAdvisor = [
+      {
+        queryid: "1",
+        index_statements: ["CREATE INDEX ON auth.mfa_amr_claims USING btree (session_id)"],
+        errors: [],
+        calls: 3_036_971,
+        mean_ms: 0.04,
+        query: "SELECT ... FROM mfa_amr_claims WHERE session_id = $1",
+      },
+      {
+        queryid: "2",
+        index_statements: ['CREATE INDEX ON "public"."book" USING btree (title)'],
+        errors: [],
+        calls: 1200,
+        mean_ms: 88.5,
+        query: "select id from book where title = $1",
+      },
+    ];
+    const recs = deriveFindings(a).filter((x) => x.heuristicId === "index_advisor_rec");
+    expect(recs).toHaveLength(1);
+    expect(recs[0]?.evidence).toContain("public");
+    expect(recs[0]?.evidence).not.toContain("mfa_amr_claims");
+    expect(recs[0]?.evidence).toContain("1,200 calls, 88.50 ms mean");
+  });
+
+  test("mem_pressure_paging: title says the rates are window averages", () => {
+    const a = base();
+    const day = 86_400;
+    const pts = (v: number) => Array.from({ length: 4 }, (_, i) => ({ t: i * 10 * day, v }));
+    a.trends = [
+      { title: "Major page faults/s", unit: "", points: pts(89) },
+      { title: "Swap-in pages/s", unit: "", points: pts(123) },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "mem_pressure_paging");
+    expect(f?.title).toContain("avg 89 major faults/s, 123 swap-ins/s over 30d");
+  });
+
+  test("positives: WAL-archiving proxy no longer claims PITR recoverability outright", () => {
+    const a = base();
+    a.backups = null;
+    a.sql.walArchiving = [{ archive_mode: "on", archived_count: 7560, failed_count: 0 }];
+    const t =
+      derivePositives(a).find((x) => x.title.includes("Continuous WAL archiving"))?.title ?? "";
+    expect(t).not.toContain("PITR-style recoverability");
+    expect(t).toContain("only visible with a PAT");
+  });
+});
+
+describe("rls_self_reference: only the shapes that actually recurse are HIGH (verified PG 17.11)", () => {
+  const pol = (
+    table: string,
+    name: string,
+    cmd: string,
+    qual: string | null,
+    wc: string | null,
+  ) => ({
+    table,
+    policyname: name,
+    permissive: "PERMISSIVE",
+    cmd,
+    roles: "anon,authenticated",
+    qual,
+    with_check: wc,
+    unwrapped_auth: false,
+  });
+  const selfWc =
+    "(NOT (EXISTS ( SELECT 1 FROM signups w WHERE (lower(w.email) = lower(signups.email)))))";
+
+  test("INSERT-only self-reference with NO select policy -> latent LOW, says the check is a no-op", () => {
+    const a = base();
+    a.sql.rlsPolicies = [
+      pol("public.signups", "anyone can sign up", "INSERT", null, selfWc),
+    ];
+    const f = deriveFindings(a);
+    expect(f.some((x) => x.heuristicId === "rls_self_reference")).toBe(false);
+    const l = f.find((x) => x.heuristicId === "rls_self_reference_latent");
+    expect(l?.severity).toBe("low");
+    expect(l?.title).toContain("no-op");
+    expect(l?.evidence).toContain("no SELECT policy - inner lookup returns nothing");
+  });
+
+  test("INSERT-only self-reference + subquery-free SELECT policy -> latent LOW, warns it breaks later", () => {
+    const a = base();
+    a.sql.rlsPolicies = [
+      pol("public.signups", "read", "SELECT", "true", null),
+      pol("public.signups", "anyone can sign up", "INSERT", null, selfWc),
+    ];
+    const f = deriveFindings(a);
+    expect(f.some((x) => x.heuristicId === "rls_self_reference")).toBe(false);
+    const l = f.find((x) => x.heuristicId === "rls_self_reference_latent");
+    expect(l?.title).toContain("breaks with 42P17");
+    expect(l?.title).not.toContain("no-op");
+  });
+
+  test("INSERT-only self-reference + a SELECT policy that subqueries ANOTHER table -> HIGH (recurses)", () => {
+    const a = base();
+    a.sql.rlsPolicies = [
+      pol(
+        "public.signups",
+        "read",
+        "SELECT",
+        "(EXISTS ( SELECT 1 FROM other o WHERE (o.id = signups.id)))",
+        null,
+      ),
+      pol("public.signups", "anyone can sign up", "INSERT", null, selfWc),
+    ];
+    const f = deriveFindings(a);
+    const h = f.find((x) => x.heuristicId === "rls_self_reference");
+    expect(h?.severity).toBe("high");
+    expect(h?.evidence).toContain("anyone can sign up");
+    expect(f.some((x) => x.heuristicId === "rls_self_reference_latent")).toBe(false);
+  });
+
+  test("FOR ALL policy whose WITH CHECK self-references -> HIGH (fails on INSERT even with USING true)", () => {
+    const a = base();
+    a.sql.rlsPolicies = [
+      pol(
+        "public.e",
+        "e_all",
+        "ALL",
+        "true",
+        "(NOT (EXISTS ( SELECT 1 FROM e x WHERE (x.id = e.id))))",
+      ),
+    ];
+    expect(deriveFindings(a).find((x) => x.heuristicId === "rls_self_reference")?.severity).toBe(
+      "high",
+    );
+  });
+
+  test("a string literal mentioning select does not count as a subquery in the SELECT policy", () => {
+    const a = base();
+    a.sql.rlsPolicies = [
+      pol("public.w", "read", "SELECT", "(note <> 'select from w'::text)", null),
+      pol(
+        "public.w",
+        "ins",
+        "INSERT",
+        null,
+        "(NOT (EXISTS ( SELECT 1 FROM w x WHERE (x.id = w.id))))",
+      ),
+    ];
+    const f = deriveFindings(a);
+    expect(f.some((x) => x.heuristicId === "rls_self_reference")).toBe(false);
+    expect(f.some((x) => x.heuristicId === "rls_self_reference_latent")).toBe(true);
+  });
+});
+
+describe("never_autovacuumed: bounded by the stats window, not 'never'", () => {
+  const rows = [
+    {
+      schema: "public",
+      table: "public.page_views",
+      live_rows: 6_511_438,
+      dead_rows: 632_567,
+      mods_since_analyze: 546_418,
+    },
+  ];
+  test("with a known stats window the title says 'no vacuum on record in the ~Nd stats window'", () => {
+    const a = base();
+    a.sql.neverVacuumed = rows;
+    a.sql.statsResetAge = "10 days 08:39:53.441478"; // cluster-wide wipe 10d ago
+    const f = deriveFindings(a).find((x) => x.heuristicId === "never_autovacuumed");
+    expect(f?.title).toContain("no vacuum on record in the ~10d stats window");
+    expect(f?.title).not.toContain("never");
+    expect(f?.evidence).toContain("Cumulative statistics started 10.4 days ago");
+  });
+  test("with no window information it falls back to 'never been vacuumed'", () => {
+    const a = base();
+    a.sql.neverVacuumed = rows;
+    a.sql.statsResetAge = null;
+    a.sql.tableStatsResetAge = null;
+    const f = deriveFindings(a).find((x) => x.heuristicId === "never_autovacuumed");
+    expect(f?.title).toContain("never been vacuumed");
+    expect(f?.evidence).toBeUndefined();
+  });
+  test("stale_table_stats evidence carries the window and stops asserting the table is non-empty", () => {
+    const a = base();
+    a.sql.statsResetAge = "10 days 08:39:53";
+    a.sql.biggestTables = [
+      {
+        schema: "net",
+        table: "net._http_response",
+        total_size: "146 MB",
+        total_bytes: 152_223_744,
+        live_rows: 0,
+        dead_rows: 0,
+        est_rows: 2946,
+        maintained: false,
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "stale_table_stats");
+    expect(f?.evidence).toContain("cumulative statistics started 10.4 days ago");
+    expect(f?.evidence).not.toContain("not of an emptied table");
+    expect(f?.evidence).toContain("ANALYZE it");
   });
 });

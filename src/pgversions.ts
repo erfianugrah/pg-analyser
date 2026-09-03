@@ -10,15 +10,15 @@
  * from server_version alone.
  */
 
-export const PG_VERSIONS_AS_OF = "2026-07-15";
+export const PG_VERSIONS_AS_OF = "2026-09-03";
 
 /** major -> { latest minor version string, EOL date (ISO) }. Modern (10+) only. */
 export const PG_LATEST_MINOR: Record<string, { latest: string; eol: string }> = {
-  "18": { latest: "18.4", eol: "2030-11-14" },
-  "17": { latest: "17.10", eol: "2029-11-08" },
-  "16": { latest: "16.14", eol: "2028-11-09" },
-  "15": { latest: "15.18", eol: "2027-11-11" },
-  "14": { latest: "14.23", eol: "2026-11-12" },
+  "18": { latest: "18.6", eol: "2030-11-14" },
+  "17": { latest: "17.11", eol: "2029-11-08" },
+  "16": { latest: "16.15", eol: "2028-11-09" },
+  "15": { latest: "15.19", eol: "2027-11-11" },
+  "14": { latest: "14.24", eol: "2026-11-12" },
   "13": { latest: "13.23", eol: "2025-11-13" },
   "12": { latest: "12.22", eol: "2024-11-21" },
 };

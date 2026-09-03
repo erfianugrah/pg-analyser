@@ -363,7 +363,7 @@ export const QUERIES = {
   // Same PLATFORM_NOISE / NOT_APP_STATEMENT scoping as the outliers view.
   indexAdvisor: /* sql */ `
     with cand as (
-      select queryid, query, total_exec_time
+      select queryid, query, total_exec_time, calls, mean_exec_time
       from extensions.pg_stat_statements
       where query not ilike all (array[${PLATFORM_NOISE}])
         and query !~* '${NOT_APP_STATEMENT}'
@@ -376,6 +376,8 @@ export const QUERIES = {
       ia.index_statements,
       ia.errors,
       round(c.total_exec_time::numeric, 1) as total_ms,
+      c.calls,
+      round(c.mean_exec_time::numeric, 2) as mean_ms,
       left(regexp_replace(c.query, '\\s+', ' ', 'g'), 200) as query
     from cand c
     cross join lateral index_advisor(c.query) ia
@@ -418,7 +420,19 @@ export const QUERIES = {
       -- is ~1-2 pages (<= 16KB); showing "8192 bytes" on every table is noise.
       case when c.reltoastrelid <> 0 and pg_total_relation_size(c.reltoastrelid) > 16384
         then pg_size_pretty(pg_total_relation_size(c.reltoastrelid)) end as toast_size,
-      s.n_live_tup as live_rows
+      s.n_live_tup as live_rows,
+      -- For the stale-stats check. A stats reset clears n_live_tup AND all four
+      -- vacuum/analyze timestamps (verified PG17), and any later VACUUM or
+      -- ANALYZE repopulates n_live_tup from its own count. So "0 live rows with
+      -- a vacuum/analyze on record" is a genuinely empty table (bloat), while
+      -- "0 live rows and NO maintenance on record" is the reset signature.
+      -- reltuples (catalog, survives a reset; -1 = never vacuumed/analyzed) and
+      -- dead rows are carried as evidence - reltuples alone is not decisive,
+      -- a vacuum that skipped all-visible pages leaves it as an extrapolation.
+      s.n_dead_tup as dead_rows,
+      c.reltuples::bigint as est_rows,
+      coalesce(s.last_vacuum, s.last_autovacuum, s.last_analyze, s.last_autoanalyze) is not null
+        as maintained
     from pg_stat_user_tables s
     join pg_class c on c.oid = s.relid
     order by pg_total_relation_size(s.relid) desc
@@ -1153,9 +1167,12 @@ export const QUERIES = {
       ic.relname as index,
       pg_relation_size(ic.oid) as index_bytes,
       pg_size_pretty(pg_relation_size(ic.oid)) as index_size,
-      pg_relation_size(t.oid) as table_bytes,
+      -- pg_table_size = heap + TOAST (+ FSM/VM), no indexes. Wide vectors are
+      -- TOASTed, so the heap main fork alone would make a 2 GB index read as
+      -- "1700% of table" next to a 4.7 GB total for the same table.
+      pg_table_size(t.oid) as table_bytes,
       round(pg_relation_size(ic.oid) * 100.0
-        / nullif(pg_relation_size(t.oid), 0), 1) as pct_of_table,
+        / nullif(pg_table_size(t.oid), 0), 1) as pct_of_table,
       round(pg_relation_size(ic.oid) * 100.0
         / nullif(pg_database_size(current_database()), 0), 1) as pct_of_db,
       s.idx_scan,

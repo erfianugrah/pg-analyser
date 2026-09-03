@@ -418,6 +418,10 @@ export const EXCLUSIONS: Record<string, { clause: ExclusionClause; why: string }
     clause: "no-metric",
     why: "pg_policies expression analysis; no metric family",
   },
+  rls_self_reference_latent: {
+    clause: "no-metric",
+    why: "pg_policies expression analysis; no metric family",
+  },
   rls_update_no_withcheck: {
     clause: "no-metric",
     why: "pg_policies catalogue analysis; no metric family",
