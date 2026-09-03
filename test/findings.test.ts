@@ -3095,7 +3095,7 @@ describe("report-review fixes (2026-09-03): rules that overreached their evidenc
     a.sql.seqScanHeavy = [
       {
         schema: "public",
-        table: "public.hot",
+        table: "public.tags",
         seq_scan: 148_486,
         idx_scan: 1_475,
         live_rows: 4_456,
@@ -3265,7 +3265,7 @@ describe("never_autovacuumed: bounded by the stats window, not 'never'", () => {
   const rows = [
     {
       schema: "public",
-      table: "public.page_views",
+      table: "public.events",
       live_rows: 6_511_438,
       dead_rows: 632_567,
       mods_since_analyze: 546_418,

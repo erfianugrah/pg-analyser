@@ -417,7 +417,16 @@ src/
                  query_disk_reads_high (per-query cache-miss - the complement to
                  the global cache-hit ratio), public_bucket (public storage
                  bucket, Security awareness), unlogged_table (durability),
-                 index_advisor_rec (exact CREATE INDEX from index_advisor).
+                 index_advisor_rec (exact CREATE INDEX from index_advisor;
+                 managed-schema DDL dropped, evidence quotes calls + mean ms).
+                 Review pass (2026-09-03): stale_table_stats gates on "0 live
+                 rows and no vacuum/analyze on record"; never_autovacuumed and
+                 stale_table_stats name the stats window; bloat_estimate_suspect
+                 divides heap bytes only; autovacuum_overdue is app-scoped with
+                 a 1000 dead-row floor; seq_scan_heavy has a 100-scan floor;
+                 rls_self_reference is split into the recursing shapes (high)
+                 and rls_self_reference_latent (low) - see the 2026-09-03
+                 verified facts for the measured conditions.
                  Wraparound forensics (2026-08) adds SEVEN new findings:
                  txid_wraparound (table/database-attributed, escalates to high
                  when a holder is present; title states writes are refused at
@@ -550,6 +559,19 @@ src/
 
 ## Conventions
 
+- **A rule may report a signal; it may only assert a cause the data can
+  discriminate.** Findings are deterministic, so a "hallucinated" finding is
+  never invented data - it is a rule turning one ambiguous signal into a causal
+  claim ("counters were reset", "infinite recursion", "can't explain"). Before
+  writing the title, list every state that produces the signal and either add
+  the column that tells them apart (biggestTables gained `dead_rows`,
+  `est_rows`, `maintained` for exactly this) or word the title as the signal.
+  When the discriminator is a Postgres semantics question, answer it on a
+  throwaway `postgres:17-alpine` container in the same session - three
+  "obvious" answers were wrong on 2026-09-03 (see verified facts). To review a
+  generated report: check `meta.sbperfVersion` against package.json first,
+  trace each disputed number to its analysis.json row or trend series, then
+  read the rule in findings.ts for the inference it adds on top.
 - **Derive checks from upstream source; never depend on the CLI at runtime.**
   pg-analyser stays API-first (Management API + read-only/superuser SQL + the metrics
   endpoint) so it syncs with upstream and doesn't inherit the CLI's release lag.
@@ -637,6 +659,48 @@ src/
 - Scraper dirs contain a live credential in `prometheus.yml` - gitignored.
 
 ## Verified upstream facts (Supabase, 2026-07)
+
+2026-09-03 additions (verified by running each shape on `postgres:17-alpine`
+= 17.11, after a review of a live no-PAT report found rules asserting causes
+their counters could not support):
+
+- **Which self-referencing RLS policies recurse (42P17).** A policy whose
+  expression subqueries its own table errors only when the re-entered RLS
+  expansion again carries a subquery: (a) the policy is `FOR SELECT` or
+  `FOR ALL` - either clause, an ALL policy's `WITH CHECK` self-reference fails
+  on INSERT even with `USING (true)`; or (b) the policy is write-only
+  (INSERT/UPDATE/DELETE) AND some SELECT/ALL policy on the same table contains
+  ANY subquery, even against another table. A write-only self-reference whose
+  table has only subquery-free SELECT policies, or none, runs. With none, the
+  inner lookup sees zero rows (default deny) - three inserts of the same email
+  through a `NOT EXISTS` duplicate check all succeeded. `rls_self_reference`
+  (high) fires on (a)/(b); `rls_self_reference_latent` (low) on the rest.
+- **A stats reset clears n_live_tup AND all four vacuum/analyze timestamps
+  together**, and any later VACUUM or ANALYZE re-counts n_live_tup from its own
+  scan. So "0 live rows with a vacuum/analyze on record" is a genuinely empty
+  table and "0 live rows with none" is the reset signature - the gate
+  `stale_table_stats` uses (`maintained` in biggestTables). `pg_class.reltuples`
+  is NOT decisive: it survives a reset but a vacuum that skipped all-visible
+  pages leaves it as an extrapolation (a queue table read 2946 while empty).
+  Postgres resets all cumulative stats on any unclean start (immediate shutdown,
+  crash, base backup, PITR - docs monitoring-stats); the reviewed project had
+  pgss age, checkpointer `stats_reset` and a null pg_stat_database reset marker
+  all pointing at one wipe 10 days earlier, which made 20+ busy tables read as
+  "never vacuumed". `statsWindowDays()` now bounds that title.
+- **`pg_table_size` = heap + TOAST + FSM/VM, no indexes** (docs
+  functions-admin); `pg_relation_size` is the main fork only. Wide vectors are
+  TOASTed, so vectorIndexes' `pct_of_table` uses `pg_table_size`.
+- **Heap tuples cannot span the 8 kB page and values > ~2 KB are TOASTed**
+  (docs storage-toast), so a heap-only bytes/row above 8 KB is never inline
+  data. `bloat_estimate_suspect` subtracts index + TOAST bytes before dividing.
+- **`scripts/check-pgversions-drift.ts` with `PG_ANALYSER_PGVER_UPDATE=1`
+  PRINTS the refreshed table; it does not write `src/pgversions.ts`.** Edit by
+  hand and bump `PG_VERSIONS_AS_OF`. The table lagged a quarterly minor release
+  (17.10 vs 17.11) for three weeks. `test/pgversions.test.ts` derives its
+  expectations from the table so a refresh cannot break it.
+- **The installed binary can lag the tree.** A report's `meta.sbperfVersion`
+  is the version that produced it; compare against package.json and
+  `git log v<that>..HEAD` before attributing a finding to a live rule.
 
 2026-08-11 additions (verified against a self-hosted PG18 pgvector DB + a hosted
 PG17 project):

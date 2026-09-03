@@ -53,7 +53,8 @@ date tracks when we last confirmed them against upstream.
 
 | id | signal | threshold | sev | status |
 |---|---|---|---|---|
-| `seq_scan_heavy` | `pg_stat_user_tables` seq_scan >> idx_scan on an application-schema table (`appRows`, not `public`-only) | seq-scan dominant | med | HAVE |
+| `seq_scan_heavy` | `pg_stat_user_tables` seq_scan >> idx_scan on an application-schema table (`appRows`, not `public`-only); a scan-count floor (`seqScanMinScans` = 100 in the stats window) so a table read ten times is not "heavy" | seq-scan dominant, >= 100 scans | med | HAVE |
+| `index_advisor_rec` | `index_advisor()` (hypopg) returns CREATE INDEX DDL for a top-15 statement by total time; DDL targeting a managed schema (auth/storage/realtime...) is dropped - not the user's tables to index, and those are typically sub-ms lookups hypopg can always shave; evidence quotes calls + mean ms so the reader can weigh it | any DDL on an app schema | med | HAVE (superuser + extension) |
 | `unused_index` | `pg_stat_user_indexes.idx_scan = 0`, non-constraint, application schema; SQL fallback suppressed when the advisor's `unused_index` lint already fired | idx_scan 0 | low | HAVE |
 | `duplicate_index` | two indexes with identical column set on a table; SQL fallback suppressed when the advisor's `duplicate_index` lint already fired | any pair | med | HAVE |
 | `top_time_query` | `pg_stat_statements` top by total_exec_time | >= 10% of DB time | med | PARTIAL |
@@ -89,6 +90,8 @@ Sources: Supabase Query Optimization docs; `supabase/cli` inspect queries.
 | `multiple_permissive_policies` | 2+ permissive policies for the same role + action on a table | any table | med | HAVE (via advisor) |
 | `policy_exists_rls_disabled` | policy defined but RLS not enabled on the table | any | high | HAVE (via advisor) |
 | `rls_no_role_target` | policy uses no `TO authenticated` (anon pays the RLS cost) | any | low | NEW |
+| `rls_self_reference` | policy `USING`/`WITH CHECK` subqueries its OWN table (deparsed text, `referencesOwnTable`) in a shape that recurses: the policy is `FOR SELECT`/`FOR ALL` (either clause), OR it is write-only and some SELECT/ALL policy on the same table contains any subquery. Verified on PG 17.11 by running every shape - see AGENTS.md 2026-09-03 | recursing shape | high | HAVE |
+| `rls_self_reference_latent` | write-only (INSERT/UPDATE/DELETE) self-referencing policy whose table has only subquery-free SELECT policies, or none. Does not recurse today, but: with no SELECT policy the inner lookup sees zero rows (a `NOT EXISTS` duplicate check is a silent no-op - measured), and any subquery later added to a SELECT policy breaks every write with 42P17 | non-recursing shape | low | HAVE |
 | `public_schema_create` | `PUBLIC` retains `CREATE` on schema `public` (`aclexplode` grantee 0) - any role can create objects there (privilege-escalation surface); modern Postgres revokes it | any | med | HAVE |
 
 Concrete numbers (Supabase RLS docs, official 100K-row test table):
@@ -174,15 +177,25 @@ supabase/supabase#39227, supavisor#595 (connection leak).
 
 | id | signal | threshold | sev | status |
 |---|---|---|---|---|
-| `autovacuum_overdue` | dead tuples past the per-table autovacuum trigger | overdue | med | HAVE |
+| `autovacuum_overdue` | dead tuples past the per-table autovacuum trigger, app schemas only, with a dead-row floor (`autovacuumOverdueMinDeadRows` = 1000) - a managed 200-row table a few dozen rows past its trigger between naptime ticks is autovacuum working, not falling behind | overdue AND >= 1000 dead | med | HAVE |
 | `dead_tuple_ratio` | `n_dead_tup` vs `n_live_tup` | dead >= ~2x live -> AV not keeping up | med | PARTIAL |
 | `table_bloat` | reclaimable waste bytes (estimate) | >= 50MB (med >= 500MB) | low/med | HAVE |
 | `txid_wraparound` | `age(relfrozenxid)` toward the 2B ceiling | >= 20% (high >= 40%) | med/high | HAVE |
 | `xmin_horizon_pin` | a long-running / idle-in-txn session pins the xmin horizon, blocking vacuum | any + rising dead tuples | high | NEW |
 | `multixact_wraparound` | `mxid_age(relminmxid)` toward multixact's OWN 2B ceiling (heavy row locking; separate from txid) | >= 20% (high >= 40%) | med/high | HAVE |
-| `never_autovacuumed` | app table (>= 10k rows) with `last_autovacuum` AND `last_vacuum` both null - no visibility map / stale planner stats | any | low | HAVE |
+| `never_autovacuumed` | app table (>= 10k rows) with `last_autovacuum` AND `last_vacuum` both null - no visibility map / stale planner stats. "Never" is bounded by the cumulative-stats window: an unclean restart / recovery / explicit reset wipes every table's timestamps, so the title says "no vacuum on record in the ~Nd stats window" when the window is known | any | low | HAVE |
+| `stale_table_stats` | table >= 10 MB reporting `n_live_tup = 0` with NO vacuum or analyze timestamp on record (`maintained = false` in biggestTables). A stats reset clears the counters and all four timestamps together, and any later VACUUM/ANALYZE re-counts live rows (measured PG 17.11), so this is the reset signature; an emptied-and-vacuumed table keeps its timestamps and is NOT flagged. Evidence carries dead rows, `pg_class.reltuples` and the stats-window age - reltuples alone is not decisive (a page-skipping vacuum leaves it as an extrapolation) | 0 live, unmaintained, >= 10 MB | low | HAVE |
 
 Concrete facts:
+- **Cumulative statistics have a window.** Postgres resets every `pg_stat_*`
+  counter - and every `last_vacuum`/`last_analyze` timestamp - when it starts
+  from an unclean shutdown, a crash, a base backup or point-in-time recovery
+  (docs: monitoring-stats, "Statistics Collection Configuration"); pg_upgrade
+  before v18 does not carry them either. `statsWindowDays()` (pg_stat_database
+  reset age, else pg_stat_statements age) dates that window; every counter-derived
+  finding is relative to it, and `never`/`0 live rows` claims must be read as
+  "since then". Measured 2026-09-03 on a hosted project: a 10-day window made
+  20+ busy tables read as "never vacuumed".
 - Supabase's own heuristic: if live vs dead differ by **more than 2x**, autovacuum
   likely did not start or did not complete. Default `autovacuum_vacuum_scale_
   factor` is 20% - too high for big tables; lower per-table to 0.05.
@@ -250,6 +263,8 @@ Sources: Supabase Compute & Disk docs; Supabase High Disk I/O docs.
 | `heap_corruption` | amcheck `verify_heapam` returned corruption rows for a table (opt-in `--amcheck heap`) | any | high | HAVE |
 | `disk_iops_high` | derived read+write IOPS / provisioned | >= 80% | med | HAVE (trend) |
 | `disk_throughput_high` | derived MB/s / provisioned | >= 80% | med | NEW (trend) |
+| `bloat_estimate_suspect` | app table whose HEAP bytes per live row (total minus indexes minus TOAST - both already reported in biggestTables) exceed 8 KB while the pg_stats bloat estimator says ~un-bloated (< 1.5x): the estimator's blind spot, nudge to pgstattuple. A heap tuple cannot span the 8 kB page and values over ~2 KB are TOASTed, so > 8 KB/row of heap is dead/free space or a stale n_live_tup, never inline data. Indexes and TOAST are excluded precisely so a 768-dim vector table (3 KB/row TOAST + an ANN index rivalling the heap) reads as explained, not suspect | >= 8 KB/row heap, est < 1.5x, >= 1000 rows, >= 50 MB heap | low | HAVE |
+| `vector_index_halfvec` note | `pct_of_table` in vectorIndexes is over `pg_table_size` (heap + TOAST, no indexes); the main fork alone read a 2 GB ivfflat as "1714% of table" beside a 4.7 GB total for the same table | - | - | - |
 | `disk_io_budget_depleted` | small instance bursting then throttled to baseline | sustained at baseline under load | med | NEW |
 | `ebs_balance_low` | `aws_ec2_ebsiobalance_percent_minimum` / `aws_ec2_ebsbyte_balance_percent_minimum` (CloudWatch-backed source only) | worst point <= 20% | high | HAVE (trend) |
 | `disk_fill_projection` | rising disk-used% slope projected to 100% (trend; horizon capped to ~3x observed span so a short history can't claim a far-future date) | on track to full within <=120d | high/med | HAVE (trend) |
