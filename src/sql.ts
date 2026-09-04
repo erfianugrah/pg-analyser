@@ -94,6 +94,13 @@ const PLATFORM_NOISE = [
   // Replication-slot management (create/drop logical slot) - platform / Realtime
   // plumbing, not app workload; keeps the slot-ensure call out of the outliers.
   "%replication_slot%",
+  // pg_net's background worker: the request-queue pop and the response-table
+  // reaper run every second whether or not the app calls net.http_*(). On an
+  // idle database they were 66% of "database time" (measured) - platform
+  // housekeeping, not a tuning target. The app's own net.http_post(...) calls
+  // reference neither table and stay visible.
+  "%net.http_request_queue%",
+  "%net._http_response%",
 ]
   .map((p) => `'${p}'`)
   .join(",");

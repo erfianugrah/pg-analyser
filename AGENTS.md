@@ -660,6 +660,33 @@ src/
 
 ## Verified upstream facts (Supabase, 2026-07)
 
+2026-09-04 additions (second live no-PAT report review, PG 15.8 project):
+
+- **Statement-timeout cancels are not lock evidence.** 74 `canceling statement
+  due to statement timeout` lines in two minutes with zero `still waiting for
+  ...Lock`, zero lock-timeout cancels and zero deadlocks were titled a HIGH
+  "Lock-wait cascade ... 0 waits up to 0s". classifyLockWave now requires lock
+  evidence in the window for a cascade (statement cancels then count as its
+  victims) and reports a cancel-only burst as `statement_timeout_burst`
+  (med >= 50, low >= 10), naming the role-level statement_timeout values in
+  force (Supabase ships anon 3s / authenticated 8s).
+- **lockWave.coverage.from/.to are the span of MATCHED events**, derived from
+  the parsed buckets in collect.ts, not of the bytes read. The newest ~4 MB
+  per file are scanned newest-first; evidence now says "events seen X to Y in
+  the newest N MB of F log file(s)" so a quiet tail is not read as unscanned.
+- **A dominant share of an idle database is not a MED.** pg_net's worker
+  reaper on `net._http_response` was 44% of "database time" at 0.04 ms mean -
+  25 s of exec time in a week. The share-only escalation now needs >= 10 min
+  of total exec time (`topQueryEscalateMinTotalMs`), and pg_net's queue/
+  response housekeeping is PLATFORM_NOISE.
+- **Paging is graded by fraction-of-window, not mean.** A 30d mean of 23 major
+  faults/s came from 13% of samples (peak 507) with a median of 0.36. >= 25%
+  of samples above threshold = sustained (med); >= 5% = episodic (low).
+- **n_live_tup inside a short stats window undercounts cold partitions.** A
+  monthly audit partition at 4,141 live (inserts since the 08-28 reset) vs
+  109,527 reltuples read as 59 KB/row; bloat_estimate_suspect divides by the
+  larger of the two.
+
 2026-09-03 additions (verified by running each shape on `postgres:17-alpine`
 = 17.11, after a review of a live no-PAT report found rules asserting causes
 their counters could not support):

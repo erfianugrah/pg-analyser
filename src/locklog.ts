@@ -141,11 +141,24 @@ export function parseLockLog(text: string, coverage: LockWaveCoverage): LockWave
  * the worst window's stats + the derived severity, or null when nothing fires.
  */
 export type LockWaveVerdict = {
-  severity: "high" | "med";
+  /**
+   * "cascade": lock evidence in the window (waits, lock-timeout cancels or a
+   * deadlock) - the lock-queue signature. "stmt_timeout": ONLY statement_timeout
+   * cancellations, no lock line at all - slow statements hitting their timeout
+   * (role-level 3s/8s on Supabase, a batch job, an I/O stall), which the lock
+   * remediation (lock_timeout on migrations) does not address. Measured on a
+   * live report: 74 statement cancels in two minutes with zero lock waits were
+   * being titled "Lock-wait cascade ... 0 waits up to 0s".
+   */
+  kind: "cascade" | "stmt_timeout";
+  severity: "high" | "med" | "low";
   windowFrom: string;
   windowTo: string;
   waiting: number;
+  /** cancelsLock + cancelsStmt (kept for callers that only need the total). */
   cancels: number;
+  cancelsLock: number;
+  cancelsStmt: number;
   maxWaitMs: number;
   deadlocks: number;
 };
@@ -155,28 +168,56 @@ export function classifyLockWave(s: LockWaveSummary, windowMinutes = 10): LockWa
   // Fold the (single) "window" bucket in as its own one-off window too.
   const oneOff = s.buckets.find((x) => x.minute === "window");
   let best: LockWaveVerdict | null = null;
+  const rank = (v: Pick<LockWaveVerdict, "kind" | "severity">): number =>
+    (v.kind === "cascade" ? 2e6 : 0) +
+    (v.severity === "high" ? 1e6 : v.severity === "med" ? 5e5 : 0);
   const consider = (
     from: string,
     to: string,
     waiting: number,
-    cancels: number,
+    cancelsLock: number,
+    cancelsStmt: number,
     maxWaitMs: number,
     deadlocks: number,
   ) => {
-    const high = cancels >= 50 || (maxWaitMs >= 60_000 && waiting >= 10);
-    const med = waiting >= 10 || cancels >= 10 || deadlocks >= 1;
-    if (!high && !med) return;
-    const severity = high ? "high" : "med";
-    // Prefer HIGH over MED, then the larger cancel+wait volume.
-    const score = (high ? 1e6 : 0) + cancels * 100 + waiting + maxWaitMs / 1000;
+    const cancels = cancelsLock + cancelsStmt;
+    // Statement-timeout cancels corroborate a cascade only when there IS lock
+    // evidence in the window (queued readers time out while waiting). Without
+    // a single wait / lock-timeout / deadlock line they are their own signal.
+    const lockEvidence = waiting > 0 || cancelsLock > 0 || deadlocks > 0;
+    let kind: LockWaveVerdict["kind"];
+    let severity: LockWaveVerdict["severity"];
+    if (lockEvidence && (cancels >= 50 || (maxWaitMs >= 60_000 && waiting >= 10))) {
+      kind = "cascade";
+      severity = "high";
+    } else if (lockEvidence && (waiting >= 10 || cancels >= 10 || deadlocks >= 1)) {
+      kind = "cascade";
+      severity = "med";
+    } else if (!lockEvidence && cancelsStmt >= 50) {
+      kind = "stmt_timeout";
+      severity = "med";
+    } else if (!lockEvidence && cancelsStmt >= 10) {
+      kind = "stmt_timeout";
+      severity = "low";
+    } else return;
+    // A cascade outranks a timeout burst, then severity, then volume.
+    const cand: LockWaveVerdict = {
+      kind,
+      severity,
+      windowFrom: from,
+      windowTo: to,
+      waiting,
+      cancels,
+      cancelsLock,
+      cancelsStmt,
+      maxWaitMs,
+      deadlocks,
+    };
+    const score = rank(cand) + cancels * 100 + waiting + maxWaitMs / 1000;
     const bestScore = best
-      ? (best.severity === "high" ? 1e6 : 0) +
-        best.cancels * 100 +
-        best.waiting +
-        best.maxWaitMs / 1000
+      ? rank(best) + best.cancels * 100 + best.waiting + best.maxWaitMs / 1000
       : -1;
-    if (score > bestScore)
-      best = { severity, windowFrom: from, windowTo: to, waiting, cancels, maxWaitMs, deadlocks };
+    if (score > bestScore) best = cand;
   };
 
   // Slide a windowMinutes WALL-CLOCK window across the timestamped buckets. A
@@ -192,7 +233,8 @@ export function classifyLockWave(s: LockWaveSummary, windowMinutes = 10): LockWa
   for (let i = 0; i < b.length; i++) {
     const start = tOf(b[i]!.minute);
     let waiting = 0;
-    let cancels = 0;
+    let cancelsLock = 0;
+    let cancelsStmt = 0;
     let maxWaitMs = 0;
     let deadlocks = 0;
     let lastIdx = i;
@@ -203,19 +245,29 @@ export function classifyLockWave(s: LockWaveSummary, windowMinutes = 10): LockWa
       if (start != null && tj != null && tj - start >= windowMs) break;
       const w = b[j]!;
       waiting += w.waiting;
-      cancels += w.cancelsLock + w.cancelsStmt;
+      cancelsLock += w.cancelsLock;
+      cancelsStmt += w.cancelsStmt;
       maxWaitMs = Math.max(maxWaitMs, w.maxWaitMs);
       deadlocks += w.deadlocks;
       lastIdx = j;
     }
-    consider(b[i]!.minute, b[lastIdx]!.minute, waiting, cancels, maxWaitMs, deadlocks);
+    consider(
+      b[i]!.minute,
+      b[lastIdx]!.minute,
+      waiting,
+      cancelsLock,
+      cancelsStmt,
+      maxWaitMs,
+      deadlocks,
+    );
   }
   if (oneOff)
     consider(
       "window",
       "window",
       oneOff.waiting,
-      oneOff.cancelsLock + oneOff.cancelsStmt,
+      oneOff.cancelsLock,
+      oneOff.cancelsStmt,
       oneOff.maxWaitMs,
       oneOff.deadlocks,
     );
