@@ -729,7 +729,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
       },
     ],
     changelogUrl:
-      "https://supabase.com/changelog/32755-supabase-connection-pooler-deprecating-session-mode-on-port-6543-on-february-28",
+      "https://supabase.com/changelog/32755-supabase-connection-pooler-deprecating-session-mode-on-port-6543-on-february-28-2025",
     reviewed: R,
   },
   role_conn_high: {
@@ -1376,7 +1376,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
       },
     ],
     changelogUrl:
-      "https://supabase.com/changelog/32755-supabase-connection-pooler-deprecating-session-mode-on-port-6543-on-february-28",
+      "https://supabase.com/changelog/32755-supabase-connection-pooler-deprecating-session-mode-on-port-6543-on-february-28-2025",
     reviewed: R,
   },
   disk_iops_high: {
