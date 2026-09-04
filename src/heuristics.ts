@@ -135,6 +135,18 @@ export const THRESHOLDS = {
   /** Sustained swap-in pages/s: the box is actively paging anon memory back
    * from swap - real memory pressure, not benign cold-page parking. */
   swapInPagesPerSec: 2,
+  /** Paging is graded by the FRACTION of trend samples at/above the rate
+   * thresholds, not the window mean (a few 500/s spikes lift a 30d mean past
+   * 20/s while the median is 0.4 - measured). At least a quarter of the window
+   * = sustained pressure (med); at least a twentieth = episodic (low); below
+   * that, nothing. Practitioner defaults, same shape as memSustainedFrac. */
+  pagingSustainedFrac: 0.25,
+  pagingEpisodicFrac: 0.05,
+  /** The top query's share of DB time escalates to med only when the query
+   * also carries this much total exec time in the stats window (ten minutes);
+   * a 44% share of an idle database (25 s in a week, measured) is attribution,
+   * not a MED. */
+  topQueryEscalateMinTotalMs: 600_000,
   /** Sustained PSI stall % (Linux /proc/pressure; fraction of time tasks waited
    * on a resource, from >=2 snapshots / a Prometheus). A truer saturation
    * signal than a utilization snapshot - work can stall while idle% looks fine. */
@@ -1142,13 +1154,33 @@ export const HEURISTICS: Record<string, Heuristic> = {
     id: "lock_wave",
     plane: "Config",
     whyItMatters:
-      "A burst of 'still waiting for ...Lock' and timeout-cancellation lines in the server log is the signature of a lock-queue cascade: a DDL statement (AccessExclusiveLock) queued behind long-running readers, with every NEW reader then queueing behind the waiting DDL - Postgres grants locks in queue order, so a lock that would not conflict still waits. The cascade is transient and invisible to any point-in-time snapshot; the log is the only on-box record of it.",
+      "A burst of 'still waiting for ...Lock' lines plus timeout cancellations in the server log is the signature of a lock-queue cascade (statement-timeout cancels count only when a lock line is present in the same window - a cancel-only burst is reported separately as statement_timeout_burst): a DDL statement (AccessExclusiveLock) queued behind long-running readers, with every NEW reader then queueing behind the waiting DDL - Postgres grants locks in queue order, so a lock that would not conflict still waits. The cascade is transient and invisible to any point-in-time snapshot; the log is the only on-box record of it.",
     remediation:
       "Attribute the window: what DDL and which scheduled jobs ran then (the top-relation column names the contended table). Prevent the next one: run migrations with a session-level lock_timeout (a few seconds) + a retry loop so a blocked ALTER fails fast instead of queueing readers; shorten or CONCURRENTLY-ify the long jobs holding AccessShareLock; avoid ALTER COLUMN ... TYPE rewrites on hot tables (add column + backfill + swap).",
     sql: `-- live view if it is happening right now:\nselect pid, wait_event_type, wait_event, state, query_start,\n       pg_blocking_pids(pid) as blocked_by, left(query, 80) as query\nfrom pg_stat_activity\nwhere wait_event_type = 'Lock';`,
     howToVerify:
       "Re-run after the fix window: the scanned log window should show no waiting/cancellation bursts. Confirm migrations now fail fast (lock timeout in the migration session) instead of stalling readers.",
     docUrl: "https://www.postgresql.org/docs/current/explicit-locking.html",
+    reviewed: R,
+  },
+  statement_timeout_burst: {
+    id: "statement_timeout_burst",
+    plane: "Config",
+    whyItMatters:
+      "A burst of 'canceling statement due to statement timeout' lines with NO lock-wait or lock-timeout line in the same window is not a lock cascade - it is statements running past their statement_timeout. On Supabase the client roles ship with short fuses (anon 3s, authenticated 8s), so a slow report query, a batch job, a cold cache or an I/O stall in that minute cancels every request that crosses the line, and the app sees errors rather than slowness. pg_stat_statements never records the cancelled executions, so this log signal is the only place the burst is visible.",
+    remediation:
+      "Attribute the minute: read the csvlog for that window (the STATEMENT field names each cancelled query and the user_name column its role), and check what else ran then - a scheduled job, a report, a migration, or a database audit/collector. Then either speed the statement up (index, plan, smaller batch) or give that role or that job a longer statement_timeout via ALTER ROLE ... SET statement_timeout / SET LOCAL in the job. Do not raise the anon timeout for one report.",
+    sql: "-- who is cancelled, from the csvlog for that minute (superuser):\nselect log_time, user_name, left(query, 120) as statement\nfrom pg_read_file((select setting from pg_settings where name='log_directory') || '/postgresql.csv') as t(line)\n  -- filter the lines for 'canceling statement due to statement timeout' at <HH:MM>\nlimit 50;\n-- lengthen the fuse for the job's role, not for anon:\nALTER ROLE <job_role> SET statement_timeout = '60s';",
+    howToVerify:
+      "Re-scan the log after the next occurrence window: no statement-timeout burst, or the burst is gone once the job/role has its own timeout and the slow statement is fixed.",
+    docUrl: "https://supabase.com/docs/guides/database/postgres/timeouts",
+    refs: [
+      {
+        tier: "mechanism",
+        label: "PostgreSQL statement_timeout",
+        url: `${PG}runtime-config-client.html#GUC-STATEMENT-TIMEOUT`,
+      },
+    ],
     reviewed: R,
   },
   lock_forensics: {

@@ -121,14 +121,52 @@ describe("classifyLockWave (wall-clock windowing)", () => {
     expect(classifyLockWave(summaryOf(buckets))).toBeNull();
   });
 
-  test("a real cascade (50 cancels within 10 wall-clock minutes) fires HIGH", () => {
+  test("a real cascade (50 cancels within 10 wall-clock minutes, with lock waits) fires HIGH", () => {
     const buckets = Array.from({ length: 10 }, (_, i) => ({
       minute: `2026-07-15 18:${String(15 + i).padStart(2, "0")}`,
-      cancelsStmt: 5, // 50 across a 10-minute span
+      waiting: 1,
+      cancelsLock: 2,
+      cancelsStmt: 3, // 50 cancels across a 10-minute span, lock evidence present
     }));
     const v = classifyLockWave(summaryOf(buckets));
+    expect(v?.kind).toBe("cascade");
     expect(v?.severity).toBe("high");
     expect(v?.cancels).toBeGreaterThanOrEqual(50);
+  });
+
+  test("statement-timeout cancels with NO lock line are a stmt_timeout burst, not a cascade", () => {
+    // Measured shape: 49 + 25 statement cancels in two adjacent minutes, zero
+    // waits, zero lock-timeout cancels, zero deadlocks - was titled a HIGH
+    // "Lock-wait cascade ... 0 waits up to 0s".
+    const v = classifyLockWave(
+      summaryOf([
+        { minute: "2026-09-03 03:05", cancelsStmt: 49 },
+        { minute: "2026-09-03 03:06", cancelsStmt: 25 },
+      ]),
+    );
+    expect(v?.kind).toBe("stmt_timeout");
+    expect(v?.severity).toBe("med");
+    expect(v?.cancelsStmt).toBe(74);
+    expect(v?.cancelsLock).toBe(0);
+    // 10..49 statement cancels -> low
+    expect(
+      classifyLockWave(summaryOf([{ minute: "2026-09-03 08:34", cancelsStmt: 14 }]))?.severity,
+    ).toBe("low");
+    // under 10 -> nothing
+    expect(
+      classifyLockWave(summaryOf([{ minute: "2026-09-03 12:17", cancelsStmt: 6 }])),
+    ).toBeNull();
+  });
+
+  test("a cascade in one window outranks a bigger stmt_timeout burst in another", () => {
+    const v = classifyLockWave(
+      summaryOf([
+        { minute: "2026-09-03 03:05", cancelsStmt: 74 },
+        { minute: "2026-09-03 14:10", waiting: 12, cancelsLock: 3 },
+      ]),
+    );
+    expect(v?.kind).toBe("cascade");
+    expect(v?.windowFrom).toBe("2026-09-03 14:10");
   });
 
   test("the window label reflects real minutes, not a 2h bucket span", () => {

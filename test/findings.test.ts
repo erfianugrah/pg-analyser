@@ -2500,7 +2500,9 @@ describe("lock_wave (retrospective log cascade)", () => {
     ).find((x) => x.heuristicId === "lock_wave");
     expect(f?.severity).toBe("high");
     expect(f?.title).toMatch(/public\.orders/);
-    expect(f?.evidence).toMatch(/scanned 2026-07-15 18:15 to 2026-07-15 18:25/);
+    expect(f?.evidence).toMatch(
+      /events seen 2026-07-15 18:15 to 2026-07-15 18:25 in the newest 4 MB of 1 log file/,
+    );
   });
 
   test("10 waits -> MED", () => {
@@ -2527,6 +2529,28 @@ describe("lock_wave (retrospective log cascade)", () => {
   test("no lockWave collected -> no finding", () => {
     expect(deriveFindings(base()).find((x) => x.heuristicId === "lock_wave")).toBeUndefined();
   });
+
+  test("statement-timeout-only burst -> statement_timeout_burst (not lock_wave), names the role timeouts", () => {
+    const a = withLockWave([
+      { minute: "2026-09-03 03:05", cancelsStmt: 49 },
+      { minute: "2026-09-03 03:06", cancelsStmt: 25 },
+    ]);
+    a.sql.roleConfig = [
+      { role: "anon", rolconfig: ["statement_timeout=3s"] },
+      { role: "authenticated", rolconfig: ["statement_timeout=8s"] },
+      { role: "postgres", rolconfig: ["search_path=public"] },
+    ];
+    const f = deriveFindings(a);
+    expect(f.some((x) => x.heuristicId === "lock_wave")).toBe(false);
+    const b = f.find((x) => x.heuristicId === "statement_timeout_burst");
+    expect(b?.severity).toBe("med");
+    expect(b?.title).toContain(
+      "74 statements cancelled by statement_timeout (no lock waits logged)",
+    );
+    expect(b?.title).not.toContain("Lock-wait cascade");
+    expect(b?.evidence).toContain("anon=3s, authenticated=8s");
+    expect(b?.evidence).toContain("not a lock-queue cascade");
+  });
 });
 
 describe("new coverage findings (stage 2/3)", () => {
@@ -2540,6 +2564,27 @@ describe("new coverage findings (stage 2/3)", () => {
     a.sql.topStatements = [{ queryid: "1", pct: 15, calls: 10, mean_ms: 800, query: "select 1" }];
     const hi = deriveFindings(a).find((x) => x.heuristicId === "top_query_db_time");
     expect(hi?.severity).toBe("med");
+    // dominant share of an IDLE database (measured: pg_net reaper, 44%, 25 s total in
+    // a week, 0.04 ms mean) -> stays low; the same share with real total time -> med
+    a.sql.topStatements = [
+      { queryid: "1", pct: 44.1, calls: 565_871, mean_ms: 0.04, total_ms: 24_931, query: "delete" },
+    ];
+    expect(deriveFindings(a).find((x) => x.heuristicId === "top_query_db_time")?.severity).toBe(
+      "low",
+    );
+    a.sql.topStatements = [
+      {
+        queryid: "1",
+        pct: 44.1,
+        calls: 565_871,
+        mean_ms: 0.04,
+        total_ms: 6_500_000,
+        query: "delete",
+      },
+    ];
+    expect(deriveFindings(a).find((x) => x.heuristicId === "top_query_db_time")?.severity).toBe(
+      "med",
+    );
   });
 
   test("top_query_db_time: below threshold -> no finding", () => {
@@ -3148,7 +3193,9 @@ describe("report-review fixes (2026-09-03): rules that overreached their evidenc
       { title: "Swap-in pages/s", unit: "", points: pts(123) },
     ];
     const f = deriveFindings(a).find((x) => x.heuristicId === "mem_pressure_paging");
-    expect(f?.title).toContain("avg 89 major faults/s, 123 swap-ins/s over 30d");
+    expect(f?.severity).toBe("med");
+    expect(f?.title).toContain("major faults/s >= 20 for 100% of the window");
+    expect(f?.title).toContain("over 30d");
   });
 
   test("positives: WAL-archiving proxy no longer claims PITR recoverability outright", () => {
@@ -3306,5 +3353,77 @@ describe("never_autovacuumed: bounded by the stats window, not 'never'", () => {
     expect(f?.evidence).toContain("cumulative statistics started 10.4 days ago");
     expect(f?.evidence).not.toContain("not of an emptied table");
     expect(f?.evidence).toContain("ANALYZE it");
+  });
+});
+
+describe("report-review fixes (2026-09-04)", () => {
+  test("paging: spiky series (mean over threshold, median near zero) is episodic LOW, not sustained MED", () => {
+    // Measured: 201 samples, 13% >= 20 faults/s (peak 507), median 0.36 -> mean 23.
+    const a = base();
+    const pts = Array.from({ length: 200 }, (_, i) => ({
+      t: i * 3 * 3600,
+      v: i % 100 < 13 ? 300 : 0.3,
+    }));
+    a.trends = [
+      { title: "Major page faults/s", unit: "", points: pts },
+      { title: "Swap-in pages/s", unit: "", points: pts.map((p) => ({ t: p.t, v: 0 })) },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "mem_pressure_paging");
+    expect(f?.severity).toBe("low");
+    expect(f?.title).toContain("Episodic paging");
+    expect(f?.title).toContain("13% of the window");
+    expect(f?.title).toContain("peak 300");
+  });
+
+  test("paging: under a twentieth of the window above threshold -> no finding even if the mean is high", () => {
+    const a = base();
+    const pts = Array.from({ length: 200 }, (_, i) => ({ t: i * 3600, v: i < 4 ? 2000 : 0.1 })); // 2% of samples
+    a.trends = [
+      { title: "Major page faults/s", unit: "", points: pts },
+      { title: "Swap-in pages/s", unit: "", points: pts.map((p) => ({ t: p.t, v: 0 })) },
+    ];
+    expect(deriveFindings(a).some((x) => x.heuristicId === "mem_pressure_paging")).toBe(false);
+  });
+
+  test("bloat_estimate_suspect: a partition whose n_live_tup only counts post-reset inserts is judged by reltuples", () => {
+    // Measured: 264 MB heap-ish, live 4,141 (since the reset), reltuples 109,527 -> read as 59 KB/row.
+    const a = base();
+    a.sql.dbSizeBytes = 500_000_000_000;
+    a.sql.biggestTables = [
+      {
+        schema: "public",
+        table: "public.ledger_2026_08",
+        total_size: "264 MB",
+        total_bytes: 276_824_064,
+        index_bytes: 27_262_976,
+        toast_bytes: 163_840,
+        live_rows: 4_141,
+        est_rows: 109_527,
+        maintained: false,
+      },
+    ];
+    a.sql.bloat = [{ name: "public.ledger_2026_08", bloat_x: 1.1, waste_bytes: 0 }];
+    expect(deriveFindings(a).some((x) => x.heuristicId === "bloat_estimate_suspect")).toBe(false);
+  });
+
+  test("storage_concentration: when TOAST dominates the biggest table, the evidence leads with it", () => {
+    const a = base();
+    a.sql.dbSizeBytes = 7_247_757_312;
+    a.sql.biggestTables = [
+      {
+        schema: "public",
+        table: "public.attachments",
+        total_size: "1939 MB",
+        index_size: "24 MB",
+        toast_size: "1913 MB",
+        total_bytes: 2_033_303_552,
+        index_bytes: 25_231_360,
+        toast_bytes: 2_005_917_696,
+        live_rows: 2_407,
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "storage_concentration");
+    expect(f?.evidence).toContain("1913 MB of it is TOAST (99%)");
+    expect(f?.evidence).toContain("indexes");
   });
 });

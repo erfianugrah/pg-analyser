@@ -512,6 +512,10 @@ export const EXCLUSIONS: Record<string, { clause: ExclusionClause; why: string }
   live_lock_contention: { clause: "no-metric", why: "pg_stat_activity SQL; no metric family" },
   lock_forensics: { clause: "no-metric", why: "pg_stat_activity SQL; no metric family" },
   lock_wave: { clause: "no-metric", why: "pg_stat_activity SQL; no metric family" },
+  statement_timeout_burst: {
+    clause: "no-metric",
+    why: "server-log parse; no metric family",
+  },
   long_running: { clause: "no-metric", why: "pg_stat_activity SQL; no metric family" },
   // --- Cron plane ---
   cron_job_failing: { clause: "no-metric", why: "cron.job_run_details SQL; no metric family" },

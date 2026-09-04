@@ -383,12 +383,16 @@ export function lockWaveFindings(a: Analysis): Finding[] {
   const lw = a.sql.lockWave;
   if (!lw) return [];
   const out: Finding[] = [];
+  // coverage.from/.to are the span of MATCHED events, not of the bytes read
+  // (collect derives them from the parsed buckets), so say "events seen", and
+  // name the scan size so a quiet tail is not misread as an unscanned one.
+  const scanned = `the newest ${Math.round(lw.coverage.bytesScanned / 1e6)} MB of ${lw.coverage.files} log file(s)`;
   const cov =
     lw.coverage.from && lw.coverage.to
-      ? `scanned ${lw.coverage.from} to ${lw.coverage.to}`
-      : `scanned ${lw.coverage.files} file(s), ${Math.round(lw.coverage.bytesScanned / 1e6)}MB`;
+      ? `lock/timeout events seen ${lw.coverage.from} to ${lw.coverage.to} in ${scanned}`
+      : `no lock/timeout events in ${scanned}`;
   const verdict = classifyLockWave(lw);
-  if (verdict) {
+  if (verdict?.kind === "cascade") {
     const topRel = lw.topRelations[0];
     const relText = topRel ? ` on ${topRel.name ?? `relid ${topRel.relid}`}` : "";
     const secs = Math.round(verdict.maxWaitMs / 1000);
@@ -399,6 +403,29 @@ export function lockWaveFindings(a: Analysis): Finding[] {
       anchor: "#locks",
       evidence: `${cov}. ${verdict.deadlocks > 0 ? `${verdict.deadlocks} deadlock(s) in-window. ` : ""}Retrospective from server logs.`,
       ...meta("lock_wave"),
+    });
+  } else if (verdict?.kind === "stmt_timeout") {
+    // Only statement_timeout cancels, no lock line: slow statements hitting
+    // their timeout. Name the role-level timeouts in force so the reader can
+    // see how short the fuse is (Supabase ships anon 3s / authenticated 8s).
+    const roleTimeouts = a.sql.roleConfig
+      .flatMap((r) =>
+        (Array.isArray(r.rolconfig) ? r.rolconfig : []).flatMap((c) => {
+          const m = /^statement_timeout=(.+)$/.exec(String(c));
+          return m ? [`${String(r.role)}=${m[1]}`] : [];
+        }),
+      )
+      .join(", ");
+    const timeouts = roleTimeouts
+      ? ` Role statement_timeout in force: ${roleTimeouts}; server default ${a.pgConfig?.statement_timeout ?? "?"} ms.`
+      : "";
+    out.push({
+      severity: verdict.severity,
+      category: "Performance",
+      title: `Statement-timeout burst ${verdict.windowFrom}-${verdict.windowTo}: ${verdict.cancelsStmt} statements cancelled by statement_timeout (no lock waits logged)`,
+      anchor: "#locks",
+      evidence: `${cov}. Zero 'still waiting for lock' lines and zero lock-timeout cancels in the window, so this is not a lock-queue cascade.${timeouts} Retrospective from server logs.`,
+      ...meta("statement_timeout_burst"),
     });
   } else if (lw.buckets.some((b) => b.deadlocks > 0)) {
     // Deadlocks are logged even with log_lock_waits off; surface them even if the
@@ -980,9 +1007,13 @@ export function deriveFindings(a: Analysis): Finding[] {
   if (topByTime && num(topByTime.pct) >= THRESHOLDS.topQueryDbTimePct) {
     // Attribution by default (low) - a dominant query is often a normal hot
     // path. Escalate to med only when it ALSO has real per-call cost (a slow
-    // mean), i.e. a plan/index problem rather than a cheap high-frequency query.
+    // mean), i.e. a plan/index problem rather than a cheap high-frequency query,
+    // or when it dominates AND carries real total time - a 44% share of an idle
+    // database (25 s of exec time in a week, measured) is not a MED.
     const expensive =
-      num(topByTime.mean_ms) >= 50 || num(topByTime.pct) >= 3 * THRESHOLDS.topQueryDbTimePct;
+      num(topByTime.mean_ms) >= 50 ||
+      (num(topByTime.pct) >= 3 * THRESHOLDS.topQueryDbTimePct &&
+        num(topByTime.total_ms) >= THRESHOLDS.topQueryEscalateMinTotalMs);
     out.push({
       severity: expensive ? "med" : "low",
       category: "Performance",
@@ -1953,12 +1984,20 @@ export function deriveFindings(a: Analysis): Finding[] {
     const share = num(topTable.total_bytes) / dbBytes;
     if (share >= THRESHOLDS.storageConcentrationFrac) {
       const idxShare = num(topTable.index_bytes) / num(topTable.total_bytes);
+      const toastShare = num(topTable.toast_bytes) / num(topTable.total_bytes);
+      // Lead with TOAST when it dominates: a 1.9 GB table holding 2,407 rows is
+      // out-of-line payloads (files/JSON stored in the row), and "1% indexes"
+      // says nothing about where the disk went.
+      const toastText =
+        toastShare >= 0.5
+          ? `${String(topTable.toast_size ?? "most")} of it is TOAST (${Math.round(toastShare * 100)}%) - large out-of-line values (text/JSON/binary payloads) stored in the rows themselves; `
+          : "";
       out.push({
         severity: "low",
         category: "Capacity",
         title: `${String(topTable.table)} is ${Math.round(share * 100)}% of the database (${String(topTable.total_size)} of ${String(a.sql.dbSize ?? "")})`,
         anchor: "#tables",
-        evidence: `${String(topTable.index_size)} of it is indexes (${Math.round(idxShare * 100)}%); ${String(topTable.live_rows ?? "?")} live rows.`,
+        evidence: `${toastText}${String(topTable.index_size)} of it is indexes (${Math.round(idxShare * 100)}%); ${String(topTable.live_rows ?? "?")} live rows.`,
         ...meta("storage_concentration"),
       });
     }
@@ -2021,9 +2060,13 @@ export function deriveFindings(a: Analysis): Finding[] {
   const bloatByName = new Map(a.sql.bloat.map((r) => [String(r.name), num(r.bloat_x)]));
   const heapBytesOf = (r: SqlRow): number =>
     Math.max(0, num(r.total_bytes) - num(r.index_bytes) - num(r.toast_bytes));
+  // Row count: the larger of n_live_tup and the catalog estimate. Inside a short
+  // stats window n_live_tup only counts inserts since the reset (measured: a
+  // monthly partition at 4,141 live vs 109,527 in reltuples read as 59 KB/row).
+  const rowsOf = (r: SqlRow): number => Math.max(num(r.live_rows), num(r.est_rows));
   const inconsistent = appRows(a.sql.biggestTables)
     .filter((r) => {
-      const rows = num(r.live_rows);
+      const rows = rowsOf(r);
       const bytes = heapBytesOf(r);
       if (rows < THRESHOLDS.spacePerRowMinRows || bytes < THRESHOLDS.spacePerRowMinBytes)
         return false;
@@ -2037,7 +2080,7 @@ export function deriveFindings(a: Analysis): Finding[] {
     .slice(0, 3);
   if (inconsistent.length) {
     const worst = inconsistent[0] as SqlRow;
-    const perRowKb = Math.round(heapBytesOf(worst) / num(worst.live_rows) / 1024);
+    const perRowKb = Math.round(heapBytesOf(worst) / rowsOf(worst) / 1024);
     out.push({
       severity: "low",
       category: "Capacity",
@@ -2149,25 +2192,43 @@ export function deriveFindings(a: Analysis): Finding[] {
   // kernel parks cold anon pages there, so a full-but-idle swap is normal. The
   // real signal is a sustained swap-IN or major-fault RATE - the working set
   // spilling out of RAM to disk - which a MemAvailable snapshot cannot see.
-  const majorFaults = avgTrend("Major page faults/s");
-  const swapIn = avgTrend("Swap-in pages/s");
-  if (majorFaults >= THRESHOLDS.majorFaultsPerSec || swapIn >= THRESHOLDS.swapInPagesPerSec) {
+  // Graded by the FRACTION of the window above threshold, not the window mean:
+  // a handful of 500 faults/s spikes lifts a 30d mean over 20/s while the
+  // median sits at 0.4 (measured) - that is episodic paging, not a working set
+  // that no longer fits. Same shape as the CPU/memory sustained-high rules.
+  const mfPts = a.trends.find((t) => t.title === "Major page faults/s")?.points ?? [];
+  const siPts = a.trends.find((t) => t.title === "Swap-in pages/s")?.points ?? [];
+  const mfFrac = sustainedFrac(mfPts, THRESHOLDS.majorFaultsPerSec, ">=");
+  const siFrac = sustainedFrac(siPts, THRESHOLDS.swapInPagesPerSec, ">=");
+  const pagingFrac = Math.max(mfFrac, siFrac);
+  if ((mfPts.length >= 2 || siPts.length >= 2) && pagingFrac >= THRESHOLDS.pagingEpisodicFrac) {
+    const stats = (pts: { v: number }[]) => {
+      const vs = pts.map((p) => p.v).sort((x, y) => x - y);
+      const p50 = vs.length ? (vs[Math.floor(vs.length / 2)] ?? 0) : 0;
+      const peak = vs.length ? (vs[vs.length - 1] ?? 0) : 0;
+      return `median ${p50 < 10 ? p50.toFixed(1) : Math.round(p50)}, peak ${Math.round(peak)}`;
+    };
+    const pct = (f: number) => `${Math.round(f * 100)}%`;
     const bits: string[] = [];
-    if (majorFaults >= THRESHOLDS.majorFaultsPerSec)
-      bits.push(`${Math.round(majorFaults)} major faults/s`);
-    if (swapIn >= THRESHOLDS.swapInPagesPerSec) bits.push(`${Math.round(swapIn)} swap-ins/s`);
-    // These are window AVERAGES (the current sample can be near zero while the
-    // 30d mean is high), so say so - the tile next to this finding shows "now".
-    const pagingTs = (a.trends.find((t) => t.title === "Major page faults/s")?.points ?? []).map(
-      (p) => p.t,
-    );
+    if (mfFrac >= THRESHOLDS.pagingEpisodicFrac)
+      bits.push(
+        `major faults/s >= ${THRESHOLDS.majorFaultsPerSec} for ${pct(mfFrac)} of the window (${stats(mfPts)})`,
+      );
+    if (siFrac >= THRESHOLDS.pagingEpisodicFrac)
+      bits.push(
+        `swap-in pages/s >= ${THRESHOLDS.swapInPagesPerSec} for ${pct(siFrac)} of the window (${stats(siPts)})`,
+      );
+    const pagingTs = (mfPts.length ? mfPts : siPts).map((p) => p.t);
     const pagingSpanDays =
       pagingTs.length > 1 ? (Math.max(...pagingTs) - Math.min(...pagingTs)) / 86400 : 0;
     const pagingWindow = pagingSpanDays >= 1 ? ` over ${Math.round(pagingSpanDays)}d` : "";
+    const sustained = pagingFrac >= THRESHOLDS.pagingSustainedFrac;
     out.push({
-      severity: "med",
+      severity: sustained ? "med" : "low",
       category: "Capacity",
-      title: `Memory pressure: working set paging to disk (avg ${bits.join(", ")}${pagingWindow})`,
+      title: sustained
+        ? `Memory pressure: working set paging to disk (${bits.join("; ")}${pagingWindow})`
+        : `Episodic paging, not sustained memory pressure (${bits.join("; ")}${pagingWindow})`,
       anchor: "#trends",
       ...meta("mem_pressure_paging"),
     });
