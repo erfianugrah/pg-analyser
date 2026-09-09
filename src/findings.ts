@@ -131,6 +131,7 @@ function gucBytes(rows: SqlRow[], name: string): number | null {
 }
 
 const bytesGb = (b: number): string => `${(b / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+const bytesMb = (b: number): string => `${Math.round(b / (1024 * 1024))} MB`;
 
 // Space recoverable without losing data: measured/estimated table bloat +
 // droppable unused indexes (app-scoped) + WAL pinned by INACTIVE replication
@@ -736,6 +737,116 @@ function shortStatsWindowCaveat(a: Analysis): string | null {
   return `Low confidence: counters have only accumulated for ${window} (< ${THRESHOLDS.minStatsWindowDays}d); re-check after a full workload cycle before acting.`;
 }
 
+/** Lowercase, whitespace-collapsed, trailing-semicolon-free statement text for
+ * containment matching between pg_stat_statements and cron.job.command. */
+function normSql(s: unknown): string {
+  return String(s ?? "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .replace(/;\s*$/, "")
+    .trim();
+}
+
+/** A cron command clause that disables statement_timeout for the job. */
+const CRON_TIMEOUT_OFF_RE =
+  /\bset\s+(?:local\s+|session\s+)?statement_timeout\s*(?:=|\bto\b)\s*'?0'?\s*(?:;|$)/i;
+
+/**
+ * The active pg_cron job whose command runs this statement, if any. A cron
+ * command is typically `select schema.fn()` (sometimes behind a SET prefix),
+ * and pg_stat_statements records that same call as its own top-level statement,
+ * so containment in either direction pairs them. Null when nothing matches.
+ */
+export function cronJobForStatement(a: Analysis, query: unknown): SqlRow | null {
+  const q = normSql(query);
+  if (q.length < 12) return null;
+  for (const job of a.sql.cronJobs) {
+    if (job.active === false) continue;
+    const cmd = normSql(job.command);
+    if (!cmd) continue;
+    if (cmd.includes(q) || q.includes(cmd)) return job;
+  }
+  return null;
+}
+
+/**
+ * Dating caveat for a statement-level finding whose statement is a pg_cron
+ * job. pg_stat_statements accumulates since the last stats reset while the
+ * cron run log covers 7 days; when the slowest run in those 7 days is under a
+ * tenth of the statement's lifetime mean, the cost being flagged accrued
+ * earlier in the window (a finished backfill, say) and is not the current
+ * workload. Null when no job matches, the job has no completed recent runs,
+ * or recent runs are still slow.
+ */
+export function cronHistoricalNote(a: Analysis, row: SqlRow): string | null {
+  const job = cronJobForStatement(a, row.query);
+  if (!job || num(job.runs_7d) <= 0 || job.max_duration_s == null) return null;
+  const meanS = num(row.mean_ms) / 1000;
+  const maxRecentS = num(job.max_duration_s);
+  if (!(meanS >= 5 && maxRecentS * 10 < meanS)) return null;
+  const win = statsWindowDays(a);
+  const winText =
+    win == null ? "the statement window" : `the ~${Math.round(win)}d statement window`;
+  return `Scheduled by pg_cron job "${String(job.jobname)}" (${String(job.schedule)}): its ${num(job.runs_7d)} runs in the last 7 days each finished in <= ${maxRecentS}s, so this cost accrued earlier in ${winText} and is not the current workload.`;
+}
+
+/** Leading column of every unindexed foreign key, keyed "schema.table:column". */
+function fkUnindexedLeadColumns(a: Analysis): Set<string> {
+  const out = new Set<string>();
+  for (const r of a.sql.fkUnindexed) {
+    const m = /FOREIGN KEY\s*\(([^)]*)\)/i.exec(String(r.definition ?? ""));
+    const lead = m?.[1]?.split(",")[0]?.trim().replace(/^"|"$/g, "");
+    if (lead) out.add(`${String(r.table)}:${lead}`);
+  }
+  return out;
+}
+
+/**
+ * Does any policy expression on the table compare `col` in a shape a btree
+ * index can serve: `col = <dynamic>` / `<dynamic> = col` / `col IN (select
+ * ...)`, where dynamic is a function call (auth.uid()), a parameter or a
+ * subquery? Not served, and so not flagged: `col = 'literal'` (a constant,
+ * low-cardinality filter), `col IS NULL`, a compare against another column of
+ * the same row, and a same-named column that only appears qualified by
+ * ANOTHER table inside a subquery. Null when no policy text is available for
+ * the table (older analysis.json), so the caller keeps the row.
+ */
+export function policyColumnIndexable(
+  exprs: string[],
+  ownTable: string,
+  col: string,
+): boolean | null {
+  if (exprs.length === 0) return null;
+  const own = ownTable.split(".").pop() ?? ownTable;
+  const tok = String.raw`[\w.$()'":]+`;
+  const re = new RegExp(`(${tok})\\s*(=|\\bin\\b|\\bis\\b)\\s*(${tok})`, "gi");
+  const identity = (t: string) => t.replace(/^\(+/, "").replace(/\)+$/, "");
+  const isCol = (t: string) => {
+    const id = identity(t);
+    const m = /^(?:(\w+)\.)?(\w+)$/.exec(id);
+    if (!m || m[2] !== col) return false;
+    return m[1] == null || m[1] === own;
+  };
+  const kind = (t: string): "dynamic" | "constant" | "column" => {
+    const p = t.replace(/^\(+/, "");
+    if (/^select\b/i.test(p) || /^\$\d+/.test(p) || /\(/.test(p)) return "dynamic";
+    if (/^(?:'|\d|true\b|false\b|null\b)/i.test(p)) return "constant";
+    return "column";
+  };
+  for (const expr of exprs) {
+    // pg_get_expr deparses `IN ( SELECT` with a space; glue it so the subquery
+    // opener lands in the partner token.
+    for (const m of expr.replace(/\(\s+/g, "(").matchAll(re)) {
+      const [, left, op, right] = m as unknown as [string, string, string, string];
+      const partner = isCol(left) ? right : isCol(right) ? left : null;
+      if (partner == null) continue;
+      if (/^is$/i.test(op)) continue;
+      if (kind(partner) === "dynamic") return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Count depletion EPISODES in a trend series: a transition from above a
  * threshold to at/below it (a fresh dip), so a series that dips, recovers, and
@@ -767,6 +878,8 @@ export type DiskProjection = {
   rising: boolean;
   /** The last EXPANSION in the window, if any (segmentation happened on it). */
   expansion: ResizeEvent | null;
+  /** Every expansion in the window, in time order (a volume can step twice). */
+  expansions: ResizeEvent[];
   /** True when the (post-resize) segment had enough points to trust a trend. */
   sufficient: boolean;
 };
@@ -816,6 +929,7 @@ export function projectDataDisk(
         spanDays: s.spanDays,
         rising: s.direction === "rising",
         expansion: lastExp,
+        expansions,
         sufficient: true,
       };
     }
@@ -828,6 +942,7 @@ export function projectDataDisk(
       spanDays: 0,
       rising: false,
       expansion: lastExp,
+      expansions,
       sufficient: false,
     };
   }
@@ -844,6 +959,7 @@ export function projectDataDisk(
       spanDays: s.spanDays,
       rising: s.direction === "rising",
       expansion: lastExp,
+      expansions,
       sufficient: true,
     };
   }
@@ -856,6 +972,7 @@ export function projectDataDisk(
     spanDays: 0,
     rising: false,
     expansion: lastExp,
+    expansions,
     sufficient: false,
   };
 }
@@ -966,12 +1083,27 @@ export function deriveFindings(a: Analysis): Finding[] {
     (r) => num(r.temp_blks_written) >= THRESHOLDS.tempSpillBlocks,
   );
   if (spill) {
+    // Size the fix from the data: temp bytes per call is the floor the sort or
+    // hash needs, and when it dwarfs work_mem a work_mem bump alone cannot
+    // absorb it. temp_blks_written counts 8 kB blocks.
+    const calls = num(spill.calls);
+    const perCall = calls > 0 ? (num(spill.temp_blks_written) * 8192) / calls : 0;
+    const workMem = gucBytes(a.sql.pgSettings, "work_mem");
+    const sizing =
+      perCall > 0
+        ? `About ${bytesMb(perCall)} of temp per call${workMem != null ? ` against work_mem ${bytesMb(workMem)}` : ""}${
+            workMem != null && perCall > 4 * workMem
+              ? " - raising work_mem alone will not absorb that; shrink the working set the sort/hash touches"
+              : ""
+          }.`
+        : "";
+    const hist = cronHistoricalNote(a, spill);
     out.push({
-      severity: "med",
+      severity: hist ? "low" : "med",
       category: "Performance",
       title: `A query is spilling to disk (${spill.temp_written ?? "temp files"} over ${spill.calls} calls)`,
       anchor: "#queryio",
-      evidence: String(spill.query ?? ""),
+      evidence: [String(spill.query ?? ""), sizing, hist].filter(Boolean).join(" "),
       ...meta("query_temp_spill"),
     });
   }
@@ -990,12 +1122,13 @@ export function deriveFindings(a: Analysis): Finding[] {
       num(vary.stall_ratio) > 10 && num(vary.max_ms) > 5000
         ? " The max/mean spread is a stall signature (lock queue, I/O, or cold cache) - corroborate with the lock-wave / contention-episode findings. Caveat: pg_stat_statements records only completed executions, so statements killed by statement_timeout never appear here; this under-counts cascade victims and is corroboration, never the primary detector."
         : "";
+    const hist = cronHistoricalNote(a, vary);
     out.push({
       severity: "low",
       category: "Performance",
       title: `A query has unstable latency (${vary.cv}x variation around a ${vary.mean_ms}ms mean)`,
       anchor: "#queryio",
-      evidence: `${String(vary.query ?? "")}${stall}`,
+      evidence: `${String(vary.query ?? "")}${stall}${hist ? ` ${hist}` : ""}`,
       ...meta("query_high_variance"),
     });
   }
@@ -1014,12 +1147,15 @@ export function deriveFindings(a: Analysis): Finding[] {
       num(topByTime.mean_ms) >= 50 ||
       (num(topByTime.pct) >= 3 * THRESHOLDS.topQueryDbTimePct &&
         num(topByTime.total_ms) >= THRESHOLDS.topQueryEscalateMinTotalMs);
+    // A dominant statement that is a cron job whose recent runs are cheap is a
+    // finished batch, not today's biggest tuning target - keep it as attribution.
+    const hist = cronHistoricalNote(a, topByTime);
     out.push({
-      severity: expensive ? "med" : "low",
+      severity: expensive && !hist ? "med" : "low",
       category: "Performance",
       title: `One query is ${topByTime.pct}% of total database time (${topByTime.calls} calls, ${topByTime.mean_ms}ms mean)`,
       anchor: "#outliers",
-      evidence: String(topByTime.query ?? ""),
+      evidence: [String(topByTime.query ?? ""), hist].filter(Boolean).join(" "),
       ...meta("top_query_db_time"),
     });
   }
@@ -1032,12 +1168,13 @@ export function deriveFindings(a: Analysis): Finding[] {
       num(r.shared_blks_read) >= THRESHOLDS.queryDiskMinBlocksRead,
   );
   if (diskCold) {
+    const hist = cronHistoricalNote(a, diskCold);
     out.push({
-      severity: "med",
+      severity: hist ? "low" : "med",
       category: "Performance",
       title: `A query serves ${diskCold.miss_pct}% of its reads from disk (${diskCold.calls} calls, ${diskCold.mean_ms}ms mean)`,
       anchor: "#queryio",
-      evidence: String(diskCold.query ?? ""),
+      evidence: [String(diskCold.query ?? ""), hist].filter(Boolean).join(" "),
       ...meta("query_disk_reads_high"),
     });
   }
@@ -1184,13 +1321,40 @@ export function deriveFindings(a: Analysis): Finding[] {
       ...meta("wal_heavy_statement"),
     });
   }
-  const rlsUnindexed = appRows(a.sql.rlsUnindexed).length;
+  // The SQL matches every attribute NAME that appears in a policy text, so
+  // narrow it to columns an index would actually serve: drop the leading column
+  // of an unindexed foreign key (the FK finding already owns it), require an
+  // index-servable compare shape in the policy text when we have it, and skip
+  // tables too small for the planner to prefer an index anyway (reltuples is a
+  // catalog estimate that survives a stats reset; -1 = never analyzed = keep).
+  const fkLead = fkUnindexedLeadColumns(a);
+  const policyText = new Map<string, string[]>();
+  for (const p of a.sql.rlsPolicies) {
+    const t = String(p.table ?? "");
+    const list = policyText.get(t) ?? [];
+    for (const e of [p.qual, p.with_check]) if (typeof e === "string" && e) list.push(e);
+    policyText.set(t, list);
+  }
+  const rlsUnindexedRows = appRows(a.sql.rlsUnindexed).filter((r) => {
+    const table = String(r.table ?? "");
+    const col = String(r.column ?? "");
+    if (fkLead.has(`${table}:${col}`)) return false;
+    const est = r.est_rows == null ? null : num(r.est_rows);
+    if (est != null && est >= 0 && est < THRESHOLDS.rlsUnindexedMinRows) return false;
+    return policyColumnIndexable(policyText.get(table) ?? [], table, col) !== false;
+  });
+  const rlsUnindexed = rlsUnindexedRows.length;
   if (rlsUnindexed > 0) {
+    const shown = rlsUnindexedRows
+      .slice(0, 5)
+      .map((r) => `${String(r.table)}.${String(r.column)}`)
+      .join(", ");
     out.push({
       severity: "med",
       category: "Performance",
-      title: `${rlsUnindexed} RLS policy ${rlsUnindexed === 1 ? "column" : "columns"} lack a covering index (seq scan per check)`,
+      title: `${rlsUnindexed} RLS policy ${rlsUnindexed === 1 ? "column lacks" : "columns lack"} an index for the policy predicate`,
       anchor: "#rlsunindexed",
+      evidence: `${shown}${rlsUnindexed > 5 ? ` (+${rlsUnindexed - 5} more)` : ""}`,
       ...meta("rls_col_unindexed"),
     });
   }
@@ -1992,12 +2156,21 @@ export function deriveFindings(a: Analysis): Finding[] {
         toastShare >= 0.5
           ? `${String(topTable.toast_size ?? "most")} of it is TOAST (${Math.round(toastShare * 100)}%) - large out-of-line values (text/JSON/binary payloads) stored in the rows themselves; `
           : "";
+      // A live-row counter of 0 on a table this size is a reset counter, not an
+      // empty table (the stale-statistics finding makes that case); quote the
+      // catalog estimate instead of repeating the contradiction.
+      const liveRows = num(topTable.live_rows);
+      const estRows = num(topTable.est_rows);
+      const rowsText =
+        liveRows === 0 && estRows > 0
+          ? `~${estRows.toLocaleString("en-US")} rows (catalog estimate; the live-row counter reads 0${topTable.maintained === false ? " because the table's statistics were reset" : ""})`
+          : `${String(topTable.live_rows ?? "?")} live rows`;
       out.push({
         severity: "low",
         category: "Capacity",
         title: `${String(topTable.table)} is ${Math.round(share * 100)}% of the database (${String(topTable.total_size)} of ${String(a.sql.dbSize ?? "")})`,
         anchor: "#tables",
-        evidence: `${toastText}${String(topTable.index_size)} of it is indexes (${Math.round(idxShare * 100)}%); ${String(topTable.live_rows ?? "?")} live rows.`,
+        evidence: `${toastText}${String(topTable.index_size)} of it is indexes (${Math.round(idxShare * 100)}%); ${rowsText}.`,
         ...meta("storage_concentration"),
       });
     }
@@ -2447,11 +2620,22 @@ export function deriveFindings(a: Analysis): Finding[] {
     THRESHOLDS.diskResizeStepFrac,
   );
   if (dataDisk?.expansion) {
+    const steps = dataDisk.expansions;
+    const chain = [bytesGb(steps[0]?.fromBytes ?? dataDisk.expansion.fromBytes)]
+      .concat(steps.map((e) => bytesGb(e.toBytes)))
+      .join(" -> ");
+    const when = steps
+      .map((e) => `${new Date(e.at * 1000).toISOString().slice(0, 16).replace("T", " ")} UTC`)
+      .join(", ");
     out.push({
       severity: "low",
       category: "Capacity",
-      title: `Disk auto-expanded ${bytesGb(dataDisk.expansion.fromBytes)} -> ${bytesGb(dataDisk.expansion.toBytes)} in the window`,
+      title:
+        steps.length > 1
+          ? `Disk auto-expanded ${steps.length} times in the window: ${chain}`
+          : `Disk auto-expanded ${chain} in the window`,
       anchor: "#trends",
+      evidence: `Expansion${steps.length > 1 ? "s" : ""} at ${when}.`,
       ...meta("disk_expanded"),
     });
   }
@@ -2552,8 +2736,30 @@ export function deriveFindings(a: Analysis): Finding[] {
       ...meta("extensions_outdated"),
     });
   }
+  // A vector column with no declared dimensions cannot carry an HNSW or IVFFlat
+  // index at all (pgvector: "column does not have dimensions", measured on
+  // 0.8.6), and such columns are usually float arrays stored for their values,
+  // not searched by distance. Keep those only when a top-level statement
+  // actually runs a distance operator against the table; a row that predates
+  // the dimensions column (undefined, not null) is kept as unknown.
+  const vecDistanceTables = new Set<string>();
   if (a.sql.unindexedVectors.length) {
-    const v = a.sql.unindexedVectors;
+    for (const r of [...a.sql.topStatements, ...a.sql.topByCalls, ...a.sql.queryIoStats]) {
+      const q = String(r.query ?? "").toLowerCase();
+      if (!/<->|<=>|<#>|<\+>|<~>|<%>/.test(q)) continue;
+      for (const v of a.sql.unindexedVectors)
+        if (q.includes(String(v.table).toLowerCase()))
+          vecDistanceTables.add(`${v.schema}.${v.table}`);
+    }
+  }
+  const unindexedVectors = a.sql.unindexedVectors.filter(
+    (r) =>
+      r.dimensions === undefined ||
+      r.dimensions != null ||
+      vecDistanceTables.has(`${r.schema}.${r.table}`),
+  );
+  if (unindexedVectors.length) {
+    const v = unindexedVectors;
     // Flag the ones stored out-of-line (TOAST): those exact scans also de-toast
     // from disk, not just scan the heap - the compounded large-vector IO trap.
     const outOfLine = v.filter((r) => r.out_of_line === true);
@@ -2561,6 +2767,8 @@ export function deriveFindings(a: Analysis): Finding[] {
       .slice(0, 5)
       .map((r) => {
         const base = `${r.schema}.${r.table}.${r.column}`;
+        if (r.dimensions === null)
+          return `${base} (searched by distance but declared without dimensions - ALTER COLUMN ... TYPE vector(<n>) before an ANN index can be built)`;
         if (r.dimensions == null) return base;
         return `${base} (${r.dimensions}d${r.out_of_line === true ? ", TOASTed" : ""})`;
       })
@@ -2802,6 +3010,25 @@ export function deriveFindings(a: Analysis): Finding[] {
       anchor: "#cron",
       ...(collisions.length ? { evidence: collisions.join(" ") } : {}),
       ...meta("cron_job_overrun"),
+    });
+  }
+  // Jobs that switch statement_timeout off in their own command run unbounded
+  // whatever the database-wide setting says; the overrun check cannot see a run
+  // that has not ended, so name them directly.
+  const timeoutOffJobs = a.sql.cronJobs.filter(
+    (r) => r.active !== false && CRON_TIMEOUT_OFF_RE.test(String(r.command ?? "")),
+  );
+  if (timeoutOffJobs.length > 0) {
+    out.push({
+      severity: "low",
+      category: "Performance",
+      title: `${timeoutOffJobs.length} scheduled job${timeoutOffJobs.length === 1 ? "" : "s"} disable statement_timeout in their command`,
+      anchor: "#cron",
+      evidence: timeoutOffJobs
+        .slice(0, 5)
+        .map((r) => `"${String(r.jobname)}" (${String(r.schedule)})`)
+        .join(", "),
+      ...meta("cron_statement_timeout_off"),
     });
   }
   if (
@@ -3176,7 +3403,15 @@ export function derivePositives(a: Analysis): Positive[] {
     out.push({ category: "Performance", title: "Postgres is on the latest platform version" });
   }
   if (set.get("statement_timeout") !== "0" && set.get("statement_timeout") != null) {
-    out.push({ category: "Performance", title: "statement_timeout is configured" });
+    const optOut = a.sql.cronJobs.filter(
+      (r) => r.active !== false && CRON_TIMEOUT_OFF_RE.test(String(r.command ?? "")),
+    ).length;
+    out.push({
+      category: "Performance",
+      title: optOut
+        ? `statement_timeout is configured (${optOut} scheduled job${optOut === 1 ? "" : "s"} switch it off in their command)`
+        : "statement_timeout is configured",
+    });
   }
   // Meaningful negatives: an empty plane that was actually COLLECTED is a
   // healthy affirmative, not silence. Guard on the errored set so a

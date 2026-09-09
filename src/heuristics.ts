@@ -15,6 +15,13 @@ export const HEURISTICS_REVIEWED = "2026-07";
 
 /** Evergreen thresholds. Stable Postgres/Supabase facts - see docs/heuristics.md. */
 export const THRESHOLDS = {
+  /**
+   * rls_col_unindexed: skip tables whose catalog row estimate (pg_class.reltuples)
+   * is below this. The planner prefers a sequential scan over an index on a
+   * table of a few pages regardless, so an index there changes nothing; the
+   * Supabase RLS-index guidance measured its 171ms -> <0.1ms on a 100k-row table.
+   */
+  rlsUnindexedMinRows: 1000,
   /** Cache hit ratio target (blks_hit / (blks_hit + blks_read)). */
   cacheHitPct: 99,
   /** Minimum heap blocks accessed (since stats reset) before the cache-hit
@@ -400,6 +407,25 @@ export const HEURISTICS: Record<string, Heuristic> = {
     refs: [{ tier: "mechanism", label: "pg_cron", url: "https://github.com/citusdata/pg_cron" }],
     reviewed: R,
   },
+  cron_statement_timeout_off: {
+    id: "cron_statement_timeout_off",
+    plane: "Query",
+    howToVerify:
+      "Read cron.job.command for the named jobs: the SET statement_timeout = 0 prefix is gone, or replaced by a bound the job is known to finish inside; the database-wide statement_timeout then applies to the job like any other session.",
+    whyItMatters:
+      "A job whose command opens with SET statement_timeout = 0 runs with no upper bound, whatever the database-wide statement_timeout says. One slow run can then hold locks and a connection for hours while the next scheduled copies start on top of it, and because pg_stat_statements records only completed executions the damage surfaces late, as a spike in the statement's max time. The 'statement_timeout is configured' check does not cover these jobs.",
+    remediation:
+      "Give the job an explicit bound it is known to finish inside instead of 0 (SET statement_timeout = '30min' at the top of the command) and make the step itself bounded - a LIMIT on the batch, or an advisory lock so an overlapping copy exits immediately. Keep 0 only for a one-off backfill someone is watching.",
+    docUrl: "https://supabase.com/docs/guides/database/extensions/pg_cron",
+    refs: [
+      {
+        tier: "mechanism",
+        label: "statement_timeout",
+        url: "https://www.postgresql.org/docs/current/runtime-config-client.html#GUC-STATEMENT-TIMEOUT",
+      },
+    ],
+    reviewed: R,
+  },
   sequence_exhaustion: {
     id: "sequence_exhaustion",
     plane: "Storage",
@@ -550,7 +576,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "A sort or hash that exceeds work_mem spills to temp files on disk - far slower than memory and burning IOPS on every run. Repeatedly-called spilling queries are a common hidden latency + IOPS drain that the total-time ranking alone doesn't explain.",
     remediation:
-      "Raise work_mem for that query's path (per session/role, not globally - work_mem is per-operation per-connection so a global bump multiplies fast), or cut the working set the sort/hash touches (add an index so it sorts fewer rows, reduce the result set, or restructure the join). Start around 32-64MB and confirm the spill clears.",
+      "Size it from the evidence: the temp volume per call is roughly what the sort/hash needs in memory. When that is a few tens of MB, raise work_mem for that query's path (per session/role, not globally - work_mem is per-operation per-connection so a global bump multiplies fast) and confirm the spill clears. When it is hundreds of MB per call, no sane work_mem absorbs it - cut the working set instead (an index so it sorts fewer rows, a smaller batch, a restructured join).",
     docUrl: "https://supabase.com/docs/guides/database/query-optimization",
     reviewed: R,
   },
@@ -613,7 +639,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
     howToVerify:
       "EXPLAIN the policy-filtered query after indexing - the check should use the new index, not a seq scan.",
     whyItMatters:
-      "A policy-compared column with no covering index forces a seq scan on every row check (Supabase test: 171ms -> <0.1ms once indexed) - user-facing latency and needless CPU on every authenticated read.",
+      "When a policy compares a column against the caller (auth.uid(), a claim, a subquery) and that column has no index, the planner cannot use an index to find the rows the policy admits, so a policy-filtered read scans the table (Supabase test: 171ms -> <0.1ms once indexed) - user-facing latency and needless CPU on every authenticated read.",
     remediation:
       "Add a btree index on the policy-compared column: CREATE INDEX CONCURRENTLY ON <table> (<col>). Each RLS check then uses it instead of seq-scanning every row. Official test: 171ms -> <0.1ms once indexed.",
     docUrl: "https://supabase.com/docs/guides/database/postgres/row-level-security#add-indexes",
@@ -1675,7 +1701,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "A vector column queried by distance without an ANN index does an exact scan of every row per query, so similarity-search latency scales with table size and burns CPU - the classic pgvector slow path. It is worse when the vector is wide (>~500 dims): the vector type defaults to EXTENDED storage, so those values are TOASTed, and each exact scan de-toasts them from disk - and TOAST also defeats parallel seq scans. An HNSW index turns search into an index lookup (vectors live in the index, largely sidestepping de-toast).",
     remediation:
-      "Add an ANN index - HNSW (opclass matching your operator: vector_cosine_ops / vector_l2_ops / vector_ip_ops); search then hits the index instead of exact-scanning + de-toasting the heap. For wide vectors also consider halfvec (float16, halves storage + index size at ~equal recall) or, if dimensions are small enough to fit inline, ALTER COLUMN ... SET STORAGE PLAIN (needs a table rewrite) so exact scans stay in-heap and can go parallel.",
+      "The column must declare its dimensions first - pgvector refuses an HNSW or IVFFlat index on a bare vector column (ERROR: column does not have dimensions), so ALTER COLUMN ... TYPE vector(<n>) where needed. Then add an ANN index - HNSW (opclass matching your operator: vector_cosine_ops / vector_l2_ops / vector_ip_ops); search then hits the index instead of exact-scanning + de-toasting the heap. For wide vectors also consider halfvec (float16, halves storage + index size at ~equal recall) or, if dimensions are small enough to fit inline, ALTER COLUMN ... SET STORAGE PLAIN (needs a table rewrite) so exact scans stay in-heap and can go parallel.",
     docUrl: "https://supabase.com/docs/guides/ai/vector-indexes",
     reviewed: R,
   },

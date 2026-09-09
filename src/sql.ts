@@ -530,8 +530,12 @@ export const QUERIES = {
     select
       refs.schema as schema,
       refs.schema || '.' || refs.tbl as table,
-      refs.col as column
+      refs.col as column,
+      -- catalog row estimate (survives a stats reset; -1 = never analyzed) so
+      -- findings can skip tables too small for an index to matter
+      c.reltuples::bigint as est_rows
     from refs
+    join pg_class c on c.oid = refs.table_oid
     left join indexed ix on ix.table_oid = refs.table_oid and ix.col = refs.col
     where ix.col is null
     order by 1, 2, 3

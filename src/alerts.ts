@@ -520,6 +520,7 @@ export const EXCLUSIONS: Record<string, { clause: ExclusionClause; why: string }
   // --- Cron plane ---
   cron_job_failing: { clause: "no-metric", why: "cron.job_run_details SQL; no metric family" },
   cron_job_overrun: { clause: "no-metric", why: "cron.job_run_details SQL; no metric family" },
+  cron_statement_timeout_off: { clause: "no-metric", why: "cron.job SQL; no metric family" },
   pg_cron_review: { clause: "no-metric", why: "cron.job SQL; no metric family" },
   // --- Extension plane ---
   extensions_outdated: { clause: "no-metric", why: "pg_extension SQL; no metric family" },

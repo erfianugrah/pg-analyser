@@ -293,7 +293,7 @@ function extensionsSection(a: Analysis): string {
   let html = "";
   if (exts.length) html += sqlTable(exts, { mono: ["name"] });
   if (vecs.length)
-    html += `<p class=note>pgvector columns without an ANN index (ivfflat/hnsw) - exact-scanned on distance queries</p>${sqlTable(vecs, { mono: ["table", "column"], hide: ["schema"] })}`;
+    html += `<p class=note>pgvector columns without an ANN index (ivfflat/hnsw) - only a cost where the column is queried by distance; a column with no declared dimensions cannot be indexed until it is given one</p>${sqlTable(vecs, { mono: ["table", "column"], hide: ["schema"] })}`;
   if (vIdx.length)
     html += `<p class=note>ANN (hnsw/ivfflat) indexes - storage economics; a full-precision index dominating the DB is a halfvec candidate</p>${sqlTable(vIdx, { mono: ["table", "index", "definition"], hide: ["schema", "index_bytes", "table_bytes"] })}`;
   return html;

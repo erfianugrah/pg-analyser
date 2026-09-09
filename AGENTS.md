@@ -427,6 +427,15 @@ src/
                  rls_self_reference is split into the recursing shapes (high)
                  and rls_self_reference_latent (low) - see the 2026-09-03
                  verified facts for the measured conditions.
+                 Review pass (2026-09-09): pgvector_unindexed skips
+                 dimensionless columns unless a distance query touches the
+                 table; rls_col_unindexed dedups FK-lead columns, requires an
+                 index-servable compare shape and a catalog row floor;
+                 statement cards are dated against the cron run log
+                 (cronHistoricalNote); cron_statement_timeout_off is new;
+                 storage_concentration quotes est_rows over a reset counter;
+                 disk_expanded lists every step - see the 2026-09-09 verified
+                 facts.
                  Wraparound forensics (2026-08) adds SEVEN new findings:
                  txid_wraparound (table/database-attributed, escalates to high
                  when a holder is present; title states writes are refused at
@@ -659,6 +668,51 @@ src/
 - Scraper dirs contain a live credential in `prometheus.yml` - gitignored.
 
 ## Verified upstream facts (Supabase, 2026-07)
+
+2026-09-09 additions (third live no-PAT report review, PG 17.6 project):
+
+- **A vector column with no declared dimensions cannot carry an ANN index.**
+  Measured on `pgvector/pgvector:0.8.6-pg18`: `CREATE INDEX ... USING hnsw`
+  and `... USING ivfflat` on a bare `vector` column both fail with
+  `ERROR: column does not have dimensions`; `vector(3)` indexes fine. Such
+  columns (`atttypmod = -1`) are typically float arrays stored for their
+  values and only ever written, so pgvector_unindexed now keeps a dimensionless
+  column only when a top-level statement runs a distance operator against its
+  table, and then says to declare the dimensions first. Four such columns had
+  been a MED with an uncreatable CREATE INDEX as the fix.
+- **A statement's lifetime cost is not today's workload when it is a cron job
+  whose recent runs are cheap.** The top statement (85% of DB time, 31 s mean,
+  313 MB of temp per call) was a pg_cron backfill step scheduled every two
+  minutes; cron.job_run_details showed 5,040 runs in the last 7 days with a
+  0 s maximum. pg_stat_statements accumulates since the reset (47 days), the
+  cron log covers 7 days. `cronJobForStatement` pairs a statement with the
+  command that runs it (containment either way after normalising); when the
+  7-day max run is under a tenth of the lifetime mean, the spill / variance /
+  top-query / disk-read cards carry a dating note and drop to low.
+- **`SET statement_timeout = 0` inside a cron command bypasses the configured
+  timeout.** Two jobs opened with it; the positive "statement_timeout is
+  configured" now carries the count and `cron_statement_timeout_off` names
+  the jobs. pg_stat_statements only records completed runs, so an unbounded
+  job surfaces late, as a spike in max time (58 h here).
+- **The RLS-column SQL matches attribute NAMES in policy text, not compare
+  shapes.** Of eight flagged columns, five were the leading column of an
+  unindexed foreign key already on the FK card, one was `col = 'literal'`
+  (a three-valued visibility flag) and one was `col IS NULL`. The rule now
+  drops FK-lead columns, requires an index-servable shape in the policy text
+  (`policyColumnIndexable`: equality or IN against a function call, parameter
+  or subquery; a same-named column qualified by another table inside a
+  subquery does not count) and skips tables under `rlsUnindexedMinRows`
+  catalog rows (`est_rows` added to the SQL; -1 = never analyzed = keep).
+- **Spill sizing comes from temp bytes per call, not a fixed 32-64 MB.**
+  `temp_blks_written * 8192 / calls` against `work_mem`; over 4x work_mem the
+  evidence says a work_mem bump alone will not absorb it.
+- **The storage-share card must not repeat a reset counter.** It printed
+  "0 live rows" for a 23 GB table while the stale-stats card explained that 0
+  is a reset counter; it now quotes `est_rows` (pg_class.reltuples) when the
+  live counter is 0.
+- **A volume can step twice in one window.** 63 -> 106 GB and 106 -> 211 GB
+  a day apart; `projectDataDisk` returns every expansion and the card lists
+  them with timestamps.
 
 2026-09-04 additions (second live no-PAT report review, PG 15.8 project):
 

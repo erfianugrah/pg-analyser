@@ -1,10 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
   countDepletionEpisodes,
+  cronHistoricalNote,
+  cronJobForStatement,
   deriveFindings,
   derivePositives,
   parseCronIntervalSeconds,
   parseIntervalDays,
+  policyColumnIndexable,
   statsWindowDays,
 } from "../src/findings.ts";
 import type { Analysis } from "../src/schemas.ts";
@@ -941,7 +944,8 @@ describe("deriveFindings", () => {
     ];
     const f = deriveFindings(a).find((x) => x.anchor === "#rlsunindexed");
     expect(f?.severity).toBe("med");
-    expect(f?.title).toContain("2 RLS policy columns lack a covering index");
+    expect(f?.title).toContain("2 RLS policy columns lack an index for the policy predicate");
+    expect(f?.evidence).toContain("public.docs.owner_id");
   });
 
   test("swap occupancy does NOT produce a finding (static swap-used is not pressure)", () => {
@@ -3425,5 +3429,349 @@ describe("report-review fixes (2026-09-04)", () => {
     const f = deriveFindings(a).find((x) => x.heuristicId === "storage_concentration");
     expect(f?.evidence).toContain("1913 MB of it is TOAST (99%)");
     expect(f?.evidence).toContain("indexes");
+  });
+});
+
+describe("review-pass rule fixes: accuracy against a real no-PAT run shape", () => {
+  const DAY = 86400;
+
+  test("pgvector: a column with no declared dimensions is not flagged unless a distance query touches its table", () => {
+    const a = base();
+    a.sql.unindexedVectors = [
+      {
+        schema: "app",
+        table: "cube_samples",
+        column: "samples",
+        dimensions: null,
+        storage: "extended",
+        out_of_line: false,
+      },
+    ];
+    // only an INSERT touches it -> a float-array store, and no ANN index could be built anyway
+    a.sql.topByCalls = [
+      {
+        queryid: "1",
+        calls: 1000,
+        query: "insert into app.cube_samples(k, samples) values($1, $2::vector)",
+      },
+    ];
+    expect(deriveFindings(a).some((x) => x.heuristicId === "pgvector_unindexed")).toBe(false);
+    // a distance-ordered query on the table -> flagged, with the declare-dimensions step
+    a.sql.topStatements = [
+      {
+        queryid: "2",
+        calls: 10,
+        query: "select k from app.cube_samples order by samples <-> $1 limit 5",
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "pgvector_unindexed");
+    expect(f?.evidence).toContain("declared without dimensions");
+    expect(f?.evidence).toContain("vector(<n>)");
+  });
+
+  test("pgvector: a dimensioned column is flagged as before; dimensionless siblings drop out of the count", () => {
+    const a = base();
+    a.sql.unindexedVectors = [
+      {
+        schema: "app",
+        table: "docs",
+        column: "embedding",
+        dimensions: 384,
+        storage: "extended",
+        out_of_line: false,
+      },
+      {
+        schema: "app",
+        table: "cube_samples",
+        column: "samples",
+        dimensions: null,
+        storage: "extended",
+        out_of_line: false,
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "pgvector_unindexed");
+    expect(f?.title).toContain("1 pgvector column without");
+    expect(f?.evidence).toContain("app.docs.embedding (384d)");
+    expect(f?.evidence).not.toContain("cube_samples");
+  });
+
+  test("policyColumnIndexable: dynamic compares count, constants / IS NULL / other-table refs do not", () => {
+    expect(policyColumnIndexable(["(uid() = user_id)"], "public.notes", "user_id")).toBe(true);
+    expect(
+      policyColumnIndexable(["(user_id = (select auth.uid()))"], "public.notes", "user_id"),
+    ).toBe(true);
+    expect(
+      policyColumnIndexable(
+        ["(team_id IN ( SELECT team_id FROM memberships WHERE (memberships.user_id = uid())))"],
+        "public.notes",
+        "team_id",
+      ),
+    ).toBe(true);
+    expect(
+      policyColumnIndexable(
+        ["((visibility = 'organization'::text) AND is_member(org_id))"],
+        "app.projects",
+        "visibility",
+      ),
+    ).toBe(false);
+    expect(
+      policyColumnIndexable(
+        ["((user_id = uid()) AND (logout_at IS NULL))"],
+        "public.sessions",
+        "logout_at",
+      ),
+    ).toBe(false);
+    // same-named column appearing only as another table's column inside a subquery
+    expect(
+      policyColumnIndexable(
+        [
+          "(EXISTS ( SELECT 1 FROM owners WHERE ((owners.id = claims.owner_id) AND (owners.user_id = uid()))))",
+        ],
+        "public.claims",
+        "user_id",
+      ),
+    ).toBe(false);
+    expect(policyColumnIndexable([], "public.claims", "user_id")).toBeNull();
+  });
+
+  test("rls_col_unindexed: drops FK-lead columns, constant/IS NULL predicates and tiny tables; keeps the rest", () => {
+    const a = base();
+    a.sql.rlsUnindexed = [
+      { schema: "public", table: "public.claims", column: "owner_id", est_rows: 50_000 },
+      { schema: "public", table: "public.projects", column: "visibility", est_rows: 50_000 },
+      { schema: "public", table: "public.sessions", column: "logout_at", est_rows: 50_000 },
+      { schema: "public", table: "public.notes", column: "user_id", est_rows: 120 },
+      { schema: "public", table: "public.reports", column: "user_id", est_rows: 50_000 },
+      { schema: "public", table: "public.fresh", column: "user_id", est_rows: -1 },
+    ];
+    a.sql.fkUnindexed = [
+      {
+        schema: "public",
+        table: "public.claims",
+        constraint: "claims_owner_id_fkey",
+        definition: "FOREIGN KEY (owner_id) REFERENCES owners(id) ON DELETE CASCADE",
+      },
+    ];
+    a.sql.rlsPolicies = [
+      {
+        table: "public.projects",
+        policyname: "p",
+        cmd: "SELECT",
+        qual: "((visibility = 'organization'::text) AND is_member(org_id))",
+        with_check: null,
+      },
+      {
+        table: "public.sessions",
+        policyname: "p",
+        cmd: "UPDATE",
+        qual: "((user_id = uid()) AND (logout_at IS NULL))",
+        with_check: "(user_id = uid())",
+      },
+      {
+        table: "public.notes",
+        policyname: "p",
+        cmd: "SELECT",
+        qual: "(uid() = user_id)",
+        with_check: null,
+      },
+      {
+        table: "public.reports",
+        policyname: "p",
+        cmd: "SELECT",
+        qual: "(uid() = user_id)",
+        with_check: null,
+      },
+      {
+        table: "public.fresh",
+        policyname: "p",
+        cmd: "SELECT",
+        qual: "(user_id = uid())",
+        with_check: null,
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "rls_col_unindexed");
+    expect(f?.title).toContain("2 RLS policy columns");
+    expect(f?.evidence).toContain("public.reports.user_id");
+    expect(f?.evidence).toContain("public.fresh.user_id");
+    expect(f?.evidence).not.toContain("claims");
+    expect(f?.evidence).not.toContain("visibility");
+    expect(f?.evidence).not.toContain("logout_at");
+    expect(f?.evidence).not.toContain("notes");
+  });
+
+  test("cronJobForStatement pairs a top-level call with the cron command that runs it", () => {
+    const a = base();
+    a.sql.cronJobs = [
+      {
+        jobname: "step",
+        schedule: "*/2 * * * *",
+        active: true,
+        command: " set statement_timeout = 0; select app.backfill_step(); ",
+        runs_7d: 5040,
+        max_duration_s: 0,
+      },
+      {
+        jobname: "off",
+        schedule: "* * * * *",
+        active: false,
+        command: "select app.other()",
+        runs_7d: 0,
+        max_duration_s: 0,
+      },
+    ];
+    expect(cronJobForStatement(a, "select app.backfill_step()")?.jobname).toBe("step");
+    expect(cronJobForStatement(a, "select app.other()")).toBeNull();
+    expect(cronJobForStatement(a, "select 1")).toBeNull();
+  });
+
+  test("a dominant / spilling statement that is a cron job with cheap recent runs is dated, not escalated", () => {
+    const a = base();
+    a.sql.statsResetAge = "47 days 00:46:38";
+    a.sql.pgSettings = [{ name: "work_mem", setting: "16384", unit: "kB" }];
+    a.sql.cronJobs = [
+      {
+        jobname: "step",
+        schedule: "*/2 * * * *",
+        active: true,
+        command: " set statement_timeout = 0; select app.backfill_step(); ",
+        runs_7d: 5040,
+        max_duration_s: 0,
+      },
+    ];
+    a.sql.topStatements = [
+      {
+        queryid: "1",
+        pct: 84.9,
+        calls: 18537,
+        mean_ms: 30926.64,
+        total_ms: 5.7e8,
+        query: "select app.backfill_step()",
+      },
+    ];
+    a.sql.queryIoStats = [
+      {
+        queryid: "1",
+        calls: 18537,
+        mean_ms: 30926.64,
+        temp_blks_written: 741857389,
+        temp_written: "5660 GB",
+        query: "select app.backfill_step()",
+      },
+    ];
+    const f = deriveFindings(a);
+    const top = f.find((x) => x.heuristicId === "top_query_db_time");
+    expect(top?.severity).toBe("low");
+    expect(top?.evidence).toContain('pg_cron job "step"');
+    expect(top?.evidence).toContain("~47d statement window");
+    const spill = f.find((x) => x.heuristicId === "query_temp_spill");
+    expect(spill?.severity).toBe("low");
+    expect(spill?.evidence).toContain("About 313 MB of temp per call against work_mem 16 MB");
+    expect(spill?.evidence).toContain("raising work_mem alone will not absorb that");
+    // recent runs still slow -> no dating note, severity as before
+    (a.sql.cronJobs[0] as Record<string, unknown>).max_duration_s = 40;
+    expect(cronHistoricalNote(a, a.sql.topStatements[0] as Record<string, unknown>)).toBeNull();
+    expect(deriveFindings(a).find((x) => x.heuristicId === "top_query_db_time")?.severity).toBe(
+      "med",
+    );
+    // an unfinished run (null max) never reads as "finished in <= 0s"
+    (a.sql.cronJobs[0] as Record<string, unknown>).max_duration_s = null;
+    expect(cronHistoricalNote(a, a.sql.topStatements[0] as Record<string, unknown>)).toBeNull();
+  });
+
+  test("cron commands that disable statement_timeout are named; the positive carries the caveat", () => {
+    const a = base();
+    a.sql.pgSettings = [{ name: "statement_timeout", setting: "120000", unit: "ms" }];
+    a.sql.cronJobs = [
+      {
+        jobname: "step",
+        schedule: "*/2 * * * *",
+        active: true,
+        command: " set statement_timeout = 0; select app.backfill_step(); ",
+        runs_7d: 1,
+        max_duration_s: 0,
+      },
+      {
+        jobname: "nightly",
+        schedule: "45 3 * * *",
+        active: true,
+        command: "SET statement_timeout TO '0'; select app.refresh();",
+        runs_7d: 1,
+        max_duration_s: 0,
+      },
+      {
+        jobname: "bounded",
+        schedule: "0 * * * *",
+        active: true,
+        command: "set statement_timeout = '30min'; select app.rollup();",
+        runs_7d: 1,
+        max_duration_s: 0,
+      },
+      {
+        jobname: "inactive",
+        schedule: "0 * * * *",
+        active: false,
+        command: "set statement_timeout = 0; select app.old();",
+        runs_7d: 0,
+        max_duration_s: 0,
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "cron_statement_timeout_off");
+    expect(f?.severity).toBe("low");
+    expect(f?.title).toContain("2 scheduled jobs disable statement_timeout");
+    expect(f?.evidence).toContain('"step" (*/2 * * * *)');
+    expect(f?.evidence).toContain('"nightly"');
+    expect(f?.evidence).not.toContain("bounded");
+    expect(f?.evidence).not.toContain("inactive");
+    const pos = derivePositives(a).find((p) =>
+      p.title.startsWith("statement_timeout is configured"),
+    );
+    expect(pos?.title).toContain("2 scheduled jobs switch it off");
+    a.sql.cronJobs = [];
+    expect(derivePositives(a).some((p) => p.title === "statement_timeout is configured")).toBe(
+      true,
+    );
+  });
+
+  test("storage_concentration quotes the catalog estimate when the live-row counter was reset", () => {
+    const a = base();
+    a.sql.dbSizeBytes = 50e9;
+    a.sql.dbSize = "47 GB";
+    a.sql.biggestTables = [
+      {
+        schema: "app",
+        table: "app.events",
+        total_size: "23 GB",
+        index_size: "14 GB",
+        total_bytes: 25e9,
+        index_bytes: 15e9,
+        toast_bytes: 0,
+        live_rows: "0",
+        dead_rows: "0",
+        est_rows: "96082136",
+        maintained: false,
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "storage_concentration");
+    expect(f?.evidence).toContain("~96,082,136 rows (catalog estimate");
+    expect(f?.evidence).toContain("statistics were reset");
+    expect(f?.evidence).not.toContain("0 live rows");
+  });
+
+  test("disk_expanded lists every step when the volume grew twice in the window", () => {
+    const a = base();
+    const series = (title: string, vals: number[]) => ({
+      title,
+      unit: title.includes("%") ? "%" : "bytes",
+      points: vals.map((v, i) => ({ t: 1_700_000_000 + i * DAY, v })),
+    });
+    const pct = [...Array(8).fill(85), 50, 50, 25, ...Array(9).fill(25)];
+    const size = [...Array(8).fill(63e9), 106e9, 106e9, ...Array(10).fill(211e9)];
+    a.trends = [series("Disk used (%)", pct), series("Disk size (bytes)", size)];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "disk_expanded");
+    expect(f?.title).toContain("2 times in the window");
+    expect(f?.title).toContain("58.7 GB -> 98.7 GB -> 196.5 GB");
+    expect(f?.evidence).toMatch(
+      /Expansions at \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC, \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC\./,
+    );
   });
 });
