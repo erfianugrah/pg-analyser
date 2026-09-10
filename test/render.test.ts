@@ -612,6 +612,48 @@ describe("render", () => {
     expect(render(fixture())).not.toContain("Resource snapshot");
   });
 
+  test("omits the lock-wait log section when no lockWave collected", () => {
+    expect(render(fixture())).not.toContain("Lock-wait log");
+  });
+
+  test("renders the lock-wait log section from retrospective buckets, separate from the live Exclusive locks snapshot", () => {
+    const html = render(
+      fixture({
+        sql: {
+          ...fixture().sql,
+          lockWave: {
+            coverage: {
+              from: "2026-07-15 18:15",
+              to: "2026-07-15 18:25",
+              files: 1,
+              bytesScanned: 4_000_000,
+            },
+            buckets: [
+              {
+                minute: "2026-07-15 18:20",
+                waiting: 4,
+                maxWaitMs: 2939,
+                acquired: 4,
+                cancelsLock: 0,
+                cancelsStmt: 0,
+                cancelsUser: 0,
+                deadlocks: 7,
+              },
+            ],
+            topRelations: [],
+            samples: [],
+          },
+        },
+      }),
+    );
+    expect(html).toContain("Lock-wait log");
+    expect(html).toContain('id="lockwave"');
+    expect(html).toContain("2026-07-15 18:20");
+    // The evidence link on the finding must resolve to a section that actually
+    // exists in the page - not the unrelated live-snapshot #locks anchor.
+    expect(html).toContain('href="#lockwave"');
+  });
+
   test("storage buckets render with access + usage", () => {
     const html = render(
       fixture({

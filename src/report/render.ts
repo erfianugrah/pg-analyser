@@ -913,6 +913,7 @@ export function render(
     walarchiving: a.sql.walArchiving.length > 0,
     longrunning: a.sql.longRunning.length > 0,
     locks: a.sql.locks.length > 0,
+    lockwave: (a.sql.lockWave?.buckets.length ?? 0) > 0,
     blocking: a.sql.blocking.length > 0,
     apivol: errored.has("apiCounts") || a.apiCounts.length > 0,
   };
@@ -1138,6 +1139,7 @@ ${drill("connections", "Connections", "by state", sec(a.sql.connections, "sql:co
 ${a.pooler?.length ? drill("pooler", "Connection pooler (Supavisor)", "configured pool mode / size per database; route app traffic here (transaction mode, port 6543) instead of direct connections", poolerSection(a)) : ""}
 ${show.longrunning ? drill("longrunning", "Long-running queries", "point-in-time snapshot: running > 5 min at collection", sqlTable(a.sql.longRunning, { mono: ["query"] })) : ""}
 ${show.locks ? drill("locks", "Exclusive locks", "point-in-time snapshot: relation-level strong locks at collection", sqlTable(a.sql.locks, { mono: ["query", "relation"] })) : ""}
+${show.lockwave ? drill("lockwave", "Lock-wait log (retrospective)", "per-minute buckets parsed from server logs: waits, timeout cancels, deadlocks - the only on-box record of a transient lock-queue cascade, separate from the live snapshot above", sqlTable(a.sql.lockWave!.buckets, {})) : ""}
 ${show.blocking ? drill("blocking", "Blocking chains", "point-in-time snapshot at collection", sqlTable(a.sql.blocking, { mono: ["blocked_query", "blocking_query"] })) : ""}
 ${drill("functions", "Edge functions", "invocation stats over the last day", functionsSection(a))}
 ${drill("storage", "Storage", "buckets + object usage", storageSection(a))}
