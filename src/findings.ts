@@ -393,6 +393,13 @@ export function lockWaveFindings(a: Analysis): Finding[] {
       ? `lock/timeout events seen ${lw.coverage.from} to ${lw.coverage.to} in ${scanned}`
       : `no lock/timeout events in ${scanned}`;
   const verdict = classifyLockWave(lw);
+  // classifyLockWave slides a 10-minute window and keeps only the single
+  // best-scoring one - a deadlock in some OTHER, non-adjacent bucket (its own
+  // isolated incident, not part of the winning window) would otherwise vanish
+  // entirely: it's not in the winning verdict, and the "N deadlocks detected"
+  // fallback below never fires once a cascade/stmt_timeout verdict exists.
+  const totalDeadlocks = lw.buckets.reduce((n, b) => n + b.deadlocks, 0);
+  const otherDeadlocks = verdict ? totalDeadlocks - verdict.deadlocks : totalDeadlocks;
   if (verdict?.kind === "cascade") {
     const topRel = lw.topRelations[0];
     const relText = topRel ? ` on ${topRel.name ?? `relid ${topRel.relid}`}` : "";
@@ -401,8 +408,17 @@ export function lockWaveFindings(a: Analysis): Finding[] {
       severity: verdict.severity,
       category: "Performance",
       title: `Lock-wait cascade ${verdict.windowFrom}-${verdict.windowTo}: ${verdict.waiting} waits up to ${secs}s, ${verdict.cancels} timeout cancellations${relText}`,
-      anchor: "#locks",
-      evidence: `${cov}. ${verdict.deadlocks > 0 ? `${verdict.deadlocks} deadlock(s) in-window. ` : ""}Retrospective from server logs.`,
+      anchor: "#lockwave",
+      evidence: [
+        `${cov}.`,
+        verdict.deadlocks > 0 ? `${verdict.deadlocks} deadlock(s) in this window.` : null,
+        otherDeadlocks > 0
+          ? `${otherDeadlocks} more deadlock(s) elsewhere in the scanned window (see evidence).`
+          : null,
+        "Retrospective from server logs.",
+      ]
+        .filter(Boolean)
+        .join(" "),
       ...meta("lock_wave"),
     });
   } else if (verdict?.kind === "stmt_timeout") {
@@ -418,25 +434,34 @@ export function lockWaveFindings(a: Analysis): Finding[] {
       )
       .join(", ");
     const timeouts = roleTimeouts
-      ? ` Role statement_timeout in force: ${roleTimeouts}; server default ${a.pgConfig?.statement_timeout ?? "?"} ms.`
+      ? `Role statement_timeout in force: ${roleTimeouts}; server default ${a.pgConfig?.statement_timeout ?? "?"} ms.`
       : "";
     out.push({
       severity: verdict.severity,
       category: "Performance",
       title: `Statement-timeout burst ${verdict.windowFrom}-${verdict.windowTo}: ${verdict.cancelsStmt} statements cancelled by statement_timeout (no lock waits logged)`,
-      anchor: "#locks",
-      evidence: `${cov}. Zero 'still waiting for lock' lines and zero lock-timeout cancels in the window, so this is not a lock-queue cascade.${timeouts} Retrospective from server logs.`,
+      anchor: "#lockwave",
+      evidence: [
+        `${cov}.`,
+        "Zero 'still waiting for lock' lines and zero lock-timeout cancels in the window, so this is not a lock-queue cascade.",
+        timeouts || null,
+        otherDeadlocks > 0
+          ? `${otherDeadlocks} deadlock(s) elsewhere in the scanned window (see evidence).`
+          : null,
+        "Retrospective from server logs.",
+      ]
+        .filter(Boolean)
+        .join(" "),
       ...meta("statement_timeout_burst"),
     });
-  } else if (lw.buckets.some((b) => b.deadlocks > 0)) {
+  } else if (totalDeadlocks > 0) {
     // Deadlocks are logged even with log_lock_waits off; surface them even if the
     // wait/cancel thresholds did not trip.
-    const dl = lw.buckets.reduce((n, b) => n + b.deadlocks, 0);
     out.push({
       severity: "med",
       category: "Performance",
-      title: `${dl} deadlock(s) detected in the server log`,
-      anchor: "#locks",
+      title: `${totalDeadlocks} deadlock(s) detected in the server log`,
+      anchor: "#lockwave",
       evidence: `${cov}. Retrospective from server logs.`,
       ...meta("lock_wave"),
     });

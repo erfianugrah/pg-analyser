@@ -2507,6 +2507,28 @@ describe("lock_wave (retrospective log cascade)", () => {
     expect(f?.evidence).toMatch(
       /events seen 2026-07-15 18:15 to 2026-07-15 18:25 in the newest 4 MB of 1 log file/,
     );
+    // Evidence lives in its own retrospective section (log-derived buckets),
+    // distinct from the live point-in-time "Exclusive locks" (#locks) snapshot.
+    expect(f?.anchor).toBe("#lockwave");
+  });
+
+  test("a deadlock outside the winning window is not dropped - surfaced as 'more deadlock(s) elsewhere'", () => {
+    const f = deriveFindings(
+      withLockWave([
+        // Winning window: scores higher (extra waiting), so classifyLockWave
+        // picks this one; its own deadlocks (5) are the "in this window" count.
+        { minute: "2026-07-15 18:20", waiting: 2, deadlocks: 5 },
+        // A separate, isolated incident 70 minutes later - well outside the
+        // 10-minute sliding window, so it never merges into the winner and
+        // scores lower (no extra waiting), so it never wins either.
+        { minute: "2026-07-15 19:30", deadlocks: 2 },
+      ]),
+    ).find((x) => x.heuristicId === "lock_wave");
+    expect(f?.title).toMatch(/^Lock-wait cascade 2026-07-15 18:20-2026-07-15 18:20:/);
+    expect(f?.evidence).toContain("5 deadlock(s) in this window.");
+    expect(f?.evidence).toContain(
+      "2 more deadlock(s) elsewhere in the scanned window (see evidence).",
+    );
   });
 
   test("10 waits -> MED", () => {
@@ -2521,6 +2543,7 @@ describe("lock_wave (retrospective log cascade)", () => {
       (x) => x.heuristicId === "lock_wave",
     );
     expect(f?.severity).toBe("med");
+    expect(f?.anchor).toBe("#lockwave");
   });
 
   test("a quiet scanned window -> no finding (but coverage was honest)", () => {
@@ -2554,6 +2577,7 @@ describe("lock_wave (retrospective log cascade)", () => {
     expect(b?.title).not.toContain("Lock-wait cascade");
     expect(b?.evidence).toContain("anon=3s, authenticated=8s");
     expect(b?.evidence).toContain("not a lock-queue cascade");
+    expect(b?.anchor).toBe("#lockwave");
   });
 });
 
