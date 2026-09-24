@@ -12,9 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.3.13
+      - name: Install bun
+        run: curl -fsSL https://bun.sh/install -o /tmp/bun.sh && bash /tmp/bun.sh "bun-v1.3.13" && echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
       - run: bun install --frozen-lockfile
       - run: bunx biome check .
       - run: bun run typecheck
@@ -24,9 +23,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.3.13
+      - name: Install bun
+        run: curl -fsSL https://bun.sh/install -o /tmp/bun.sh && bash /tmp/bun.sh "bun-v1.3.13" && echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
       - run: bun install --frozen-lockfile
       # Verify the standalone binary compiles and runs (the release matrix
       # cross-compiles the same entrypoint; catch breakage before a tag).
@@ -37,9 +35,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.3.13
+      - name: Install bun
+        run: curl -fsSL https://bun.sh/install -o /tmp/bun.sh && bash /tmp/bun.sh "bun-v1.3.13" && echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
       - name: Check endpoints against upstream Management API spec
         run: bun run scripts/check-api-drift.ts
       - name: Check derived inspect SQL against upstream CLI (advisory)
