@@ -4,7 +4,9 @@ import type { RawEntry } from "./dbtargets.ts";
 /**
  * A profile is the whole no-PAT config in ONE gitignored JSON: force-no-PAT, the
  * region-mapped Grafana credentials (each region is a separate ALB, so a
- * per-region cookie), and the target databases. Drive it with
+ * per-region cookie - see GrafanaMap.regions below for what to do when two
+ * DBs share a region but need different Grafana credentials), and the target
+ * databases. Drive it with
  * `pg-analyser full --profile <file>` - no .env, no wrapper. Nothing here is baked
  * into the repo: hosts, datasource UIDs, cookies and connstrings all live in
  * the (gitignored) profile file.
@@ -26,7 +28,18 @@ const GrafanaMap = z.object({
   datasourceUid: z.string().optional(),
   /** Project-label selector template; {ref} substituted per project. */
   matcher: z.string().default('supabase_project_ref="{ref}"'),
-  /** region -> credentials. Keyed by the AWS region (e.g. ap-southeast-1). */
+  /**
+   * region -> credentials. Keyed by the AWS region (e.g. ap-southeast-1) -
+   * ONE Grafana target per region PER PROFILE. Two databases that share an
+   * AWS region but need different Grafana hosts/cookies (e.g. two orgs both
+   * in ap-southeast-1) can't both go under one region key here - split them
+   * into separate profile files instead and chain with repeated --profile
+   * flags (see index.ts's --profile help; runnable example:
+   * pg-analyser.org-a.profile.example.json + pg-analyser.org-b.profile.example.json,
+   * both keyed on the same region with different cookies); each target
+   * resolves Grafana against its OWNING profile, so the same region string in
+   * two files never collides.
+   */
   regions: z.record(z.string(), RegionCreds).default({}),
 });
 

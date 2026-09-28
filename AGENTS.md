@@ -174,7 +174,20 @@ resolved PER PROJECT: `regionFromConnstring` derives the region from the
 connstring, `resolveGrafana` maps it to that region's host/uid/cookie (host from
 `hostTemplate.{region}` or a per-region override), and only `{ref}` stays
 templated in the matcher. A region absent from the map -> that project's trends
-are skipped (SQL/advisors still run). Nothing internal is baked into the repo:
+are skipped (SQL/advisors still run). `grafana.regions` is keyed by AWS region
+ONLY - one Grafana target (host/uid/cookie) per region PER PROFILE, because the
+key is the region string itself, not a (region, org) pair. Two databases that
+share an AWS region but need DIFFERENT Grafana instances/cookies (e.g. two
+customer orgs both in `ap-southeast-1`) can't both live under one
+`regions.ap-southeast-1` entry in a single profile - the second write just
+overwrites the first (or is a duplicate-key error, depending on your JSON
+tooling). Split them into separate profile files instead (one profile per
+distinct Grafana target, even if the region string repeats across files) and
+chain them with repeated `--profile` flags - `SweepTarget.profile` keeps each
+target's Grafana resolution scoped to its OWNING profile, so the same region
+string in two files never collides. Runnable example of the split:
+`pg-analyser.org-a.profile.example.json` + `pg-analyser.org-b.profile.example.json`
+(both keyed on `ap-southeast-1`, different cookies). Nothing internal is baked into the repo:
 hosts, UIDs, cookies and connstrings all live in the gitignored profile
 (`pg-analyser.profile.json` / `pg-analyser.*.profile.json`; keep `.example`). Supersedes
 `pg-analyser.databases.json` for the work case (it's a superset); overlays are a
