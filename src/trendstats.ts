@@ -140,18 +140,34 @@ export type ResizeEvent = { at: number; fromBytes: number; toBytes: number };
 
 /**
  * Detect step-changes (volume resizes) in a size series: consecutive points
- * where the value jumps by >= `minStepFrac` of the earlier value. Returns each
- * event in time order (usually 0 or 1). Catches both expansions and shrinks;
- * the caller decides which direction it cares about. A resize makes "% used"
- * meaningless across the boundary (the denominator changed), so callers use
- * this to segment the series before projecting.
+ * where the value jumps by >= `minStepFrac` of the earlier value, OR by at
+ * least `minStepBytes` in absolute terms. The OR matters because cloud disk
+ * autoscale typically adds a roughly FIXED absolute increment each time it
+ * trips, so its fraction of an ever-growing base shrinks with each successive
+ * resize - a fraction-only detector eventually stops seeing them even though
+ * the resize mechanism never changed (measured: two consecutive Supabase
+ * auto-expansions added the identical absolute step, but the second's
+ * fraction of the by-then-larger base fell under a 20%-only floor and was
+ * silently missed). Returns each event in time order (usually 0 or 1).
+ * Catches both expansions and shrinks; the caller decides which direction it
+ * cares about. A resize makes "% used" meaningless across the boundary (the
+ * denominator changed), so callers use this to segment the series before
+ * projecting.
  */
-export function detectResizes(points: Point[], minStepFrac: number): ResizeEvent[] {
+export function detectResizes(
+  points: Point[],
+  minStepFrac: number,
+  minStepBytes = 0,
+): ResizeEvent[] {
   const events: ResizeEvent[] = [];
   for (let i = 1; i < points.length; i++) {
     const prev = points[i - 1]!.v;
     const cur = points[i]!.v;
-    if (prev > 0 && Math.abs(cur - prev) / prev >= minStepFrac) {
+    const delta = Math.abs(cur - prev);
+    // minStepBytes = 0 (the default) means "no absolute floor", not "any
+    // nonzero delta counts" - otherwise every organic uptick would satisfy
+    // delta >= 0 and the fractional check would never matter.
+    if (prev > 0 && (delta / prev >= minStepFrac || (minStepBytes > 0 && delta >= minStepBytes))) {
       events.push({ at: points[i]!.t, fromBytes: prev, toBytes: cur });
     }
   }

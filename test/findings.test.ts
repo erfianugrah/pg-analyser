@@ -297,6 +297,29 @@ describe("review-7 batch: pg-minor / cron-history / bloat cross-check / memory",
     const f = deriveFindings(a).find((x) => x.heuristicId === "cron_history_unpruned");
     expect(f?.title).toContain("cron.job_run_details");
   });
+  test("cron_history_unpruned reports the catalog estimate, not a reset '0 rows', when live_rows was wiped", () => {
+    // Measured on a live report: the same table was ALSO flagged by
+    // stale_table_stats as "0 live rows... the signature of pg_stat counters
+    // that were reset", quoting a catalog estimate of 385,895 rows - yet this
+    // finding's own title still said "0 rows" as if that were a real count,
+    // directly contradicting the neighbouring finding on the same data.
+    const a = base();
+    a.sql.biggestTables = [
+      {
+        schema: "cron",
+        table: "cron.job_run_details",
+        total_size: "87 MB",
+        total_bytes: 87 * 1024 ** 2,
+        live_rows: 0,
+        dead_rows: 0,
+        est_rows: 385895,
+        maintained: false,
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "cron_history_unpruned");
+    expect(f?.title).toContain("385,895 rows");
+    expect(f?.title).not.toContain("0 rows");
+  });
   test("bloat_estimate_suspect flags huge bytes/row the estimator calls un-bloated", () => {
     const a = base();
     a.sql.biggestTables = [

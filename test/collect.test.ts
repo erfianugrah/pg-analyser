@@ -289,6 +289,56 @@ describe("collect", () => {
     }
   });
 
+  test("one bad Grafana panel is isolated, logged, and recorded - the rest of trends still collects", async () => {
+    // Measured on a live report: a single panel querying a metric family the
+    // datasource doesn't have aborted the WHOLE trends fetch. It must instead
+    // be logged (visible in the CLI, not silently dropped) and recorded as a
+    // collection note, while every other panel's data still comes through.
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      const u = String(url);
+      if (u.includes("/api/v1/query?"))
+        return new Response(JSON.stringify({ status: "success", data: { result: [] } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      if (u.includes("pg_database_size_bytes"))
+        return new Response(
+          JSON.stringify({ status: "error", errorType: "bad_data", error: "unknown metric" }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      return new Response(
+        JSON.stringify({ status: "success", data: { result: [{ values: [[1, "1"]] }] } }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as unknown as typeof fetch;
+    try {
+      const lines: string[] = [];
+      const logger = makeLogger({ level: "debug", json: true, sink: (l) => lines.push(l) });
+      const t = fakeTransport({ onMgmt: fullRoutes(), onMetrics: okMetrics });
+      const a = await collect("ref", t, "0.0.0-test", {
+        syncCheck: false,
+        logger,
+        prometheusUrl: "http://prom.example",
+      });
+      // Every other panel still made it through.
+      expect(a.trends.length).toBeGreaterThan(0);
+      expect(a.trends.some((s) => s.title === "Database size")).toBe(false);
+      // Logged (CLI-visible), not silent.
+      const events = lines.map((l) => JSON.parse(l)).filter((o) => o.msg === "trend panel failed");
+      expect(events).toHaveLength(1);
+      expect(events[0]?.level).toBe("warn");
+      expect(events[0]?.panel).toBe("Database size");
+      // Recorded as a collection note so the report can name it too.
+      const note = a.errors.find(
+        (e) => e.source === "trends" && e.message.includes("Database size"),
+      );
+      expect(note?.message).toMatch(/query error.*unknown metric/);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
   test("cronJobs is gated on the pg_cron extension - never fired (nor noted) when absent", async () => {
     let cronQueried = false;
     const runner = {

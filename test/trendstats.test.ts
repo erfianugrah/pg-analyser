@@ -84,6 +84,38 @@ describe("detectResizes", () => {
       ),
     ).toHaveLength(1);
   });
+
+  test("an absolute-byte floor catches a resize whose fraction shrank below the fractional-only floor", () => {
+    // Measured on a live report: cloud disk autoscale added the identical
+    // ~197 GiB step twice (879 -> 1090 -> 1302 GiB). The first jump is 24.0%
+    // of its base (clears a 20% floor); the second is only 19.4% of the
+    // by-then-larger base (falls under it) despite being the SAME absolute
+    // step - a fraction-only detector silently misses the second resize.
+    const pts = [
+      { t: 0, v: 879193149440 },
+      { t: 1, v: 1090572963840 }, // +24.04% - caught by the fraction alone
+      { t: 2, v: 1301952778240 }, // +19.38% - missed by fraction alone
+    ];
+    expect(detectResizes(pts, 0.2)).toHaveLength(1); // fraction-only: misses the second
+    const withFloor = detectResizes(pts, 0.2, 2 * 1024 ** 3); // + a 2 GiB absolute floor
+    expect(withFloor).toHaveLength(2);
+    expect(withFloor[1]).toEqual({ at: 2, fromBytes: 1090572963840, toBytes: 1301952778240 });
+  });
+
+  test("minStepBytes=0 (the default) does not treat every organic uptick as a resize", () => {
+    // A naive `delta >= minStepBytes` with minStepBytes defaulting to 0 would
+    // make any nonzero change satisfy the absolute check, bypassing the
+    // fractional one entirely.
+    expect(
+      detectResizes(
+        [
+          { t: 0, v: 100e9 },
+          { t: 1, v: 100.001e9 }, // +0.001% organic - must not fire
+        ],
+        0.2,
+      ),
+    ).toEqual([]);
+  });
 });
 
 describe("sustainedFrac", () => {

@@ -931,6 +931,27 @@ describe("trend source label + EBS caveat", () => {
     const html = render(fixture({ trends: [] }));
     expect(html).not.toContain("Resource snapshot");
   });
+
+  test("no trends but a recorded 'trends' collection error -> section stays, names why", () => {
+    // Measured on a live report: an expired Grafana session cookie (or a
+    // profile region with no Grafana entry) skipped trends silently - the
+    // Resource snapshot section vanished entirely, with the actual reason
+    // buried in the unrelated Collection notes table further down the page.
+    const html = render(
+      fixture({
+        trends: [],
+        errors: [
+          {
+            source: "trends",
+            message:
+              "datasource redirected (HTTP 302 to SSO login) - the session cookie/token is missing or expired for this datasource - trends skipped",
+          },
+        ],
+      }),
+    );
+    expect(html).toContain("Resource snapshot");
+    expect(html).toContain("session cookie/token is missing or expired");
+  });
 });
 
 describe("finding-card formatting", () => {

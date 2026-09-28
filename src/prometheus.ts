@@ -194,7 +194,15 @@ export async function fetchTrends(
   baseUrl: string,
   days = 30,
   ref?: string,
-  opts: { token?: string; cookie?: string; matcher?: string } = {},
+  opts: {
+    token?: string;
+    cookie?: string;
+    matcher?: string;
+    /** Called once per panel that failed in isolation (see queryWindow) so
+     * the caller can log/record the specific panel + reason instead of it
+     * being silently dropped when other panels still succeed. */
+    onPanelError?: (panel: string, message: string) => void;
+  } = {},
 ): Promise<TrendSeries[]> {
   const end = Math.floor(Date.now() / 1000);
   const base = baseUrl.replace(/\/+$/, "");
@@ -222,7 +230,15 @@ export async function fetchTrends(
   const reqInit: RequestInit = { ...(init ?? {}), redirect: "manual" };
 
   // Pass 1: the requested window.
-  let series = await queryWindow(base, panels, end - days * 86400, end, reqInit, refMatcher);
+  let series = await queryWindow(
+    base,
+    panels,
+    end - days * 86400,
+    end,
+    reqInit,
+    refMatcher,
+    opts.onPanelError,
+  );
   // Auto-scope to the real data span: a young project (created days ago) or a
   // freshly-started scraper has no data across most of a 30/90-day window, so a
   // fixed step smears a handful of points across mostly-empty time. Re-query
@@ -241,7 +257,15 @@ export async function fetchTrends(
   if (dataStart != null) {
     const spanDays = (end - dataStart) / 86400;
     if (spanDays > 0 && spanDays < days * 0.6)
-      series = await queryWindow(base, panels, Math.floor(dataStart), end, reqInit, refMatcher);
+      series = await queryWindow(
+        base,
+        panels,
+        Math.floor(dataStart),
+        end,
+        reqInit,
+        refMatcher,
+        opts.onPanelError,
+      );
   }
   return series;
 }
@@ -377,9 +401,16 @@ async function probeDataStart(
   return Number.isFinite(t) && t > 0 ? t : null;
 }
 
-/** Fetch every panel over [start, end] at a ~200-point step. Throws (for the
- * caller's safe() to record) on auth redirect, non-JSON, a query error, or when
- * every panel returns 0 series (matcher/ref mismatch). */
+/** Fetch every panel over [start, end] at a ~200-point step. A single panel's
+ * HTTP error, non-JSON body, or Prometheus query error is isolated (reported
+ * via `onPanelError`, then skipped) so one bad panel query doesn't discard
+ * every other panel's otherwise-good data - measured on a live report where a
+ * mismatched metric family on one panel aborted the whole trends fetch. An
+ * auth redirect still fails fast: it aborts every panel identically (same
+ * cookie, same datasource), so there's nothing to isolate and no point
+ * burning N requests to discover the same problem N times. Throws only when
+ * NOTHING usable came back at all: every panel errored, or every panel
+ * reached the datasource but matched zero series (matcher/ref mismatch). */
 async function queryWindow(
   base: string,
   panels: TrendPanel[],
@@ -387,10 +418,16 @@ async function queryWindow(
   end: number,
   reqInit: RequestInit,
   refMatcher: string,
+  onPanelError?: (panel: string, message: string) => void,
 ): Promise<TrendSeries[]> {
   const step = Math.max(300, Math.floor((end - start) / 200));
   const out: TrendSeries[] = [];
   let emptyPanels = 0;
+  let firstError: string | null = null;
+  const panelFailed = (title: string, message: string) => {
+    firstError ??= message;
+    onPanelError?.(title, message);
+  };
   for (const panel of panels) {
     const url = `${base}/api/v1/query_range?query=${encodeURIComponent(panel.query)}&start=${start}&end=${end}&step=${step}`;
     const res = await fetch(url, reqInit);
@@ -405,23 +442,29 @@ async function queryWindow(
     }
     if (!res.ok) {
       const body = (await res.text()).replace(/\s+/g, " ").slice(0, 200);
-      throw new Error(`datasource HTTP ${res.status} for "${panel.title}": ${body}`);
+      panelFailed(panel.title, `datasource HTTP ${res.status} for "${panel.title}": ${body}`);
+      continue;
     }
     let json: unknown;
     try {
       json = await res.json();
     } catch {
       const body = (await res.text().catch(() => "")).replace(/\s+/g, " ").slice(0, 200);
-      throw new Error(
+      panelFailed(
+        panel.title,
         `datasource returned non-JSON for "${panel.title}" (an HTML login page? check auth): ${body}`,
       );
+      continue;
     }
     const parsed = RangeResponse.parse(json);
     // Prometheus/Grafana signals a query error in a 200 body (status:"error").
-    if (parsed.status !== "success")
-      throw new Error(
+    if (parsed.status !== "success") {
+      panelFailed(
+        panel.title,
         `datasource query error for "${panel.title}": ${parsed.error ?? parsed.status}`,
       );
+      continue;
+    }
     const values = parsed.data?.result[0]?.values ?? [];
     const points = values
       .map(([t, v]) => ({ t, v: Number(v) }))
@@ -429,10 +472,14 @@ async function queryWindow(
     if (points.length) out.push({ title: panel.title, unit: panel.unit, points });
     else emptyPanels++;
   }
-  // Reachable + authenticated but EVERY panel matched zero series -> almost
-  // always a matcher/ref/region mismatch, not "no data". Fail loud so the caller
-  // records it (silent empty trends is the #1 confusing failure).
-  if (out.length === 0 && emptyPanels > 0)
+  if (out.length > 0) return out;
+  // Nothing usable came back. Prefer the first per-panel error verbatim (a
+  // real query/auth problem); else, if every panel was reachable but matched
+  // zero series, that's almost always a matcher/ref/region mismatch, not "no
+  // data" - fail loud so the caller records it (silent empty trends is the
+  // #1 confusing failure).
+  if (firstError) throw new Error(firstError);
+  if (emptyPanels > 0)
     throw new Error(
       `datasource reachable but all ${emptyPanels} panels returned 0 series - the matcher "${refMatcher || "(none)"}" likely doesn't match this project's labels (check the ref, region, and datasource)`,
     );

@@ -426,6 +426,15 @@ export async function collect(
             token: promToken,
             cookie: promCookie,
             matcher: promMatcher,
+            // One bad panel (a metric family this datasource doesn't have, a
+            // malformed query) no longer aborts every other panel's otherwise-
+            // good data - queryWindow isolates it and calls this instead. Log
+            // it (visible in the CLI, not silently dropped) and record it as a
+            // collection note so the report names which panel and why.
+            onPanelError: (panel, message) => {
+              clog.warn("trend panel failed", { panel, error: message });
+              errors.push({ source: "trends", message });
+            },
           }),
         [],
       )
