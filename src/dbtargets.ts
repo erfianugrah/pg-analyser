@@ -70,6 +70,28 @@ export function regionFromConnstring(url: string): string | null {
   }
 }
 
+/**
+ * Supabase's pooler and direct Postgres endpoints always require TLS (the
+ * platform terminates SSL at the proxy - AGENTS.md's pg_hba note). Bun's SQL
+ * client parses `sslmode` from the connstring's own query string and
+ * otherwise defaults to disabled, so a Supabase `--db-url`/profile entry with
+ * no `sslmode` throws ESSLREQUIRED with no other diagnostic. Inject
+ * `sslmode=require` for a Supabase-shaped host that doesn't already specify
+ * one; a non-Supabase connstring (which may have no TLS at all) is untouched.
+ */
+export function withSupabaseSsl(dbUrl: string): string {
+  let u: URL;
+  try {
+    u = new URL(dbUrl);
+  } catch {
+    return dbUrl;
+  }
+  if (u.searchParams.has("sslmode")) return dbUrl;
+  if (!/\.(?:pooler\.supabase\.com|supabase\.co|supabase\.com)$/.test(u.hostname)) return dbUrl;
+  u.searchParams.set("sslmode", "require");
+  return u.toString();
+}
+
 /** A redacted connstring for error/log messages - never leak the password. */
 export function redactConnstring(url: string): string {
   try {

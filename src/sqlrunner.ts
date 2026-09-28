@@ -1,4 +1,5 @@
 import { SQL } from "bun";
+import { withSupabaseSsl } from "./dbtargets.ts";
 import type { Management } from "./management.ts";
 import type { SqlRow } from "./schemas.ts";
 
@@ -92,7 +93,7 @@ export class DirectSqlRunner implements SqlRunner {
    * pass a fake `sql` backend to exercise run/runMulti/close without a network.
    */
   constructor(dbUrl: string, sql?: SqlLike) {
-    this.#sql = sql ?? new SQL(dbUrl, { prepare: false, max: 2 });
+    this.#sql = sql ?? new SQL(withSupabaseSsl(dbUrl), { prepare: false, max: 2 });
     this.#guard = sessionGuard();
   }
   async run(query: string): Promise<SqlRow[]> {

@@ -5,6 +5,7 @@ import {
   refFromConnstring,
   regionFromConnstring,
   resolveTargets,
+  withSupabaseSsl,
 } from "../src/dbtargets.ts";
 
 const REF = "abcdefghijklmnopqrst"; // 20 lowercase letters (placeholder)
@@ -80,6 +81,32 @@ describe("redactConnstring", () => {
     );
     expect(r).not.toContain("supersecret");
     expect(r).toContain("host.pooler.supabase.com");
+  });
+});
+
+describe("withSupabaseSsl", () => {
+  test("adds sslmode=require to a Supabase pooler host with none", () => {
+    const url = `postgresql://supabase_admin.${REF}:pw@x.pooler.supabase.com:5432/postgres`;
+    expect(withSupabaseSsl(url)).toBe(`${url}?sslmode=require`);
+  });
+
+  test("adds sslmode=require to a Supabase direct host with none", () => {
+    const url = `postgresql://postgres:pw@db.${REF}.supabase.co:5432/postgres`;
+    expect(withSupabaseSsl(url)).toBe(`${url}?sslmode=require`);
+  });
+
+  test("leaves an explicit sslmode untouched", () => {
+    const url = `postgresql://postgres:pw@db.${REF}.supabase.co:5432/postgres?sslmode=disable`;
+    expect(withSupabaseSsl(url)).toBe(url);
+  });
+
+  test("leaves a non-Supabase connstring untouched", () => {
+    const url = "postgresql://u:p@localhost:5432/mydb";
+    expect(withSupabaseSsl(url)).toBe(url);
+  });
+
+  test("leaves an unparseable string untouched", () => {
+    expect(withSupabaseSsl("not a url")).toBe("not a url");
   });
 });
 
