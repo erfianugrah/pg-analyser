@@ -274,6 +274,16 @@ describe("collect", () => {
       const events = lines.map((l) => JSON.parse(l)).filter((o) => o.source === "trends");
       expect(events.find((o) => o.msg === "plane failed")).toBeUndefined();
       expect(events.find((o) => o.msg === "trends skipped")?.level).toBe("info");
+      // The contention-episode scan (fetchIncidentSeries) shares this exact
+      // Grafana auth path and throws the identical message - it must degrade
+      // the same way, not read as a WARN "plane failed" for the same stale cookie.
+      const contentionNote = a.errors.find((e) => e.source === "contention");
+      expect(contentionNote?.message).toContain("contention scan skipped");
+      const contentionEvents = lines
+        .map((l) => JSON.parse(l))
+        .filter((o) => o.source === "contention");
+      expect(contentionEvents.find((o) => o.msg === "plane failed")).toBeUndefined();
+      expect(contentionEvents.find((o) => o.msg === "contention scan skipped")?.level).toBe("info");
     } finally {
       globalThis.fetch = realFetch;
     }
