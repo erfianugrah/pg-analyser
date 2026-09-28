@@ -141,7 +141,12 @@ Flags:
                        combine profiles into ONE index - each DB keeps its own
                        mode (a no-PAT profile's DBs skip the API planes; a PAT
                        profile's use the token), Grafana, and trend window.
-                       See pg-analyser.profile.example.json.
+                       grafana.regions is one target PER REGION PER PROFILE -
+                       two DBs sharing a region but needing different Grafana
+                       creds need separate profile files, chained. See
+                       pg-analyser.profile.example.json, or
+                       pg-analyser.org-{a,b}.profile.example.json for the
+                       same-region-different-cookie split.
   --trend-days <n>     trend query window in days (default 30; the store/Grafana
                        is a TSDB so 90 is fine). profile.trendDays wins for a
                        profile run. (env: PG_ANALYSER_TREND_DAYS)

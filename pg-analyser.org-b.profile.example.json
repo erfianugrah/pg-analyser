@@ -1,0 +1,20 @@
+{
+  "noPat": true,
+  "trendDays": 30,
+  "grafana": {
+    "hostTemplate": "https://grafana-{region}.example.com",
+    "datasourceUid": "REPLACE_WITH_ORG_B_PROMETHEUS_DATASOURCE_UID",
+    "matcher": "supabase_project_ref=\"{ref}\"",
+    "regions": {
+      "ap-southeast-1": {
+        "cookie": "REPLACE_WITH_ORG_B_SESSION_COOKIE_HEADER__DIFFERENT_FROM_ORG_A"
+      }
+    }
+  },
+  "databases": [
+    {
+      "name": "org-b-project",
+      "dbUrl": "postgresql://<role>.<ref>:PASSWORD@aws-2-ap-southeast-1.pooler.supabase.com:6543/postgres"
+    }
+  ]
+}
