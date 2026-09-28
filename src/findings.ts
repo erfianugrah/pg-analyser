@@ -933,9 +933,12 @@ export function projectDataDisk(
   pctPts: Point[],
   sizePts: Point[],
   resizeStepFrac: number,
+  resizeStepBytes = 0,
 ): DiskProjection | null {
   if (pctPts.length === 0) return null;
-  const expansions = detectResizes(sizePts, resizeStepFrac).filter((e) => e.toBytes > e.fromBytes);
+  const expansions = detectResizes(sizePts, resizeStepFrac, resizeStepBytes).filter(
+    (e) => e.toBytes > e.fromBytes,
+  );
   const lastExp = expansions.length ? (expansions[expansions.length - 1] as ResizeEvent) : null;
   // Segment after the last expansion so we never trend across the cliff.
   const pctSeg = lastExp ? pctPts.filter((p) => p.t > lastExp.at) : pctPts;
@@ -2241,9 +2244,17 @@ export function deriveFindings(a: Analysis): Finding[] {
       ...meta("stale_table_stats"),
     });
   }
+  // Row count: the larger of n_live_tup and the catalog estimate. Inside a short
+  // stats window n_live_tup only counts inserts since the reset (measured: a
+  // monthly partition at 4,141 live vs 109,527 in reltuples read as 59 KB/row).
+  const rowsOf = (r: SqlRow): number => Math.max(num(r.live_rows), num(r.est_rows));
   // pg_cron run history unpruned: cron.job_run_details grows forever (pg_cron
   // does not purge it). Detected from biggestTables past a size floor - it also
   // becomes a top-frequency writer and a large WAL share when left unchecked.
+  // rowsOf (not live_rows) so a stats reset doesn't read this as "0 rows" - the
+  // same table can (and did, on a live report) get flagged elsewhere as 0 live
+  // rows being a reset artifact while this finding's own title still asserted
+  // "0 rows" as if it were a real count, directly contradicting it.
   const cronHist = a.sql.biggestTables.find(
     (r) =>
       /(^|\.)job_run_details$/.test(String(r.table)) &&
@@ -2253,7 +2264,7 @@ export function deriveFindings(a: Analysis): Finding[] {
     out.push({
       severity: "low",
       category: "Capacity",
-      title: `pg_cron run history is unpruned (${String(cronHist.table)} is ${String(cronHist.total_size)}, ${num(cronHist.live_rows).toLocaleString()} rows)`,
+      title: `pg_cron run history is unpruned (${String(cronHist.table)} is ${String(cronHist.total_size)}, ${rowsOf(cronHist).toLocaleString()} rows)`,
       anchor: "#tables",
       ...meta("cron_history_unpruned"),
     });
@@ -2270,10 +2281,6 @@ export function deriveFindings(a: Analysis): Finding[] {
   const bloatByName = new Map(a.sql.bloat.map((r) => [String(r.name), num(r.bloat_x)]));
   const heapBytesOf = (r: SqlRow): number =>
     Math.max(0, num(r.total_bytes) - num(r.index_bytes) - num(r.toast_bytes));
-  // Row count: the larger of n_live_tup and the catalog estimate. Inside a short
-  // stats window n_live_tup only counts inserts since the reset (measured: a
-  // monthly partition at 4,141 live vs 109,527 in reltuples read as 59 KB/row).
-  const rowsOf = (r: SqlRow): number => Math.max(num(r.live_rows), num(r.est_rows));
   const inconsistent = appRows(a.sql.biggestTables)
     .filter((r) => {
       const rows = rowsOf(r);
@@ -2655,6 +2662,7 @@ export function deriveFindings(a: Analysis): Finding[] {
     pointsOf("Disk used (%)"),
     pointsOf("Disk size (bytes)"),
     THRESHOLDS.diskResizeStepFrac,
+    THRESHOLDS.diskResizeMinAbsoluteBytes,
   );
   if (dataDisk?.expansion) {
     const steps = dataDisk.expansions;
@@ -3377,6 +3385,7 @@ export function derivePositives(a: Analysis): Positive[] {
     tpoints("Disk used (%)"),
     tpoints("Disk size (bytes)"),
     THRESHOLDS.diskResizeStepFrac,
+    THRESHOLDS.diskResizeMinAbsoluteBytes,
   );
   if (diskProj?.sufficient) {
     const trustHorizon = Math.min(THRESHOLDS.diskFillHorizonDays, 3 * diskProj.spanDays);

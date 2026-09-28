@@ -225,6 +225,19 @@ export const THRESHOLDS = {
    * points that counts as a RESIZE (not organic growth). Used to segment the
    * disk series so a manual/auto expansion isn't trended as a fill/empty. */
   diskResizeStepFrac: 0.2,
+  /** Absolute-byte floor for the same detector, OR'd with diskResizeStepFrac.
+   * Cloud disk autoscale typically adds a roughly FIXED absolute increment
+   * each time it trips, so its fraction of an ever-growing base shrinks with
+   * each successive resize - measured on a live report: two consecutive
+   * Supabase auto-expansions both added the identical ~197 GiB step, but the
+   * second landed at 19.4% (the base had already grown), just under the 20%
+   * floor, and was silently missed - the trend then segmented on the OLDER
+   * resize and quietly trended across the undetected one. 2 GiB is far above
+   * any plausible organic per-sample growth (this project's own measured
+   * growth rate, computed in-session via linear regression over its trend
+   * series, is under 2 GB across one ~4h downsampled interval) and far below
+   * any real resize step. */
+  diskResizeMinAbsoluteBytes: 2 * 1024 ** 3,
   /** pct-used of a sequence's max at/above which exhaustion is HIGH (else MED).
    * The SQL surfaces sequences >=70% used; this is the escalation line. */
   sequenceExhaustionHighPct: 90,

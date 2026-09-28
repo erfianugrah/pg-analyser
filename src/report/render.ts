@@ -432,7 +432,21 @@ function trendSourceLabel(a: Analysis): string {
 }
 
 function trendsSection(a: Analysis): string {
-  if (!a.trends.length) return "";
+  if (!a.trends.length) {
+    // Trends can be empty for two very different reasons: nothing was ever
+    // configured (no --prometheus / no profile Grafana block - the common
+    // first run), or a source WAS configured and collect.ts recorded why it
+    // failed (expired session cookie, no Grafana entry for this project's
+    // region, ...). The first case has nothing to say, so stay silent; the
+    // second was previously silent too - a reader saw no Resource snapshot
+    // section at all and no indication trends were ever attempted, with the
+    // actual reason buried in the unrelated Collection notes table. Surface
+    // it here instead, next to where the charts would have been.
+    const failure = a.errors.find((e) => e.source === "trends");
+    if (!failure) return "";
+    return `<h2 id="trends">Resource snapshot <span class=note>infra over time - read for headroom vs cost (over-provisioned = downsize, near-ceiling = upsize). Single-point series show a marker until more snapshots accrue.</span></h2>
+<p class=empty>${esc(failure.message)}</p>`;
+  }
   const src = trendSourceLabel(a);
   const srcNote = src ? ` <span class=note>Source: ${src}.</span>` : "";
   // EBS burst-balance is a CloudWatch-only metric (not on the Supabase metrics

@@ -244,6 +244,43 @@ describe("fetchTrends ref scoping", () => {
       fetchTrends("https://grafana", 30, "r1", { matcher: 'Name="x-{ref}"' }),
     ).rejects.toThrow(/all \d+ panels returned 0 series.*Name="x-r1"/);
   });
+
+  test("one bad panel doesn't discard the others - isolated and reported via onPanelError", async () => {
+    // Measured on a live report: a single panel querying a metric family this
+    // datasource doesn't have (or a malformed query) aborted the WHOLE trends
+    // fetch, discarding every other panel's otherwise-good data.
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      const u = String(url);
+      // dataStart probe: no data -> no re-scope pass, keep this test to one
+      // queryWindow() call so the panel count is deterministic.
+      if (u.includes("/api/v1/query?"))
+        return new Response(JSON.stringify({ status: "success", data: { result: [] } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      if (u.includes("pg_database_size_bytes"))
+        return new Response(
+          JSON.stringify({ status: "error", errorType: "bad_data", error: "unknown metric" }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      return new Response(
+        JSON.stringify({ status: "success", data: { result: [{ values: [[1, "1"]] }] } }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+    const panelErrors: Array<{ panel: string; message: string }> = [];
+    const series = await fetchTrends("http://prom:9090", 30, "r1", {
+      onPanelError: (panel, message) => panelErrors.push({ panel, message }),
+    });
+    // Every other panel still came back...
+    expect(series.length).toBeGreaterThan(0);
+    expect(series.some((s) => s.title !== "Database size")).toBe(true);
+    // ...only the one bad panel is missing, and it's reported, not swallowed.
+    expect(series.some((s) => s.title === "Database size")).toBe(false);
+    expect(panelErrors).toHaveLength(1);
+    expect(panelErrors[0]?.panel).toBe("Database size");
+    expect(panelErrors[0]?.message).toMatch(/query error.*unknown metric/);
+  });
 });
 
 describe("fetchTrends adaptive window (auto-scope to real data span)", () => {
