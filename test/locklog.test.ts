@@ -179,4 +179,59 @@ describe("classifyLockWave (wall-clock windowing)", () => {
     expect(v.windowFrom).toBe("2026-07-15 18:15");
     expect(Number(v.windowTo.slice(-2))).toBeLessThanOrEqual(24);
   });
+
+  test("a 'window' bucket (unparseable timestamps) is unresolved, not a literal 'window-window' range", () => {
+    // Measured on a live report: every matching log line's timestamp failed
+    // RE_TS, so every event folded into the "window" bucket - the verdict's
+    // windowFrom/windowTo were then the literal string "window" twice,
+    // rendering the title "Lock-wait cascade window-window: ...".
+    const s = {
+      coverage: { from: "2026-09-28 02:33", to: "2026-09-28 04:08", files: 3, bytesScanned: 11e6 },
+      buckets: [
+        {
+          minute: "window",
+          waiting: 0,
+          maxWaitMs: 0,
+          acquired: 0,
+          cancelsLock: 1,
+          cancelsStmt: 25,
+          cancelsUser: 0,
+          deadlocks: 0,
+        },
+      ],
+      topRelations: [],
+      samples: [],
+    };
+    const v = classifyLockWave(s)!;
+    expect(v.windowResolved).toBe(false);
+    // windowFrom/windowTo fall back to the overall scanned coverage span, not
+    // the "window" sentinel, so a caller that ignores windowResolved still
+    // doesn't render the literal placeholder.
+    expect(v.windowFrom).toBe("2026-09-28 02:33");
+    expect(v.windowTo).toBe("2026-09-28 04:08");
+  });
+
+  test("a 'window' bucket with no coverage span either falls back to an honest label, not 'window'", () => {
+    const s = {
+      coverage: { from: null, to: null, files: 1, bytesScanned: 1 },
+      buckets: [
+        {
+          minute: "window",
+          waiting: 0,
+          maxWaitMs: 0,
+          acquired: 0,
+          cancelsLock: 0,
+          cancelsStmt: 12,
+          cancelsUser: 0,
+          deadlocks: 0,
+        },
+      ],
+      topRelations: [],
+      samples: [],
+    };
+    const v = classifyLockWave(s)!;
+    expect(v.windowResolved).toBe(false);
+    expect(v.windowFrom).not.toBe("window");
+    expect(v.windowTo).not.toBe("window");
+  });
 });

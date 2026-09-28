@@ -154,6 +154,15 @@ export type LockWaveVerdict = {
   severity: "high" | "med" | "low";
   windowFrom: string;
   windowTo: string;
+  /**
+   * false for the "window" one-off bucket (unparseable timestamps folded into
+   * a single aggregate, per parseLockLog's RE_TS fallback) - windowFrom/windowTo
+   * are then a best-effort approximation (the scanned buckets' overall span),
+   * not this verdict's actual window, so callers must not render them as a
+   * real "from-to" range (that produced the literal, non-actionable title
+   * "Lock-wait cascade window-window: ..." on a live report).
+   */
+  windowResolved: boolean;
   waiting: number;
   /** cancelsLock + cancelsStmt (kept for callers that only need the total). */
   cancels: number;
@@ -174,6 +183,7 @@ export function classifyLockWave(s: LockWaveSummary, windowMinutes = 10): LockWa
   const consider = (
     from: string,
     to: string,
+    resolved: boolean,
     waiting: number,
     cancelsLock: number,
     cancelsStmt: number,
@@ -206,6 +216,7 @@ export function classifyLockWave(s: LockWaveSummary, windowMinutes = 10): LockWa
       severity,
       windowFrom: from,
       windowTo: to,
+      windowResolved: resolved,
       waiting,
       cancels,
       cancelsLock,
@@ -254,6 +265,7 @@ export function classifyLockWave(s: LockWaveSummary, windowMinutes = 10): LockWa
     consider(
       b[i]!.minute,
       b[lastIdx]!.minute,
+      true,
       waiting,
       cancelsLock,
       cancelsStmt,
@@ -262,9 +274,14 @@ export function classifyLockWave(s: LockWaveSummary, windowMinutes = 10): LockWa
     );
   }
   if (oneOff)
+    // Unparseable-timestamp events: windowFrom/windowTo carry the overall
+    // scanned span as a best-effort approximation (not this bucket's actual
+    // window - it has none), so findings.ts must not render them as a real
+    // "from-to" range. See LockWaveVerdict.windowResolved.
     consider(
-      "window",
-      "window",
+      s.coverage.from ?? "unresolved timestamp",
+      s.coverage.to ?? "unresolved timestamp",
+      false,
       oneOff.waiting,
       oneOff.cancelsLock,
       oneOff.cancelsStmt,

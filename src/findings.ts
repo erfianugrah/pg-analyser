@@ -388,10 +388,16 @@ export function lockWaveFindings(a: Analysis): Finding[] {
   // (collect derives them from the parsed buckets), so say "events seen", and
   // name the scan size so a quiet tail is not misread as an unscanned one.
   const scanned = `the newest ${Math.round(lw.coverage.bytesScanned / 1e6)} MB of ${lw.coverage.files} log file(s)`;
+  // A "window" bucket (parseLockLog's fallback for an unparseable timestamp)
+  // still means events were found, so don't call it "no lock/timeout events"
+  // just because the regular per-minute buckets (coverage.from/.to) are empty.
+  const hasUnresolvedEvents = lw.buckets.some((b) => b.minute === "window");
   const cov =
     lw.coverage.from && lw.coverage.to
       ? `lock/timeout events seen ${lw.coverage.from} to ${lw.coverage.to} in ${scanned}`
-      : `no lock/timeout events in ${scanned}`;
+      : hasUnresolvedEvents
+        ? `lock/timeout events seen (timestamps unparseable) in ${scanned}`
+        : `no lock/timeout events in ${scanned}`;
   const verdict = classifyLockWave(lw);
   // classifyLockWave slides a 10-minute window and keeps only the single
   // best-scoring one - a deadlock in some OTHER, non-adjacent bucket (its own
@@ -404,10 +410,13 @@ export function lockWaveFindings(a: Analysis): Finding[] {
     const topRel = lw.topRelations[0];
     const relText = topRel ? ` on ${topRel.name ?? `relid ${topRel.relid}`}` : "";
     const secs = Math.round(verdict.maxWaitMs / 1000);
+    const windowLabel = verdict.windowResolved
+      ? `${verdict.windowFrom}-${verdict.windowTo}`
+      : "(unparseable timestamps in this log excerpt)";
     out.push({
       severity: verdict.severity,
       category: "Performance",
-      title: `Lock-wait cascade ${verdict.windowFrom}-${verdict.windowTo}: ${verdict.waiting} waits up to ${secs}s, ${verdict.cancels} timeout cancellations${relText}`,
+      title: `Lock-wait cascade ${windowLabel}: ${verdict.waiting} waits up to ${secs}s, ${verdict.cancels} timeout cancellations${relText}`,
       anchor: "#lockwave",
       evidence: [
         `${cov}.`,
@@ -436,10 +445,13 @@ export function lockWaveFindings(a: Analysis): Finding[] {
     const timeouts = roleTimeouts
       ? `Role statement_timeout in force: ${roleTimeouts}; server default ${a.pgConfig?.statement_timeout ?? "?"} ms.`
       : "";
+    const windowLabel = verdict.windowResolved
+      ? `${verdict.windowFrom}-${verdict.windowTo}`
+      : "(unparseable timestamps in this log excerpt)";
     out.push({
       severity: verdict.severity,
       category: "Performance",
-      title: `Statement-timeout burst ${verdict.windowFrom}-${verdict.windowTo}: ${verdict.cancelsStmt} statements cancelled by statement_timeout (no lock waits logged)`,
+      title: `Statement-timeout burst ${windowLabel}: ${verdict.cancelsStmt} statements cancelled by statement_timeout (no lock waits logged)`,
       anchor: "#lockwave",
       evidence: [
         `${cov}.`,

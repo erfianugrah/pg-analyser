@@ -2557,6 +2557,19 @@ describe("lock_wave (retrospective log cascade)", () => {
     expect(deriveFindings(base()).find((x) => x.heuristicId === "lock_wave")).toBeUndefined();
   });
 
+  test("a 'window' (unparseable-timestamp) bucket never renders the literal 'window-window' title", () => {
+    // Measured on a live report: every matching log line's timestamp failed to
+    // parse, so all events folded into the "window" bucket and the title read
+    // "Lock-wait cascade window-window: 0 waits up to 0s, 26 timeout cancellations".
+    const f = deriveFindings(
+      withLockWave([{ minute: "window", cancelsLock: 1, cancelsStmt: 25 }]),
+    ).find((x) => x.heuristicId === "lock_wave");
+    expect(f?.title).not.toContain("window-window");
+    expect(f?.title).toContain("(unparseable timestamps in this log excerpt)");
+    // The evidence line must not contradict the title by claiming no events.
+    expect(f?.evidence).not.toMatch(/^no lock\/timeout events/);
+  });
+
   test("statement-timeout-only burst -> statement_timeout_burst (not lock_wave), names the role timeouts", () => {
     const a = withLockWave([
       { minute: "2026-09-03 03:05", cancelsStmt: 49 },
