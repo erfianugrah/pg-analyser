@@ -148,16 +148,16 @@ describe("coverage segments", () => {
   test("a gap over 6 h splits the coverage, so a span never claims hours it did not see", () => {
     const s = parseRestartLog(
       [
-        "2026-02-26 01:05:02 UTC [1] LOG:  checkpoint complete: wrote 1 buffers",
-        "2026-02-26 01:10:02 UTC [1] LOG:  checkpoint complete: wrote 1 buffers",
-        "2026-09-30 22:00:00 UTC [1] LOG:  checkpoint complete: wrote 1 buffers",
-        "2026-10-01 03:00:08 UTC [1] LOG:  checkpoint complete: wrote 1 buffers",
+        "2024-02-26 01:05:00 UTC [1] LOG:  checkpoint complete: wrote 1 buffers",
+        "2024-02-26 01:10:00 UTC [1] LOG:  checkpoint complete: wrote 1 buffers",
+        "2024-09-30 22:00:00 UTC [1] LOG:  checkpoint complete: wrote 1 buffers",
+        "2024-10-01 03:00:00 UTC [1] LOG:  checkpoint complete: wrote 1 buffers",
       ].join("\n"),
     )!;
     // 22:00 -> 03:00 is 5 h (one stretch); Feb -> Sep is months (a split).
     expect(s.coverage.segments).toEqual([
-      { from: "2026-02-26 01:05:02", to: "2026-02-26 01:10:02" },
-      { from: "2026-09-30 22:00:00", to: "2026-10-01 03:00:08" },
+      { from: "2024-02-26 01:05:00", to: "2024-02-26 01:10:00" },
+      { from: "2024-09-30 22:00:00", to: "2024-10-01 03:00:00" },
     ]);
     expect(s.coverage.lines).toBe(4);
   });

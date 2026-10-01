@@ -186,7 +186,7 @@ describe("classifyLockWave (wall-clock windowing)", () => {
     // windowFrom/windowTo were then the literal string "window" twice,
     // rendering the title "Lock-wait cascade window-window: ...".
     const s = {
-      coverage: { from: "2026-09-28 02:33", to: "2026-09-28 04:08", files: 3, bytesScanned: 11e6 },
+      coverage: { from: "2024-09-28 02:30", to: "2024-09-28 04:05", files: 3, bytesScanned: 11e6 },
       buckets: [
         {
           minute: "window",
@@ -210,8 +210,8 @@ describe("classifyLockWave (wall-clock windowing)", () => {
     // windowFrom/windowTo fall back to the overall scanned coverage span, not
     // the "window" sentinel, so a caller that ignores windowResolved still
     // doesn't render the literal placeholder.
-    expect(v.windowFrom).toBe("2026-09-28 02:33");
-    expect(v.windowTo).toBe("2026-09-28 04:08");
+    expect(v.windowFrom).toBe("2024-09-28 02:30");
+    expect(v.windowTo).toBe("2024-09-28 04:05");
   });
 
   test("a 'window' bucket with no coverage span either falls back to an honest label, not 'window'", () => {
