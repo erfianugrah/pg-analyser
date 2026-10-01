@@ -44,6 +44,9 @@ export type RestartSummary = {
   total: number;
   /** Newest MAX_RESTARTS, oldest first. */
   restarts: RestartEvent[];
+  /** Span (UTC) of every matched line, checkpoint lines included - so a
+   * zero-restart result says which hours it actually looked at. */
+  coverage: { from: string; to: string };
 };
 
 const MAX_RESTARTS = 20;
@@ -52,7 +55,11 @@ const STOP_PAIR_WINDOW_S = 30 * 60;
 /** Startup lines this close together belong to one startup. */
 const STARTUP_GROUP_S = 120;
 
-const RE_TS = /(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})/;
+// The offset is optional: "UTC" or a numeric "+08" / "-0530" / "+05:30" is
+// applied; a named zone other than UTC/GMT ("CEST") is read as UTC.
+// simplify: named-zone abbreviations are ambiguous; Supabase logs in UTC.
+const RE_TS =
+  /(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(?:\.\d+)?(?:\s*(UTC|GMT|[+-]\d{2}(?::?\d{2})?)\b)?/;
 const RE_STOP = /received (fast|smart|immediate) shutdown request/;
 const RE_CKPT_START = /checkpoint starting: shutdown/;
 const RE_CKPT_DONE = /checkpoint complete:/;
@@ -69,20 +76,30 @@ type Ev =
       ts: string;
     };
 
-function tOf(date: string, time: string): number | null {
-  const ms = Date.parse(`${date}T${time}Z`);
+function tOf(date: string, time: string, zone: string | undefined): number | null {
+  let off = "Z";
+  if (zone && /^[+-]/.test(zone)) {
+    const digits = zone.replace(":", "");
+    off = `${digits.slice(0, 3)}:${digits.slice(3, 5) || "00"}`;
+  }
+  const ms = Date.parse(`${date}T${time}${off}`);
   return Number.isFinite(ms) ? ms / 1000 : null;
 }
+
+const utc = (t: number) => new Date(t * 1000).toISOString().slice(0, 19).replace("T", " ");
 
 export function parseRestartLog(text: string): RestartSummary | null {
   if (!text) return null;
   const evs: Ev[] = [];
+  let minT = Number.POSITIVE_INFINITY;
+  let maxT = Number.NEGATIVE_INFINITY;
   for (const raw of text.split("\n")) {
     const m = RE_TS.exec(raw);
     if (!m) continue;
-    const t = tOf(m[1]!, m[2]!);
+    const t = tOf(m[1]!, m[2]!, m[3]);
     if (t == null) continue;
-    const ts = `${m[1]} ${m[2]}`;
+    const ts = utc(t);
+    const before = evs.length;
     const stop = RE_STOP.exec(raw);
     if (stop) evs.push({ kind: "stop", t, ts, mode: stop[1] as "fast" | "smart" | "immediate" });
     else if (RE_CKPT_START.test(raw)) evs.push({ kind: "ckpt_start", t, ts });
@@ -90,7 +107,13 @@ export function parseRestartLog(text: string): RestartSummary | null {
     else if (RE_SHUT_DOWN.test(raw)) evs.push({ kind: "shut_down", t, ts });
     else if (RE_START_CLEAN.test(raw)) evs.push({ kind: "start_clean", t, ts });
     else if (RE_START_RECOVERY.test(raw)) evs.push({ kind: "start_recovery", t, ts });
+    if (evs.length > before) {
+      minT = Math.min(minT, t);
+      maxT = Math.max(maxT, t);
+    }
   }
+  if (evs.length === 0) return null;
+  const coverage = { from: utc(minT), to: utc(maxT) };
   // collect.ts joins file tails newest-first; restore time order.
   evs.sort((a, b) => a.t - b.t);
 
@@ -151,6 +174,5 @@ export function parseRestartLog(text: string): RestartSummary | null {
       stop = null;
     }
   }
-  if (out.length === 0) return null;
-  return { total: out.length, restarts: out.slice(-MAX_RESTARTS) };
+  return { total: out.length, restarts: out.slice(-MAX_RESTARTS), coverage };
 }

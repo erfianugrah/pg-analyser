@@ -548,6 +548,19 @@ export const Analysis = z.object({
             ]),
           }),
         ),
+        // UTC span of the matched lines, and what the scan read: a filtered
+        // read of whole uncompressed files ("grep") or the lock-wave tails
+        // ("tail", the fallback). truncated = stopped at the byte budget.
+        coverage: z
+          .object({
+            from: z.string(),
+            to: z.string(),
+            files: z.number().optional(),
+            bytesScanned: z.number().optional(),
+            method: z.enum(["grep", "tail"]).optional(),
+            truncated: z.boolean().optional(),
+          })
+          .optional(),
       })
       .nullable()
       .default(null),

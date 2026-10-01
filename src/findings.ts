@@ -413,14 +413,25 @@ function checkpointerResetAt(a: Analysis): number | null {
  * is the usual reason the cumulative stats were lost (version-dependent:
  * AGENTS.md 2026-10-01).
  */
+/** "2026-09-28 05:00 to 2026-10-01 09:19 UTC, in 200 MB of 3 uncompressed
+ * log file(s)" - the span the restart scan actually covered, so neither a
+ * card nor an empty result claims more history than was read. */
+export function restartScanSpan(rl: NonNullable<Analysis["sql"]["restartLog"]>): string {
+  const c = rl.coverage;
+  if (!c) return "the scanned log text";
+  const span = `${c.from.slice(0, 16)} to ${c.to.slice(0, 16)} UTC`;
+  const read =
+    c.bytesScanned != null && c.files != null
+      ? `, in ${c.bytesScanned >= 1e6 ? `${Math.round(c.bytesScanned / 1e6)} MB` : `${Math.max(1, Math.round(c.bytesScanned / 1e3))} KB`} of ${c.files} ${c.method === "tail" ? "log file tail(s)" : "uncompressed log file(s)"}${c.truncated ? " (scan budget reached; older text not read)" : ""}`
+      : "";
+  return `${span}${read}`;
+}
+
 export function restartLogFindings(a: Analysis): Finding[] {
   const rl = a.sql.restartLog;
   if (!rl || rl.restarts.length === 0) return [];
   const out: Finding[] = [];
-  const lw = a.sql.lockWave;
-  const scanned = lw
-    ? ` Scanned: the newest ${Math.round(lw.coverage.bytesScanned / 1e6)} MB of ${lw.coverage.files} log file(s), so older restarts are not counted.`
-    : "";
+  const scanned = ` Log lines seen ${restartScanSpan(rl)}; restarts outside that span and in compressed rotations are not counted.`;
   const resetAt = checkpointerResetAt(a);
   const resetNote = (() => {
     if (resetAt == null) return "";
@@ -441,16 +452,20 @@ export function restartLogFindings(a: Analysis): Finding[] {
     : "";
   if (cut.length) {
     const modes = [...new Set(cut.map((r) => r.stopMode))].join("/");
+    const article = /^[aeiou]/.test(modes) ? "an" : "a";
     out.push({
       severity: "med",
       category: "Capacity",
-      title: `${cut.length} of ${plural(rl.total, "restart")} in the server log ran crash recovery after a ${modes} shutdown request`,
+      title: `${cut.length} of ${plural(rl.total, "restart")} in the server log ran crash recovery after ${article} ${modes} shutdown request`,
       evidence:
         cut
           .slice(-5)
-          .map(
-            (r) =>
-              `stop ${r.stopAt} -> start ${r.at}: shutdown checkpoint ${r.shutdownCheckpoint === "none" ? "never logged as started" : r.shutdownCheckpoint === "started" ? "started, never completed" : "completed"}, 'database system is shut down' never logged, next start ran crash recovery.`,
+          .map((r) =>
+            r.stopMode === "immediate"
+              ? // Immediate mode skips the shutdown checkpoint by design (docs:
+                // server-shutdown), so recovery on the next start is expected.
+                `stop ${r.stopAt} -> start ${r.at}: an immediate shutdown was requested, which skips the shutdown checkpoint, so the next start ran crash recovery.`
+              : `stop ${r.stopAt} -> start ${r.at}: shutdown checkpoint ${r.shutdownCheckpoint === "none" ? "never logged as started" : r.shutdownCheckpoint === "started" ? "started, never completed" : "completed"}, 'database system is shut down' ${r.shutDownLogged ? "logged" : "never logged"}, next start ran crash recovery.`,
           )
           .join(" ") +
         halfNote +
@@ -3542,8 +3557,13 @@ export function derivePositives(a: Analysis): Positive[] {
     if (allClean)
       out.push({
         category: "Capacity",
-        title: `${rl.total} restart${rl.total === 1 ? "" : "s"} in the scanned server log started from a clean shutdown`,
+        title: `${rl.total} restart${rl.total === 1 ? "" : "s"} in the scanned server log started from a clean shutdown (${restartScanSpan(rl)})`,
       });
+  } else if (rl && rl.total === 0) {
+    out.push({
+      category: "Capacity",
+      title: `No restart in the scanned server log (${restartScanSpan(rl)})`,
+    });
   }
 
   // Trend-health counterweights to the capacity findings (data-aware: only when

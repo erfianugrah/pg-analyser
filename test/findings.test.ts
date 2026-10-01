@@ -4068,3 +4068,86 @@ describe("restart history from the server log", () => {
     expect(derivePositives(a).some((p) => p.title.includes("clean shutdown"))).toBe(false);
   });
 });
+
+describe("restart history coverage", () => {
+  test("zero restarts in the scan is a positive that names the span and what was read", () => {
+    const a = base();
+    a.sql.restartLog = {
+      total: 0,
+      restarts: [],
+      coverage: {
+        from: "2026-09-28 05:00:00",
+        to: "2026-10-01 09:19:00",
+        files: 3,
+        bytesScanned: 200_000_000,
+        method: "grep",
+        truncated: true,
+      },
+    };
+    const p = derivePositives(a).find((x) => x.title.startsWith("No restart"));
+    expect(p?.title).toContain("2026-09-28 05:00 to 2026-10-01 09:19 UTC");
+    expect(p?.title).toContain("200 MB of 3 uncompressed log file(s)");
+    expect(deriveFindings(a).some((x) => x.heuristicId?.startsWith("restart_"))).toBe(false);
+  });
+
+  test("restart cards quote the restart scan's own coverage", () => {
+    const a = base();
+    a.sql.restartLog = {
+      total: 1,
+      restarts: [
+        {
+          at: "2026-09-28 22:22:50",
+          stopAt: "2026-09-28 22:22:40",
+          stopMode: "fast",
+          shutdownCheckpoint: "started",
+          shutDownLogged: false,
+          startup: "recovery",
+          verdict: "stop_cut_off_recovered",
+        },
+      ],
+      coverage: {
+        from: "2026-09-28 05:00:00",
+        to: "2026-10-01 09:19:00",
+        files: 3,
+        bytesScanned: 200_000_000,
+        method: "grep",
+        truncated: false,
+      },
+    };
+    const f = deriveFindings(a).find((x) => x.heuristicId === "restart_shutdown_cut_off");
+    expect(f?.evidence).toContain("2026-09-28 05:00 to 2026-10-01 09:19 UTC");
+  });
+});
+
+describe("restart card wording follows the parsed facts", () => {
+  test("an immediate stop says recovery is by design and uses 'an'", () => {
+    const a = base();
+    a.sql.restartLog = {
+      total: 1,
+      restarts: [
+        {
+          at: "2026-10-01 09:40:52",
+          stopAt: "2026-10-01 09:40:52",
+          stopMode: "immediate",
+          shutdownCheckpoint: "none",
+          shutDownLogged: true,
+          startup: "recovery",
+          verdict: "stop_cut_off_recovered",
+        },
+      ],
+      coverage: {
+        from: "2026-10-01 09:40:52",
+        to: "2026-10-01 09:41:07",
+        files: 1,
+        bytesScanned: 90_554,
+        method: "grep",
+        truncated: false,
+      },
+    };
+    const f = deriveFindings(a).find((x) => x.heuristicId === "restart_shutdown_cut_off");
+    expect(f?.title).toContain("after an immediate shutdown request");
+    expect(f?.evidence).toContain("skips the shutdown checkpoint");
+    expect(f?.evidence).not.toContain("never logged");
+    expect(f?.evidence).toContain("91 KB of 1 uncompressed log file(s)");
+  });
+});
