@@ -559,6 +559,8 @@ export const Analysis = z.object({
             bytesScanned: z.number().optional(),
             method: z.enum(["grep", "tail"]).optional(),
             truncated: z.boolean().optional(),
+            lines: z.number().optional(),
+            segments: z.array(z.object({ from: z.string(), to: z.string() })).optional(),
           })
           .optional(),
       })

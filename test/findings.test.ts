@@ -4151,3 +4151,31 @@ describe("restart card wording follows the parsed facts", () => {
     expect(f?.evidence).toContain("91 KB of 1 uncompressed log file(s)");
   });
 });
+
+describe("restart scan span with gaps", () => {
+  test("names each covered stretch instead of one start-to-end span", () => {
+    const a = base();
+    a.sql.restartLog = {
+      total: 0,
+      restarts: [],
+      coverage: {
+        from: "2026-02-26 01:05:02",
+        to: "2026-10-01 10:00:08",
+        files: 4,
+        bytesScanned: 74_025_159,
+        method: "grep",
+        truncated: false,
+        lines: 900,
+        segments: [
+          { from: "2026-02-26 01:05:02", to: "2026-02-26 03:00:00" },
+          { from: "2026-09-30 22:00:00", to: "2026-10-01 10:00:08" },
+        ],
+      },
+    };
+    const p = derivePositives(a).find((x) => x.title.startsWith("No restart"));
+    expect(p?.title).toContain(
+      "2026-02-26 01:05 to 2026-02-26 03:00, 2026-09-30 22:00 to 2026-10-01 10:00 UTC",
+    );
+    expect(p?.title).not.toContain("2026-02-26 01:05 to 2026-10-01 10:00");
+  });
+});

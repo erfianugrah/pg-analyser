@@ -46,10 +46,22 @@ export type RestartSummary = {
   restarts: RestartEvent[];
   /** Span (UTC) of every matched line, checkpoint lines included - so a
    * zero-restart result says which hours it actually looked at. */
-  coverage: { from: string; to: string };
+  coverage: {
+    from: string;
+    to: string;
+    /** Matched lines the span rests on. */
+    lines: number;
+    /** Contiguous stretches (no gap over SEGMENT_GAP_S), newest MAX_SEGMENTS.
+     * from/to alone overstate: rotated files can leave months between them. */
+    segments: Array<{ from: string; to: string }>;
+  };
 };
 
 const MAX_RESTARTS = 20;
+/** A gap this long between matched lines splits the coverage. Checkpoint
+ * lines come every checkpoint_timeout (300 s default) on a busy server. */
+const SEGMENT_GAP_S = 6 * 3600;
+const MAX_SEGMENTS = 8;
 /** A stop request this long before a startup still pairs with it. */
 const STOP_PAIR_WINDOW_S = 30 * 60;
 /** Startup lines this close together belong to one startup. */
@@ -113,9 +125,20 @@ export function parseRestartLog(text: string): RestartSummary | null {
     }
   }
   if (evs.length === 0) return null;
-  const coverage = { from: utc(minT), to: utc(maxT) };
   // collect.ts joins file tails newest-first; restore time order.
   evs.sort((a, b) => a.t - b.t);
+  const segs: Array<{ from: number; to: number }> = [];
+  for (const e of evs) {
+    const last = segs[segs.length - 1];
+    if (last && e.t - last.to <= SEGMENT_GAP_S) last.to = e.t;
+    else segs.push({ from: e.t, to: e.t });
+  }
+  const coverage = {
+    from: utc(minT),
+    to: utc(maxT),
+    lines: evs.length,
+    segments: segs.slice(-MAX_SEGMENTS).map((s) => ({ from: utc(s.from), to: utc(s.to) })),
+  };
 
   type Stop = {
     t: number;

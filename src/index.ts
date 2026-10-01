@@ -555,6 +555,17 @@ function doneTail(a: Analysis): string {
   const bits: string[] = [];
   if (a.meta.collectionMs != null) bits.push(`${(a.meta.collectionMs / 1000).toFixed(1)}s`);
   if (a.trends.length) bits.push(`${a.trends.length} trend pts`);
+  // An expired/missing Grafana session is demoted to an INFO note in collect
+  // (so it does not read as a failure), and a sweep logs at WARN - so without
+  // this the only trace on the console was "3 notes". Name it: it is the one
+  // note the user can fix in seconds (refresh the cookie in the profile).
+  const grafanaAuth = a.errors.find(
+    (e) =>
+      (e.source === "trends" || e.source === "contention") &&
+      /session cookie\/token is missing or expired|an HTML login page/i.test(e.message),
+  );
+  if (grafanaAuth)
+    bits.push("TRENDS SKIPPED: Grafana session expired or missing - refresh the cookie");
   if (a.errors.length) bits.push(`${a.errors.length} note${a.errors.length === 1 ? "" : "s"}`);
   return bits.length ? ` (${bits.join(", ")})` : "";
 }

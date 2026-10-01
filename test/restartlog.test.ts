@@ -46,7 +46,7 @@ describe("parseRestartLog", () => {
     )!;
     expect(s.total).toBe(0);
     expect(s.restarts).toEqual([]);
-    expect(s.coverage).toEqual({ from: "2026-10-01 08:00:00", to: "2026-10-01 09:15:00" });
+    expect(s.coverage).toMatchObject({ from: "2026-10-01 08:00:00", to: "2026-10-01 09:15:00" });
   });
 
   test("a non-UTC log offset is converted, so times are UTC", () => {
@@ -141,5 +141,24 @@ describe("parseRestartLog", () => {
     expect(s.restarts.length).toBeLessThanOrEqual(20);
     // newest kept
     expect(s.restarts[s.restarts.length - 1]!.at).toBe("2026-09-28 01:00:00");
+  });
+});
+
+describe("coverage segments", () => {
+  test("a gap over 6 h splits the coverage, so a span never claims hours it did not see", () => {
+    const s = parseRestartLog(
+      [
+        "2026-02-26 01:05:02 UTC [1] LOG:  checkpoint complete: wrote 1 buffers",
+        "2026-02-26 01:10:02 UTC [1] LOG:  checkpoint complete: wrote 1 buffers",
+        "2026-09-30 22:00:00 UTC [1] LOG:  checkpoint complete: wrote 1 buffers",
+        "2026-10-01 03:00:08 UTC [1] LOG:  checkpoint complete: wrote 1 buffers",
+      ].join("\n"),
+    )!;
+    // 22:00 -> 03:00 is 5 h (one stretch); Feb -> Sep is months (a split).
+    expect(s.coverage.segments).toEqual([
+      { from: "2026-02-26 01:05:02", to: "2026-02-26 01:10:02" },
+      { from: "2026-09-30 22:00:00", to: "2026-10-01 03:00:08" },
+    ]);
+    expect(s.coverage.lines).toBe(4);
   });
 });
