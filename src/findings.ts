@@ -2719,9 +2719,32 @@ export function deriveFindings(a: Analysis): Finding[] {
 
   // Checkpoint pressure: share of checkpoints forced by WAL filling (requested)
   // vs the healthy timed interval. High requested share -> raise max_wal_size.
-  const reqPts = pointsOf("Requested checkpoints/s");
-  const timedPts = pointsOf("Timed checkpoints/s");
-  if (sufficient(reqPts) && sufficient(timedPts)) {
+  // Segmented after the last pg_stat_checkpointer reset (like the disk
+  // projection segments after a resize) - a wide trend window can span a
+  // restart that reset the counters, blending a restart-storm period into
+  // today's reading. Measured on a live report: a 90-day blended average
+  // read 28% (below the firing threshold, so the finding fired NOTHING),
+  // while the raw counter since the actual last reset read 63% - the trend
+  // window hid worse current pressure than any prior reading had shown.
+  const cpResetAt = (() => {
+    const raw = a.sql.checkpointer[0]?.stats_reset;
+    if (raw == null) return null;
+    // Postgres prints a whole-hour tz offset as bare "+00"/"+09", which
+    // Date.parse silently rejects (NaN) without the ":00" - verified: this
+    // exact shape ("...292042+00") parsed to NaN, so cpResetAt was always
+    // null and segmentation never ran at all, a live-tested fix with zero
+    // actual effect until this was caught by re-checking the regenerated report.
+    const iso = String(raw)
+      .replace(" ", "T")
+      .replace(/([+-]\d{2})$/, "$1:00");
+    const ms = Date.parse(iso);
+    return Number.isFinite(ms) ? ms / 1000 : null;
+  })();
+  const seg = (pts: Point[]) => (cpResetAt != null ? pts.filter((p) => p.t > cpResetAt) : pts);
+  const reqPts = seg(pointsOf("Requested checkpoints/s"));
+  const timedPts = seg(pointsOf("Timed checkpoints/s"));
+  const checkpointTrendsSufficient = sufficient(reqPts) && sufficient(timedPts);
+  if (checkpointTrendsSufficient) {
     const req = trendStat(reqPts)!.mean;
     const timed = trendStat(timedPts)!.mean;
     const total = req + timed;
@@ -2948,15 +2971,17 @@ export function deriveFindings(a: Analysis): Finding[] {
       ...meta("recursive_cte_heavy"),
     });
   }
-  // Checkpoint pressure, counter variant: the trends-based checkpoint_pressure
-  // finding needs 7+ days of Prometheus series; this one reads the cumulative
+  // Checkpoint pressure, counter variant: this one reads the cumulative
   // checkpointer counters directly (the only lens available in no-PAT /
-  // self-hosted mode). Same threshold, same meaning. Skipped when the trends
-  // series exists - the windowed rate is the better measurement and only one
-  // should fire.
+  // self-hosted mode, or when the trends window can't be trusted). Same
+  // threshold, same meaning. Skipped only when the trends path (now
+  // reset-segmented above) had a sufficient post-reset window to trust - a
+  // wide trend window spanning the reset is NOT "the trends series exists",
+  // it's a blended average across two different regimes, so its mere
+  // presence must not suppress this cleaner, always-since-the-actual-reset
+  // reading.
   const cp = a.sql.checkpointer[0];
-  const cpTrends = pointsOf("Requested checkpoints/s");
-  if (cp && cpTrends.length === 0) {
+  if (cp && !checkpointTrendsSufficient) {
     const timed = num(cp.timed);
     const req = num(cp.requested);
     const total = timed + req;
