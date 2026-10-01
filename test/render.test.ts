@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
+import { sweepOutcome } from "../src/index.ts";
 import type { Overlay } from "../src/overlay.ts";
-import { render, renderIndex, renderOrgIndex, renderSummary } from "../src/report/render.ts";
+import {
+  render,
+  renderIndex,
+  renderOrgIndex,
+  renderSummary,
+  sqlUnreachable,
+} from "../src/report/render.ts";
 import type { Analysis } from "../src/schemas.ts";
 
 function fixture(overrides: Partial<Analysis> = {}): Analysis {
@@ -566,6 +573,24 @@ describe("render", () => {
     expect(html).toContain("database was unreachable");
   });
 
+  test("unreachable DB with trend-only findings: verdict says checks did not run", () => {
+    // A network-restricted DB refuses every SQL plane but Grafana trends still
+    // yield findings; the verdict must not read like a complete audit.
+    const a = fixture({ sql: { ...fixture().sql, cacheHitPct: 92 } });
+    a.meta = { ...a.meta, status: "unknown", managementApi: false };
+    a.errors = [{ source: "sql:dbSize", message: "address not in tenant allow_list" }];
+    const html = render(a);
+    const verdict = html.match(/class="verdict[^"]*">([^<]*)/)?.[1] ?? "";
+    expect(verdict).toContain("some checks could not run");
+  });
+
+  test("sqlUnreachable names the dbSize probe error, null when it succeeded", () => {
+    const a = fixture();
+    expect(sqlUnreachable(a)).toBeNull();
+    a.errors = [{ source: "sql:dbSize", message: "address not in tenant allow_list" }];
+    expect(sqlUnreachable(a)).toBe("address not in tenant allow_list");
+  });
+
   test("deduped collection notes collapse repeats", () => {
     const html = render(
       fixture({
@@ -1001,5 +1026,22 @@ describe("horizon-blocker section is about blockers", () => {
     const html = render(a);
     expect(html).toContain('id="xmin"');
     expect(html).toContain("42");
+  });
+});
+
+describe("sweepOutcome", () => {
+  test("unreachable DB reads PARTIAL and carries the reason as the index row error", () => {
+    const a = fixture();
+    a.errors = [{ source: "sql:dbSize", message: "address not in tenant allow_list" }];
+    const o = sweepOutcome(a);
+    expect(o.head(3)).toStartWith("PARTIAL - SQL unreachable (address not in tenant allow_list)");
+    expect(o.head(3)).toContain("3 findings");
+    expect(o.row.error).toBe("SQL unreachable: address not in tenant allow_list");
+  });
+
+  test("reachable DB keeps the plain ok line and no row error", () => {
+    const o = sweepOutcome(fixture());
+    expect(o.head(1)).toBe("ok - 1 finding");
+    expect(o.row.error).toBeUndefined();
   });
 });

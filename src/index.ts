@@ -44,6 +44,7 @@ import {
   renderNarrativePage,
   renderOrgIndex,
   renderSummary,
+  sqlUnreachable,
 } from "./report/render.ts";
 import type { Analysis } from "./schemas.ts";
 import { writeScraper } from "./scraper.ts";
@@ -507,10 +508,11 @@ async function doAllDbs(
         txidRemaining,
         txidEtaDays,
         dir: projDir,
+        ...sweepOutcome(analysis).row,
       });
       const n = counts.high + counts.med + counts.low;
       progress.done(
-        `ok - ${n} finding${n === 1 ? "" : "s"}${doneTail(analysis)}${grafanaGap ? " - trends skipped" : ""}`,
+        `${sweepOutcome(analysis).head(n)}${doneTail(analysis)}${grafanaGap ? " - trends skipped" : ""}`,
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -548,6 +550,27 @@ async function doAllDbs(
  */
 function sweepLogger(): Logger {
   return makeLogger({ level: envLevelExplicit() ?? "warn" });
+}
+
+/**
+ * Sweep verdict for one collected project. An unreachable DB (dbSize probe
+ * failed - e.g. the caller's IP is outside the project's network restrictions)
+ * still produces an analysis, and trend-only findings, so without this it read
+ * "ok - N findings" and showed a clean index row. Mark it PARTIAL on the console
+ * and carry the reason as the index row's error so it sorts first and shows ERROR.
+ */
+export function sweepOutcome(a: Analysis): {
+  head: (n: number) => string;
+  row: { error?: string };
+} {
+  const reason = sqlUnreachable(a);
+  const count = (n: number) => `${n} finding${n === 1 ? "" : "s"}`;
+  return reason
+    ? {
+        head: (n) => `PARTIAL - SQL unreachable (${reason}) - ${count(n)} from the planes that ran`,
+        row: { error: `SQL unreachable: ${reason}` },
+      }
+    : { head: (n) => `ok - ${count(n)}`, row: {} };
 }
 
 /** Compact per-project summary tail for the sweep's done() line. */
@@ -769,12 +792,13 @@ async function doAll(
           txidRemaining,
           txidEtaDays,
           dir: projDir,
+          ...sweepOutcome(analysis).row,
         });
         high += counts.high;
         med += counts.med;
         low += counts.low;
         const n = counts.high + counts.med + counts.low;
-        progress.done(`ok - ${n} finding${n === 1 ? "" : "s"}${doneTail(analysis)}`);
+        progress.done(`${sweepOutcome(analysis).head(n)}${doneTail(analysis)}`);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         errors++;

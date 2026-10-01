@@ -505,14 +505,17 @@ function computeVerdict(findings: Finding[], degraded: boolean): { cls: string; 
     return degraded
       ? { cls: "warn", text: "No issues found, but some checks could not run" }
       : { cls: "ok", text: "Healthy - no issues found" };
+  // Findings from the planes that DID run are real, but a degraded run is not a
+  // complete audit - say so in the verdict, not only in the banner.
+  const caveat = degraded ? " - some checks could not run" : "";
   if (c.high)
     return {
       cls: "bad",
-      text: `${c.high} issue${c.high === 1 ? " needs" : "s need"} attention now`,
+      text: `${c.high} issue${c.high === 1 ? " needs" : "s need"} attention now${caveat}`,
     };
   return {
     cls: "warn",
-    text: `${findings.length} issue${findings.length === 1 ? "" : "s"} worth reviewing`,
+    text: `${findings.length} issue${findings.length === 1 ? "" : "s"} worth reviewing${caveat}`,
   };
 }
 
@@ -738,6 +741,17 @@ function vitalsMini(a: Analysis): string {
     .join("")}</tbody></table>`;
 }
 
+/**
+ * The DB-unreachable signal, keyed off the trivial dbSize probe (one fancy
+ * query failing does not mean the whole SQL plane is down). Returns the probe's
+ * error message, or null when it succeeded. Shared by the report banner and the
+ * sweep's status line + index row, so a network-restricted DB (every SQL plane
+ * refused) cannot read as "ok" just because Grafana trends still yield findings.
+ */
+export function sqlUnreachable(a: Analysis): string | null {
+  return a.errors.find((e) => e.source === "sql:dbSize")?.message ?? null;
+}
+
 export interface IndexRow {
   name: string;
   ref: string;
@@ -937,7 +951,7 @@ export function render(
   // "not collected" (source errored) vs "none found" (collected, empty).
   // Key off the trivial dbSize probe: if that fails, the DB is unreachable;
   // a single fancy query failing does not mean the whole DB plane is down.
-  const dbUnreachable = errored.has("sql:dbSize");
+  const dbUnreachable = sqlUnreachable(a) != null;
   const sec = (rows: SqlRow[], source: string, opts?: Parameters<typeof sqlTable>[1]) =>
     errored.has(source)
       ? `<p class="empty warn-text">not collected - see notes</p>`

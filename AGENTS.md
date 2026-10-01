@@ -966,6 +966,13 @@ PG17 project):
   the version-controlled docs copy (`supabase/supabase` `apps/docs/spec`), which
   is generated from the API and can lag a deploy. When you add/rename a
   Management API call in `management.ts`, update the manifest in that script.
+- **Network restrictions refuse the connection itself** (2026-10-02, observed on a
+  no-PAT superuser sweep): a caller IP outside the project's allow list fails
+  EVERY SQL plane (and the splinter advisors) with `(EADDRNOTALLOWED) address not
+  in tenant allow_list: {a, b, c, d}`; the octets are the rejected caller IP. Grafana trends still succeed, so trend-derived
+  findings appear; `sqlUnreachable()` (render.ts) keys off the failed `sql:dbSize`
+  probe to mark the sweep line PARTIAL, set the index row error, and caveat the
+  verdict. Remedy is customer-side: they add the caller's /32 for the run.
 
 ## See also
 
