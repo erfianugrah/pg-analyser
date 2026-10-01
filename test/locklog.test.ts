@@ -204,6 +204,9 @@ describe("classifyLockWave (wall-clock windowing)", () => {
     };
     const v = classifyLockWave(s)!;
     expect(v.windowResolved).toBe(false);
+    // The bucket spans the whole scan, not a 10-minute window, so the 10-minute
+    // thresholds can't grade it: 26 cancels would read MED, capped at low.
+    expect(v.severity).toBe("low");
     // windowFrom/windowTo fall back to the overall scanned coverage span, not
     // the "window" sentinel, so a caller that ignores windowResolved still
     // doesn't render the literal placeholder.
