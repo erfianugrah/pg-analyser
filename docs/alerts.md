@@ -132,9 +132,10 @@ Three exclusions are worth reading directly, because they look alertable:
   `cacheHitMinBlocks`, a cumulative-since-reset volume floor that stops an idle
   database reporting a bad ratio. A rate window has no catalogued floor, so a
   rate-form rule would page on idle projects.
-- **`disk_fill_projection`** - `projectDataDisk()` segments the series on a disk
-  RESIZE before fitting. `predict_linear` has no equivalent, so an auto-expansion
-  would be extrapolated as a cliff.
+- **`disk_fill_projection`** - `projectDataDisk()` fits used bytes (size in force
+  times used %), which stay continuous across a disk resize. A `predict_linear` on
+  the used-% panel has no size series to do that with, so an auto-expansion would
+  be extrapolated as a cliff.
 - **`connections_ceiling`** - the denominator is `max_connections` from
   `pg_settings`. `pg_stat_database_num_backends` has no counterpart on the
   scrape, so the ratio cannot be formed without baking a per-project literal.

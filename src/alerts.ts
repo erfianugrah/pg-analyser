@@ -571,7 +571,7 @@ export const EXCLUSIONS: Record<string, { clause: ExclusionClause; why: string }
   },
   disk_fill_projection: {
     clause: "semantics",
-    why: "projectDataDisk() segments the series on a disk RESIZE (diskResizeStepFrac) before fitting; predict_linear has no equivalent, so an auto-expansion would be extrapolated as a cliff",
+    why: "projectDataDisk() fits used BYTES (size-in-force * pct), which stay continuous across a disk resize; a predict_linear on the used-% panel has no size series to do that with, so an auto-expansion would be extrapolated as a cliff",
   },
   disk_iops_high: {
     clause: "no-metric",

@@ -226,17 +226,12 @@ export const THRESHOLDS = {
    * disk series so a manual/auto expansion isn't trended as a fill/empty. */
   diskResizeStepFrac: 0.2,
   /** Absolute-byte floor for the same detector, OR'd with diskResizeStepFrac.
-   * Cloud disk autoscale typically adds a roughly FIXED absolute increment
-   * each time it trips, so its fraction of an ever-growing base shrinks with
-   * each successive resize - measured on a live report: two consecutive
-   * Supabase auto-expansions both added the identical ~197 GiB step, but the
-   * second landed at 19.4% (the base had already grown), just under the 20%
-   * floor, and was silently missed - the trend then segmented on the OLDER
-   * resize and quietly trended across the undetected one. 2 GiB is far above
-   * any plausible organic per-sample growth (this project's own measured
-   * growth rate, computed in-session via linear regression over its trend
-   * series, is under 2 GB across one ~4h downsampled interval) and far below
-   * any real resize step. */
+   * Autoscale adds a roughly fixed increment each time (two consecutive
+   * Supabase expansions on a live report both added ~197 GiB), so the step's
+   * fraction of the base shrinks as the volume grows; the second landed at
+   * 19.4% and a fraction-only detector missed it. The series is PROVISIONED
+   * size, which only changes on a resize, so any real step clears 2 GiB; the
+   * floor only ignores reporting jitter. */
   diskResizeMinAbsoluteBytes: 2 * 1024 ** 3,
   /** pct-used of a sequence's max at/above which exhaustion is HIGH (else MED).
    * The SQL surfaces sequences >=70% used; this is the escalation line. */
@@ -1136,7 +1131,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "work_mem is per-operation per-connection, so a single complex query can use several multiples of it, and the whole server can multiply it by max_connections. When that worst case exceeds RAM the box is one busy moment away from OOM-killing backends. A high global work_mem trades a broad OOM risk for a narrow speedup.",
     remediation:
-      "Keep the global work_mem modest and raise it per-session/role only for the specific heavy query paths that spill; front connections with a pooler to shrink the worst case. Change the global default via the Database custom Postgres config - CLI: supabase postgres-config update --config work_mem=64MB --project-ref {ref} --experimental, or API PUT /v1/projects/{ref}/config/database/postgres - or per role/session with ALTER ROLE / SET.",
+      "Keep the global work_mem modest and raise it per-session/role only for the specific heavy query paths that spill; front connections with a pooler to shrink the worst case. Change the global default via the Database custom Postgres config - CLI: supabase postgres-config update --config work_mem=64MB --project-ref {ref} --experimental --no-restart (work_mem needs no restart, but the CLI restarts the database unless told not to; confirm with SHOW work_mem), or API PUT /v1/projects/{ref}/config/database/postgres - or per role/session with ALTER ROLE / SET.",
     docUrl: "https://www.postgresql.org/docs/current/runtime-config-resource.html#GUC-WORK-MEM",
     reviewed: R,
   },
@@ -1381,7 +1376,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "A 'requested' checkpoint is forced because WAL filled before checkpoint_timeout. A high requested share means the DB is checkpointing under write pressure - each checkpoint is a burst of full-page writes and fsync, adding I/O and latency. Timed checkpoints (the interval) are the healthy case.",
     remediation:
-      "Raise max_wal_size so WAL can absorb writes between timed checkpoints (fewer forced checkpoints, smoother I/O). On hosted Supabase set it via the Database custom Postgres config - CLI: supabase postgres-config update --config max_wal_size=2GB --project-ref {ref} --experimental (applied on restart), or API PUT /v1/projects/{ref}/config/database/postgres; self-hosted can ALTER SYSTEM. On a write-heavy workload this is one of the biggest knobs to turn.",
+      "Raise max_wal_size so WAL can absorb writes between timed checkpoints (fewer forced checkpoints, smoother I/O). On hosted Supabase set it via the Database custom Postgres config - CLI: supabase postgres-config update --config max_wal_size=2GB --project-ref {ref} --experimental --no-restart (max_wal_size needs no restart, but the CLI restarts the database unless told not to; confirm with SHOW max_wal_size), or API PUT /v1/projects/{ref}/config/database/postgres; self-hosted can ALTER SYSTEM. A larger max_wal_size grows pg_wal on disk, which can trigger a (billed) disk expansion. On a write-heavy workload this is one of the biggest knobs to turn.",
     docUrl: "https://supabase.com/docs/guides/database/custom-postgres-config",
     reviewed: R,
   },
@@ -1773,13 +1768,13 @@ export const HEURISTICS: Record<string, Heuristic> = {
   checkpoint_pressure_counters: {
     id: "checkpoint_pressure_counters",
     plane: "Config",
-    sql: "-- spread the checkpoints first, then widen the WAL budget:\nALTER SYSTEM SET max_wal_size = '<4-8x current>';  -- reload-level GUC, no restart\n-- self-hosted only; on hosted Supabase disk/WAL sizing follows the compute add-on",
+    sql: "-- self-hosted: reload-level GUC, no restart\nALTER SYSTEM SET max_wal_size = '<4-8x current>';\nSELECT pg_reload_conf();\n-- hosted Supabase: supabase postgres-config update --config max_wal_size=<4-8x current> --project-ref {ref} --experimental --no-restart\n-- (without --no-restart the CLI restarts the database); confirm with SHOW max_wal_size",
     howToVerify:
       "After the change and some load, re-read the counters (pg_stat_checkpointer on PG17+, pg_stat_bgwriter before): the requested share of new checkpoints should fall well under the timed share. A Prometheus-backed project gets the windowed version of this same signal from the checkpoint_pressure trend finding instead.",
     whyItMatters:
       "A requested checkpoint fires because WAL filled max_wal_size before checkpoint_timeout elapsed - the database is being forced to flush on WAL pressure rather than on its own schedule. Each forced checkpoint is a burst of writes + fsyncs, so a high requested share shows up as periodic I/O spikes and latency jitter that point-in-time query stats never explain. These are cumulative counters since stats_reset, so read the SHARE, not the absolute counts.",
     remediation:
-      "Raise max_wal_size so checkpoints go back to being mostly timed, and keep checkpoint_completion_target at 0.9 so each one spreads its writes over the interval. Complements the trends-based checkpoint_pressure finding (which needs 7+ days of metrics); this counter read is the no-PAT / self-hosted lens.",
+      "Raise max_wal_size so checkpoints go back to being mostly timed, and keep checkpoint_completion_target at 0.9 so each one spreads its writes over the interval. Complements the trends-based checkpoint_pressure finding; this counter read fires when there are no trends, or when the trend window since the last stats reset is too short to trust.",
     docUrl: "https://www.postgresql.org/docs/current/wal-configuration.html",
     reviewed: R,
   },
