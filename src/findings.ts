@@ -419,10 +419,16 @@ function checkpointerResetAt(a: Analysis): number | null {
 export function restartScanSpan(rl: NonNullable<Analysis["sql"]["restartLog"]>): string {
   const c = rl.coverage;
   if (!c) return "the scanned log text";
-  // Name each contiguous stretch: rotated files can leave months between the
-  // first and last line, and one from-to span would claim them all.
+  // Rotated files can leave months between the first and last line, so one
+  // from-to span would claim them all. Lead with the newest contiguous
+  // stretch and summarise the older fragments (measured: 8 stretches on one
+  // project, most of them single lines, which made a list unreadable).
   const segs = c.segments?.length ? c.segments : [{ from: c.from, to: c.to }];
-  const span = `${segs.map((s) => `${s.from.slice(0, 16)} to ${s.to.slice(0, 16)}`).join(", ")} UTC`;
+  const newest = segs[segs.length - 1] as { from: string; to: string };
+  const span =
+    segs.length > 1
+      ? `${newest.from.slice(0, 16)} to ${newest.to.slice(0, 16)} UTC continuously, plus ${segs.length - 1} earlier fragment(s) back to ${(segs[0] as { from: string }).from.slice(0, 10)}`
+      : `${newest.from.slice(0, 16)} to ${newest.to.slice(0, 16)} UTC`;
   const read =
     c.bytesScanned != null && c.files != null
       ? `, in ${c.bytesScanned >= 1e6 ? `${Math.round(c.bytesScanned / 1e6)} MB` : `${Math.max(1, Math.round(c.bytesScanned / 1e3))} KB`} of ${c.files} ${c.method === "tail" ? "log file tail(s)" : "uncompressed log file(s)"}${c.truncated ? " (scan budget reached; older text not read)" : ""}`
@@ -3563,9 +3569,29 @@ export function derivePositives(a: Analysis): Positive[] {
         title: `${rl.total} restart${rl.total === 1 ? "" : "s"} in the scanned server log started from a clean shutdown (${restartScanSpan(rl)})`,
       });
   } else if (rl && rl.total === 0) {
+    // A stats_reset outside every covered stretch means the restart that
+    // reset it is in log text we could not read (a gap, a .gz rotation) -
+    // say so, or "no restart" reads as contradicting the reset date.
+    const resetAt = checkpointerResetAt(a);
+    const covered = (rl.coverage?.segments ?? []).some((s) => {
+      const from = Date.parse(`${s.from.replace(" ", "T")}Z`) / 1000;
+      const to = Date.parse(`${s.to.replace(" ", "T")}Z`) / 1000;
+      return resetAt != null && resetAt >= from - 600 && resetAt <= to + 600;
+    });
+    // Only a reset INSIDE the scanned window but in a gap is worth naming; one
+    // older than every readable line just predates log retention.
+    const firstFrom = rl.coverage?.segments?.[0]?.from;
+    const afterStart =
+      firstFrom != null &&
+      resetAt != null &&
+      resetAt >= Date.parse(`${firstFrom.replace(" ", "T")}Z`) / 1000;
+    const resetNote =
+      resetAt != null && rl.coverage?.segments?.length && !covered && afterStart
+        ? `; pg_stat_checkpointer.stats_reset ${new Date(resetAt * 1000).toISOString().slice(0, 16).replace("T", " ")} UTC falls outside the covered log, so the restart behind it was not in readable log text`
+        : "";
     out.push({
       category: "Capacity",
-      title: `No restart in the scanned server log (${restartScanSpan(rl)})`,
+      title: `No restart in the scanned server log (${restartScanSpan(rl)})${resetNote}`,
     });
   }
 

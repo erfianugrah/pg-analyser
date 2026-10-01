@@ -4174,8 +4174,82 @@ describe("restart scan span with gaps", () => {
     };
     const p = derivePositives(a).find((x) => x.title.startsWith("No restart"));
     expect(p?.title).toContain(
-      "2026-02-26 01:05 to 2026-02-26 03:00, 2026-09-30 22:00 to 2026-10-01 10:00 UTC",
+      "2026-09-30 22:00 to 2026-10-01 10:00 UTC continuously, plus 1 earlier fragment(s) back to 2026-02-26",
     );
     expect(p?.title).not.toContain("2026-02-26 01:05 to 2026-10-01 10:00");
+  });
+});
+
+describe("restart coverage line stays readable and names an uncovered reset", () => {
+  const cov = {
+    from: "2026-07-17 13:51:36",
+    to: "2026-10-01 10:09:09",
+    files: 4,
+    bytesScanned: 75_000_000,
+    method: "grep" as const,
+    truncated: false,
+    lines: 712,
+    segments: [
+      { from: "2026-07-17 13:51:36", to: "2026-07-17 17:17:52" },
+      { from: "2026-07-19 22:41:30", to: "2026-07-19 22:41:30" },
+      { from: "2026-09-07 20:26:55", to: "2026-09-07 23:56:55" },
+      { from: "2026-09-29 12:27:18", to: "2026-10-01 10:09:09" },
+    ],
+  };
+
+  test("leads with the newest stretch and summarises older fragments", () => {
+    const a = base();
+    a.sql.restartLog = { total: 0, restarts: [], coverage: cov };
+    const p = derivePositives(a).find((x) => x.title.startsWith("No restart"));
+    expect(p?.title).toContain("2026-09-29 12:27 to 2026-10-01 10:09 UTC continuously");
+    expect(p?.title).toContain("plus 3 earlier fragment(s) back to 2026-07-17");
+    expect(p?.title).not.toContain("2026-07-19 22:41");
+  });
+
+  test("a stats_reset outside every covered stretch is named", () => {
+    const a = base();
+    a.sql.restartLog = { total: 0, restarts: [], coverage: cov };
+    a.sql.checkpointer = [
+      {
+        timed: 1,
+        requested: 1,
+        write_ms: 1,
+        sync_ms: 1,
+        buffers_written: 1,
+        stats_reset: "2026-09-28 22:22:47.292042+00",
+      },
+    ];
+    const p = derivePositives(a).find((x) => x.title.startsWith("No restart"));
+    expect(p?.title).toContain(
+      "pg_stat_checkpointer.stats_reset 2026-09-28 22:22 UTC falls outside the covered log",
+    );
+  });
+});
+
+describe("a stats_reset older than all readable log is not flagged", () => {
+  test("predating log retention is normal and stays quiet", () => {
+    const a = base();
+    a.sql.restartLog = {
+      total: 0,
+      restarts: [],
+      coverage: {
+        from: "2026-08-26 20:50:52",
+        to: "2026-10-01 10:08:00",
+        lines: 10,
+        segments: [{ from: "2026-08-26 20:50:52", to: "2026-10-01 10:08:00" }],
+      },
+    };
+    a.sql.checkpointer = [
+      {
+        timed: 1,
+        requested: 1,
+        write_ms: 1,
+        sync_ms: 1,
+        buffers_written: 1,
+        stats_reset: "2025-06-26 09:43:24.864124+00",
+      },
+    ];
+    const p = derivePositives(a).find((x) => x.title.startsWith("No restart"));
+    expect(p?.title).not.toContain("falls outside");
   });
 });
