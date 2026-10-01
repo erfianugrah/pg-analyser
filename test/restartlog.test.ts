@@ -32,10 +32,34 @@ const CRASH = [
 ];
 
 describe("parseRestartLog", () => {
-  test("returns null when the text has no restart evidence", () => {
-    expect(
-      parseRestartLog("2026-10-01 08:00:00 UTC [1] LOG:  checkpoint complete: wrote 3 buffers"),
-    ).toBeNull();
+  test("returns null only when no matched line has a timestamp", () => {
+    expect(parseRestartLog("")).toBeNull();
+    expect(parseRestartLog("LOG:  checkpoint complete: wrote 3 buffers")).toBeNull();
+  });
+
+  test("no restart in the text still reports the span it covered", () => {
+    const s = parseRestartLog(
+      [
+        "2026-10-01 08:00:00 UTC [1] LOG:  checkpoint complete: wrote 3 buffers",
+        "2026-10-01 09:15:00 UTC [1] LOG:  checkpoint complete: wrote 9 buffers",
+      ].join("\n"),
+    )!;
+    expect(s.total).toBe(0);
+    expect(s.restarts).toEqual([]);
+    expect(s.coverage).toEqual({ from: "2026-10-01 08:00:00", to: "2026-10-01 09:15:00" });
+  });
+
+  test("a non-UTC log offset is converted, so times are UTC", () => {
+    // Verbatim shape from a PG 18.6 cluster logging in +08 (2026-10-01).
+    const s = parseRestartLog(
+      [
+        "2026-10-01 17:36:30.818 +08 [687973] LOG:  received fast shutdown request",
+        "2026-10-01 17:36:30.827 +08 [687973] LOG:  database system is shut down",
+        "2026-10-01 17:36:30.973 +08 [688017] LOG:  database system was shut down at 2026-10-01 17:36:30 +08",
+      ].join("\n"),
+    )!;
+    expect(s.restarts[0]!.at).toBe("2026-10-01 09:36:30");
+    expect(s.restarts[0]!.verdict).toBe("clean");
   });
 
   test("a stop that logged 'database system is shut down' then a clean start is clean", () => {

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  logGrepQuery,
   logTailQuery,
   PGSS_KEYS,
   QUERIES,
@@ -133,6 +134,24 @@ describe("log-tail / relation-name query builders (sanitized inlining)", () => {
     expect(q).toContain("4000000");
     // read-only
     expect(q.trim().toLowerCase().startsWith("select")).toBe(true);
+  });
+
+  test("logGrepQuery reads a window and returns only restart-relevant lines", () => {
+    const q = logGrepQuery("postgresql.csv.1", 16_000_000, 16_000_000);
+    expect(q.trim().toLowerCase().startsWith("select")).toBe(true);
+    expect(q).toContain("'postgresql.csv.1', 16000000, 16000000");
+    // filtered server-side, so only matching lines cross the wire
+    expect(q).toContain("regexp_split_to_table");
+    expect(q).toContain("shutdown request");
+    expect(q).toContain("not properly shut down");
+    expect(q).toContain("checkpoint complete");
+  });
+
+  test("logGrepQuery applies the same filename allowlist", () => {
+    const q = logGrepQuery("../../etc/passwd'; drop table x; --", 0, 50);
+    expect(q).not.toContain("/etc/");
+    expect(q).not.toContain("'; drop");
+    expect(q).not.toMatch(/passwd';/);
   });
 
   test("logTailQuery strips injection + path-traversal chars from the filename", () => {

@@ -1628,6 +1628,25 @@ export function logTailQuery(filename: string, size: number, chunk: number): str
   return `select pg_read_file((select setting from pg_settings where name='log_directory') || '/' || '${safe}', ${off}, ${len}) as chunk`;
 }
 
+/** The stop/start lines restartlog.ts classifies (plus `checkpoint complete`,
+ * which also gives the scan a dense timestamp trail for its coverage span). */
+export const RESTART_LINE_PATTERN =
+  "shutdown request|checkpoint starting: shutdown|checkpoint complete|database system is shut down|database system was shut down at|shutdown was interrupted|database system was interrupted|not properly shut down";
+
+/**
+ * Filtered read of one window of a server-log file for restart lines. Same
+ * allowlist and integer inlining as logTailQuery; the filter runs server-side
+ * so only matching lines cross the wire (a 16 MB window returns a few KB).
+ * A line split across two windows is lost - restart lines are a handful per
+ * restart, so the caller accepts that rather than overlapping windows.
+ */
+export function logGrepQuery(filename: string, offset: number, len: number): string {
+  const safe = filename.replace(/[^A-Za-z0-9._-]/g, "");
+  const off = Math.max(0, Math.floor(offset));
+  const n = Math.max(0, Math.floor(len));
+  return `select string_agg(l, E'\\n') as chunk from regexp_split_to_table(pg_read_file((select setting from pg_settings where name='log_directory') || '/' || '${safe}', ${off}, ${n}), E'\\n') as l where l ~ '${RESTART_LINE_PATTERN}'`;
+}
+
 /** Resolve relids (integer OIDs) to schema.table names in the same superuser session. */
 export function relationNamesQuery(relids: number[]): string {
   const ids = relids.filter((n) => Number.isInteger(n)).join(",");

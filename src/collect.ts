@@ -9,7 +9,7 @@ import { parseRestartLog } from "./restartlog.ts";
 import { isUnwrappedAuth } from "./rls.ts";
 import { type Analysis, MetricSample, type SqlRow } from "./schemas.ts";
 import { collectSplinterLints } from "./splinter.ts";
-import { logTailQuery, QUERIES, relationNamesQuery, withPgssSchema } from "./sql.ts";
+import { logGrepQuery, logTailQuery, QUERIES, relationNamesQuery, withPgssSchema } from "./sql.ts";
 import { ManagementSqlRunner, type SqlRunner } from "./sqlrunner.ts";
 import { computeSyncStatus } from "./sync.ts";
 import type { Transport } from "./transport.ts";
@@ -882,11 +882,70 @@ export async function collect(
         }
         lockWave = summary;
         freezeLog = parseFreezeLog(text);
-        restartLog = parseRestartLog(text);
+        const tailRestarts = parseRestartLog(text);
+        if (tailRestarts)
+          restartLog = {
+            ...tailRestarts,
+            coverage: {
+              ...tailRestarts.coverage,
+              files: chunks.length,
+              bytesScanned: total,
+              method: "tail",
+            },
+          };
       }
     } catch (err) {
       clog.debug("log read failed", { error: String(err) });
     }
+
+    // Restart history needs more than the tails: a busy database fills 4 MB
+    // in hours (measured on one project: 11177557 bytes of tail spanning
+    // 3.40 h of lock events = 3.29 MB/h, an upper bound), and restarts are
+    // days apart. Read every UNCOMPRESSED file newest-first in 16 MB windows,
+    // filtered server-side (logGrepQuery), so only the stop/start/checkpoint
+    // lines cross the wire. 256 MB lasts ~78 h at that rate. .gz rotations
+    // stay unreadable (pg_read_file cannot decompress). Replaces the tail
+    // result when it finds anything; a failure falls back to the tail result.
+    const WINDOW = 16_000_000;
+    const BUDGET = 256_000_000;
+    const parts: string[] = [];
+    let read = 0;
+    let filesRead = 0;
+    let truncated = false;
+    outer: for (const f of probeRows.filter((r) => !/\.gz$/i.test(String(r.name)))) {
+      const size = Number(f.size) || 0;
+      let any = false;
+      for (let end = size; end > 0; end -= WINDOW) {
+        if (read >= BUDGET) {
+          truncated = true;
+          break outer;
+        }
+        const off = Math.max(0, end - WINDOW);
+        try {
+          const res = await runner.run(logGrepQuery(String(f.name), off, end - off));
+          const c = res[0]?.chunk;
+          if (typeof c === "string" && c.length > 0) parts.push(c);
+          read += end - off;
+          any = true;
+        } catch (err) {
+          clog.debug("restart log scan failed", { file: String(f.name), error: String(err) });
+          break;
+        }
+      }
+      if (any) filesRead++;
+    }
+    const grepRestarts = parts.length ? parseRestartLog(parts.join("\n")) : null;
+    if (grepRestarts)
+      restartLog = {
+        ...grepRestarts,
+        coverage: {
+          ...grepRestarts.coverage,
+          files: filesRead,
+          bytesScanned: read,
+          method: "grep",
+          truncated,
+        },
+      };
   }
 
   const collectionMs = Math.round(performance.now() - startedAt);
