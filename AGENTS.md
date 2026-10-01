@@ -528,6 +528,14 @@ src/
                  returns null if no evidence or on collection error. Bounded sampling
                  of matching lines for evidence. No side effects; used in both PAT
                  read-only (logs accessible via SQL) and superuser tiers.
+  restartlog.ts  Pure server-log restart classifier (2026-10-01), run over the
+                 same log tails as locklog/freezelog -> analysis.sql.restartLog.
+                 Pairs each startup line with the stop before it (30 min) and
+                 classifies: clean / clean_stop_unseen / stop_cut_off_clean_start
+                 / stop_cut_off_recovered / crash. Sorts by timestamp first
+                 (collect joins file tails newest-first). Timestamps + enums
+                 only, newest 20 kept. Feeds restart_shutdown_cut_off,
+                 restart_crash_recovery and the all-clean positive.
   store.ts       SQLite history store (bun:sqlite): `snapshot` appends full
                  Analysis + denormalized metric_samples/sql_scalars; keyed by
                  ref at ~/.pg-analyser/history.db; prune to retention. Also holds
@@ -723,6 +731,19 @@ src/
   than reporting twice.
 - **An unresolved lock bucket aggregates the whole scanned span**, so the
   10-minute cascade thresholds cannot grade it; it is capped at low.
+- **The server log is the record of how a restart stopped; stats_reset is
+  not.** Stop side: `received fast shutdown request`, `checkpoint starting:
+  shutdown`, `checkpoint complete`, `database system is shut down`; start
+  side: `was shut down at` (clean) or `shutdown was interrupted` / `not
+  properly shut down; automatic recovery in progress`. Strings verified on
+  17.4/17.11/18.6 containers. restartlog.ts classifies each restart from
+  them; the finding names the signal and the stats_reset that lines up.
+- **On an autoscaling volume "days to full" is the wrong headline.** Four
+  expansions on one project fired at 89.2-89.9% used and added the same
+  step each time, 20.7 / 20.2 / 18.5 days apart. The card now leads with
+  the next expansion at the recent (14d) rate from current usage and keeps
+  days-to-full as the no-autoscale worst case. The whole-window line, anchored
+  on its own fitted end, had read ~33 days where the recent rate read ~22.
 
 2026-09-09 additions (third live no-PAT report review, PG 17.6 project):
 
