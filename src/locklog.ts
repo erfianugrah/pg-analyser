@@ -211,6 +211,9 @@ export function classifyLockWave(s: LockWaveSummary, windowMinutes = 10): LockWa
       severity = "low";
     } else return;
     // A cascade outranks a timeout burst, then severity, then volume.
+    // An unresolved bucket aggregates the whole scanned span, so the 10-minute
+    // thresholds above can't grade it - report the signal, at low.
+    if (!resolved) severity = "low";
     const cand: LockWaveVerdict = {
       kind,
       severity,
