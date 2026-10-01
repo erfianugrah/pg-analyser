@@ -130,6 +130,16 @@ function gucBytes(rows: SqlRow[], name: string): number | null {
   return Number.isFinite(v) ? v * mult : null;
 }
 
+// "max_wal_size=4096MB, checkpoint_timeout=300s" from pg_settings, or "" when
+// neither was collected - so a "raise max_wal_size" card says what it is now.
+function checkpointGucs(rows: SqlRow[]): string {
+  return ["max_wal_size", "checkpoint_timeout"]
+    .map((n) => rows.find((x) => String(x.name) === n))
+    .filter((r): r is SqlRow => r != null)
+    .map((r) => `${r.name}=${r.setting}${r.unit ?? ""}`)
+    .join(", ");
+}
+
 const bytesGb = (b: number): string => `${(b / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 const bytesMb = (b: number): string => `${Math.round(b / (1024 * 1024))} MB`;
 
@@ -884,27 +894,6 @@ export function policyColumnIndexable(
   return false;
 }
 
-/**
- * Count depletion EPISODES in a trend series: a transition from above a
- * threshold to at/below it (a fresh dip), so a series that dips, recovers, and
- * dips again counts as 2. Turns a window-minimum into when/how-often/recovered.
- */
-/** Value of the point whose timestamp is closest to `t` (series may be sampled
- * at slightly different times across providers). Null on an empty series. */
-function nearestValue(points: Point[], t: number): number | null {
-  if (!points.length) return null;
-  let best = points[0] as Point;
-  let bestD = Math.abs(best.t - t);
-  for (const p of points) {
-    const d = Math.abs(p.t - t);
-    if (d < bestD) {
-      bestD = d;
-      best = p;
-    }
-  }
-  return best.v;
-}
-
 export type DiskProjection = {
   usedPctNow: number;
   usedBytesNow: number | null;
@@ -913,21 +902,37 @@ export type DiskProjection = {
   daysToFull: number | null;
   spanDays: number;
   rising: boolean;
-  /** The last EXPANSION in the window, if any (segmentation happened on it). */
+  /** The last EXPANSION in the window, if any. */
   expansion: ResizeEvent | null;
   /** Every expansion in the window, in time order (a volume can step twice). */
   expansions: ResizeEvent[];
-  /** True when the (post-resize) segment had enough points to trust a trend. */
+  /** True when the series had enough points to trust a trend. */
   sufficient: boolean;
 };
 
+/** Provisioned size in force at `t`: the last size sample at or before it
+ * (the first sample when `t` precedes the series). Nearest-in-time would pair a
+ * % sample taken just before a resize with the post-resize size. */
+function sizeInForce(sizePts: Point[], t: number): number | null {
+  if (!sizePts.length) return null;
+  let v = (sizePts[0] as Point).v;
+  for (const p of sizePts) {
+    if (p.t > t) break;
+    v = p.v;
+  }
+  return v;
+}
+
 /**
  * Resize-aware projection for the data disk. Reconstructs used-BYTES from the
- * used-% and provisioned-size series (used = size * pct/100), segments the
- * series after the last expansion (a step-change makes % meaningless across the
- * boundary), and projects used-bytes toward the current provisioned size. Falls
- * back to a %-only projection when the size series is absent (older stores).
- * Pure over the two series so it is trivially testable.
+ * used-% and provisioned-size series (used = size-in-force * pct/100) and
+ * projects them toward the current provisioned size. Used bytes do not jump at
+ * a resize - only the % does - so the bytes series is fitted across resizes
+ * rather than cut at the last one; cutting it blanked a valid projection for
+ * days after every autoscale step. Expansions are still detected, for the
+ * disk_expanded listing. Falls back to a %-only projection when the size series
+ * is absent (older stores); with no size series no resize can be detected, so
+ * that path cannot segment either. Pure over the two series.
  */
 export function projectDataDisk(
   pctPts: Point[],
@@ -940,18 +945,15 @@ export function projectDataDisk(
     (e) => e.toBytes > e.fromBytes,
   );
   const lastExp = expansions.length ? (expansions[expansions.length - 1] as ResizeEvent) : null;
-  // Segment after the last expansion so we never trend across the cliff.
-  const pctSeg = lastExp ? pctPts.filter((p) => p.t > lastExp.at) : pctPts;
-  const sizeSeg = lastExp ? sizePts.filter((p) => p.t > lastExp.at) : sizePts;
-  const usedPctNow = (pctSeg[pctSeg.length - 1] ?? pctPts[pctPts.length - 1] ?? { v: 0 }).v;
-  const sizeBytesNow = sizeSeg.length ? (sizeSeg[sizeSeg.length - 1] as Point).v : null;
-  const enough = sufficient(pctSeg);
+  const usedPctNow = (pctPts[pctPts.length - 1] ?? { v: 0 }).v;
+  const sizeBytesNow = sizePts.length ? (sizePts[sizePts.length - 1] as Point).v : null;
+  const enough = sufficient(pctPts);
 
   // Prefer a bytes projection when the size series is present.
-  if (sizeSeg.length) {
-    const usedBytesPts = pctSeg
+  if (sizePts.length) {
+    const usedBytesPts = pctPts
       .map((p) => {
-        const sz = nearestValue(sizeSeg, p.t);
+        const sz = sizeInForce(sizePts, p.t);
         return sz == null ? null : { t: p.t, v: (sz * p.v) / 100 };
       })
       .filter((x): x is Point => x != null);
@@ -989,7 +991,7 @@ export function projectDataDisk(
 
   // %-only fallback (no size series).
   if (enough) {
-    const s = trendStat(pctSeg)!;
+    const s = trendStat(pctPts)!;
     return {
       usedPctNow,
       usedBytesNow: null,
@@ -2729,14 +2731,12 @@ export function deriveFindings(a: Analysis): Finding[] {
   const cpResetAt = (() => {
     const raw = a.sql.checkpointer[0]?.stats_reset;
     if (raw == null) return null;
-    // Postgres prints a whole-hour tz offset as bare "+00"/"+09", which
-    // Date.parse silently rejects (NaN) without the ":00" - verified: this
-    // exact shape ("...292042+00") parsed to NaN, so cpResetAt was always
-    // null and segmentation never ran at all, a live-tested fix with zero
-    // actual effect until this was caught by re-checking the regenerated report.
+    // Postgres prints a whole-hour offset as a bare "+00"/"+09", which
+    // Date.parse rejects (NaN) without the ":00". Anchored after the time so
+    // a date-only string ("2026-08-01") is left for Date.parse as-is.
     const iso = String(raw)
       .replace(" ", "T")
-      .replace(/([+-]\d{2})$/, "$1:00");
+      .replace(/(\d{2}:\d{2}(?:\.\d+)?[+-]\d{2})$/, "$1:00");
     const ms = Date.parse(iso);
     return Number.isFinite(ms) ? ms / 1000 : null;
   })();
@@ -2754,6 +2754,9 @@ export function deriveFindings(a: Analysis): Finding[] {
         category: "Performance",
         title: `Checkpoint pressure: ${Math.round((req / total) * 100)}% of checkpoints forced by WAL filling (raise max_wal_size)`,
         anchor: "#trends",
+        ...(checkpointGucs(a.sql.pgSettings) && {
+          evidence: `currently ${checkpointGucs(a.sql.pgSettings)}`,
+        }),
         ...meta("checkpoint_pressure"),
       });
     }
@@ -2992,7 +2995,7 @@ export function deriveFindings(a: Analysis): Finding[] {
         category: "Performance",
         title: `Checkpoint pressure: ${Math.round(share * 100)}% of checkpoints forced by WAL filling since stats reset (${req} requested of ${total}) - raise max_wal_size`,
         anchor: "#tables",
-        evidence: `cumulative since ${cp.stats_reset}: timed=${timed} requested=${req}, write ${cp.write_ms}ms + sync ${cp.sync_ms}ms, buffers_written=${cp.buffers_written}`,
+        evidence: `cumulative since ${cp.stats_reset}: timed=${timed} requested=${req}, write ${cp.write_ms}ms + sync ${cp.sync_ms}ms, buffers_written=${cp.buffers_written}${checkpointGucs(a.sql.pgSettings) ? `; currently ${checkpointGucs(a.sql.pgSettings)}` : ""}`,
         ...meta("checkpoint_pressure_counters"),
       });
     }
@@ -3404,8 +3407,8 @@ export function derivePositives(a: Analysis): Positive[] {
   }
   // Resize-aware: reconstruct used-bytes and segment after any expansion, so we
   // never claim "stable" by trending the used-% across a volume resize cliff.
-  // When a resize left too short a post-resize segment to trust, emit NOTHING
-  // (neither the false-calm nor a scary claim).
+  // When the series is too short to trust, emit NOTHING (neither the
+  // false-calm nor a scary claim).
   const diskProj = projectDataDisk(
     tpoints("Disk used (%)"),
     tpoints("Disk size (bytes)"),

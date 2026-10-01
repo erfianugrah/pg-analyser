@@ -509,10 +509,9 @@ describe("disk resize-aware projection", () => {
     points: vals.map((v, i) => ({ t: i * DAY, v })),
   });
 
-  test("a volume expansion emits disk_expanded and suppresses a stale 'Disk stable'", () => {
+  test("a volume expansion emits disk_expanded; 'Disk stable' reads the post-resize size", () => {
     const a = base();
-    // 10 pre-resize points at 60% of a 50 GB volume, resize at point 10 to a
-    // 150 GB volume -> 20%, then 9 short post-resize points (insufficient).
+    // 60% of 50 GB, then 20% of 150 GB: 30 GB used on both sides of the resize.
     const pct = [...Array(10).fill(60), 20, ...Array(9).fill(20)];
     const size = [...Array(10).fill(50e9), ...Array(10).fill(150e9)];
     a.trends = [series("Disk used (%)", pct), series("Disk size (bytes)", size)];
@@ -520,8 +519,30 @@ describe("disk resize-aware projection", () => {
     const exp = f.find((x) => x.heuristicId === "disk_expanded");
     expect(exp?.title).toContain("auto-expanded");
     expect(exp?.title).toContain("GB");
-    // post-resize segment is too short to trust -> no "Disk stable" claim
-    expect(derivePositives(a).some((p) => p.title.startsWith("Disk stable"))).toBe(false);
+    // Used bytes are flat across the resize, so "stable" is true - but it must
+    // quote the volume in force now, never the pre-resize 60%.
+    const stable = derivePositives(a).find((p) => p.title.startsWith("Disk stable"));
+    expect(stable?.title).toContain("(20%)");
+    expect(stable?.title).not.toContain("60%");
+  });
+
+  test("a resize one day before the end does not blank a projection the bytes support", () => {
+    // Measured on a live report: used bytes run 912.9 -> 914.5 -> 916.2 GiB
+    // straight through a volume step (used bytes do not jump at a resize, only
+    // the % does). Segmenting after the step left 2.7 days, under the
+    // sufficiency floor, and suppressed a valid ~27-day projection.
+    const a = base();
+    const GiB = 2 ** 30;
+    const used = Array.from({ length: 20 }, (_, i) => (40 + i * 2) * GiB); // +2 GiB/day
+    const size = [...Array(19).fill(100 * GiB), 150 * GiB]; // step on the last day
+    const pct = used.map((u, i) => (u / (size[i] as number)) * 100);
+    a.trends = [series("Disk used (%)", pct), series("Disk size (bytes)", size)];
+    const f = deriveFindings(a);
+    expect(f.some((x) => x.heuristicId === "disk_expanded")).toBe(true);
+    const fill = f.find((x) => x.title.startsWith("Data disk filling"));
+    // 78 GiB used of 150 GiB at 2 GiB/day -> ~36 days, against the NEW size.
+    expect(fill?.title).toContain("of 150.0 GB");
+    expect(fill?.title).toMatch(/~3[5-7] days to full/);
   });
 
   test("steady rising disk projects in absolute bytes", () => {
@@ -2993,6 +3014,27 @@ describe("checkpoint + jit counters (version-gated planes)", () => {
     expect(f?.severity).toBe("med"); // 60% >= 50%
     expect(f?.title).toContain("60%");
     expect(f?.evidence).toContain("timed=40 requested=60");
+    expect(f?.evidence).not.toContain("currently");
+  });
+
+  test("checkpoint_pressure_counters quotes the max_wal_size in force", () => {
+    const a = base();
+    a.sql.checkpointer = [
+      {
+        timed: 40,
+        requested: 60,
+        write_ms: 1,
+        sync_ms: 1,
+        buffers_written: 1,
+        stats_reset: "2026-08-01",
+      },
+    ];
+    a.sql.pgSettings = [
+      { name: "max_wal_size", setting: "4096", unit: "MB" },
+      { name: "checkpoint_timeout", setting: "300", unit: "s" },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "checkpoint_pressure_counters");
+    expect(f?.evidence).toContain("currently max_wal_size=4096MB, checkpoint_timeout=300s");
   });
 
   test("checkpoint_pressure_counters: mostly timed -> no finding; idle db -> no finding", () => {

@@ -175,7 +175,8 @@ export const QUERIES = {
       -- tuning-finding inputs (see findings.ts config section): checkpoint
       -- pacing, planner stats depth, I/O timing capture, prefetch concurrency,
       -- WAL compression, and whether page checksums are on.
-      'checkpoint_completion_target', 'default_statistics_target',
+      'checkpoint_completion_target', 'max_wal_size', 'checkpoint_timeout',
+      'default_statistics_target',
       'track_io_timing', 'effective_io_concurrency', 'wal_compression',
       'data_checksums',
       -- lock-observability posture (lock_forensics finding): whether lock waits
