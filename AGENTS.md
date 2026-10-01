@@ -703,12 +703,15 @@ src/
   segment is too short. Both cards quote `max_wal_size` / `checkpoint_timeout`
   (added to the pg_settings allowlist - a "raise max_wal_size" card that
   could not say the current value).
-- **A stats reset with clean-looking logs is possible.** Bare PG 18.6 cluster,
-  4 GB of dirty shared_buffers: SIGINT then SIGKILL the postmaster 1 s later;
-  the surviving checkpointer finished the shutdown checkpoint, the next start
-  logged `database system was shut down at` (no recovery), and
-  pg_stat_checkpointer came back zeroed. So "fast shutdown request" in the
-  log does not mean the stats survived; do not word a reset as a crash.
+- **Whether a killed stop loses the stats depends on the version.** ~2 GB
+  dirty shared_buffers, SIGINT then SIGKILL 0.5 s into the shutdown
+  checkpoint, two runs each. Postmaster only (the checkpointer survives and
+  finishes): both logs read clean everywhere, PG 17.4 and 17.11 keep the
+  stats, PG 18.6 resets them. Every process killed (17.11): the next start
+  logs `not properly shut down; automatic recovery in progress` and the
+  stats reset. So "fast shutdown request" on the stop side proves nothing
+  about the stats; on 17.x a reset at a restart should come with that
+  startup line. Word a reset as a reset, not as a crash.
 - **Grafana 401/403 are terminal for the run**, like a 3xx login redirect:
   queryWindow throws on the first one instead of retrying each panel, and
   panel errors from the auto-scope re-query replace the first pass's rather
