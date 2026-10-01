@@ -419,7 +419,10 @@ function checkpointerResetAt(a: Analysis): number | null {
 export function restartScanSpan(rl: NonNullable<Analysis["sql"]["restartLog"]>): string {
   const c = rl.coverage;
   if (!c) return "the scanned log text";
-  const span = `${c.from.slice(0, 16)} to ${c.to.slice(0, 16)} UTC`;
+  // Name each contiguous stretch: rotated files can leave months between the
+  // first and last line, and one from-to span would claim them all.
+  const segs = c.segments?.length ? c.segments : [{ from: c.from, to: c.to }];
+  const span = `${segs.map((s) => `${s.from.slice(0, 16)} to ${s.to.slice(0, 16)}`).join(", ")} UTC`;
   const read =
     c.bytesScanned != null && c.files != null
       ? `, in ${c.bytesScanned >= 1e6 ? `${Math.round(c.bytesScanned / 1e6)} MB` : `${Math.max(1, Math.round(c.bytesScanned / 1e3))} KB`} of ${c.files} ${c.method === "tail" ? "log file tail(s)" : "uncompressed log file(s)"}${c.truncated ? " (scan budget reached; older text not read)" : ""}`
