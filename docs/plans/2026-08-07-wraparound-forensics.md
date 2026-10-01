@@ -1,5 +1,11 @@
 # Wraparound forensics - implementation plan
 
+**Status (stocktake 2026-10-01): SHIPPED.** Holder planes, absolute-headroom
+severity, projection, freeze-log parsing and the report section landed in
+8aa8cc8, 4e52673, ceb9b4b; the `acceptance/a1`-`a9` contract passes. The
+checkboxes below were never ticked as work landed; the code and the acceptance
+suite are the record.
+
 > **For agentic workers:** this plan is driven by the self-correcting loop
 > (`.pi/harness.json`). The acceptance suite in `acceptance/` is the contract;
 > it is OUTSIDE the write scope and cannot be edited. Work task-by-task, run

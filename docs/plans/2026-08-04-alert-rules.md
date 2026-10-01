@@ -1,5 +1,10 @@
 # Prometheus alerting-rule pack - implementation plan
 
+**Status (stocktake 2026-10-01): SHIPPED.** `src/alerts.ts` + `docs/alerts.md`
+(first commits 0465679, 7295975; later 2afdfb6, 1c2a96d). `bun run check:alerts`
+and `acceptance/b1-alert-exprs` pass. The checkboxes below were never ticked as
+work landed; the code, its tests and docs/alerts.md are the record, not this list.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development
 > (recommended) or superpowers:executing-plans to implement this plan task-by-task.
 > Steps use checkbox (`- [ ]`) syntax for tracking.
