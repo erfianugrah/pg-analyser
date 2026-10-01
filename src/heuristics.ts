@@ -1131,7 +1131,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "work_mem is per-operation per-connection, so a single complex query can use several multiples of it, and the whole server can multiply it by max_connections. When that worst case exceeds RAM the box is one busy moment away from OOM-killing backends. A high global work_mem trades a broad OOM risk for a narrow speedup.",
     remediation:
-      "Keep the global work_mem modest and raise it per-session/role only for the specific heavy query paths that spill; front connections with a pooler to shrink the worst case. Change the global default via the Database custom Postgres config - CLI: supabase postgres-config update --config work_mem=64MB --project-ref {ref} --experimental --no-restart (work_mem needs no restart, but the CLI restarts the database unless told not to; confirm with SHOW work_mem), or API PUT /v1/projects/{ref}/config/database/postgres - or per role/session with ALTER ROLE / SET.",
+      "Keep the global work_mem modest and raise it per-session/role only for the specific heavy query paths that spill; front connections with a pooler to shrink the worst case. Change the global default via the Database custom Postgres config - CLI: supabase postgres-config update --config work_mem=64MB --project-ref {ref} --experimental (work_mem is reload-level: CLI v2 checks the parameter context and applies it with a reload, no restart; confirm with SHOW work_mem), or API PUT /v1/projects/{ref}/config/database/postgres - or per role/session with ALTER ROLE / SET.",
     docUrl: "https://www.postgresql.org/docs/current/runtime-config-resource.html#GUC-WORK-MEM",
     reviewed: R,
   },
@@ -1376,7 +1376,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "A 'requested' checkpoint is forced because WAL filled before checkpoint_timeout. A high requested share means the DB is checkpointing under write pressure - each checkpoint is a burst of full-page writes and fsync, adding I/O and latency. Timed checkpoints (the interval) are the healthy case.",
     remediation:
-      "Raise max_wal_size so WAL can absorb writes between timed checkpoints (fewer forced checkpoints, smoother I/O). On hosted Supabase set it via the Database custom Postgres config - CLI: supabase postgres-config update --config max_wal_size=2GB --project-ref {ref} --experimental --no-restart (max_wal_size needs no restart, but the CLI restarts the database unless told not to; confirm with SHOW max_wal_size), or API PUT /v1/projects/{ref}/config/database/postgres; self-hosted can ALTER SYSTEM. A larger max_wal_size grows pg_wal on disk, which can trigger a (billed) disk expansion. On a write-heavy workload this is one of the biggest knobs to turn.",
+      "Raise max_wal_size so WAL can absorb writes between timed checkpoints (fewer forced checkpoints, smoother I/O). On hosted Supabase set it via the Database custom Postgres config - CLI: supabase postgres-config update --config max_wal_size=2GB --project-ref {ref} --experimental (max_wal_size is reload-level: CLI v2 checks the parameter context and applies it with a reload, no restart; confirm with SHOW max_wal_size), or API PUT /v1/projects/{ref}/config/database/postgres; self-hosted can ALTER SYSTEM. A larger max_wal_size grows pg_wal on disk, which can trigger a (billed) disk expansion. On a write-heavy workload this is one of the biggest knobs to turn.",
     docUrl: "https://supabase.com/docs/guides/database/custom-postgres-config",
     reviewed: R,
   },
@@ -1768,7 +1768,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
   checkpoint_pressure_counters: {
     id: "checkpoint_pressure_counters",
     plane: "Config",
-    sql: "-- self-hosted: reload-level GUC, no restart\nALTER SYSTEM SET max_wal_size = '<4-8x current>';\nSELECT pg_reload_conf();\n-- hosted Supabase: supabase postgres-config update --config max_wal_size=<4-8x current> --project-ref {ref} --experimental --no-restart\n-- (without --no-restart the CLI restarts the database); confirm with SHOW max_wal_size",
+    sql: "-- self-hosted: reload-level GUC, no restart\nALTER SYSTEM SET max_wal_size = '<4-8x current>';\nSELECT pg_reload_conf();\n-- hosted Supabase: supabase postgres-config update --config max_wal_size=<4-8x current> --project-ref {ref} --experimental\n-- (reload-level: the CLI applies it with a reload, no restart); confirm with SHOW max_wal_size",
     howToVerify:
       "After the change and some load, re-read the counters (pg_stat_checkpointer on PG17+, pg_stat_bgwriter before): the requested share of new checkpoints should fall well under the timed share. A Prometheus-backed project gets the windowed version of this same signal from the checkpoint_pressure trend finding instead.",
     whyItMatters:

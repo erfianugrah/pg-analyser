@@ -693,10 +693,15 @@ src/
   (`sizeInForce`, last size at/before each point) instead of segmenting at
   the last resize; segmenting had blanked a valid ~27-day projection when the
   resize was a day before the end. Only the "Disk stable" % reads post-resize.
-- **`supabase postgres-config update` restarts the database unless passed
-  `--no-restart`** (CLI v2.118.0 `--help`), even for parameters the docs list
-  as "Restart: No" (max_wal_size, work_mem). Every remediation command that
-  uses it carries `--no-restart` plus a `SHOW` to confirm.
+- **`supabase postgres-config update` restarts only for "Restart: Yes"
+  parameters.** The custom-config docs: "By default, CLI v2 (>= 2.0.0) checks
+  the parameter's context and requests the correct action (reload or
+  restart)"; a `sighup` setting is applied with a reload, and `--no-restart`
+  defers the restart of a postmaster-context one (which can break read
+  replicas if left pending). So max_wal_size and work_mem need no flag. An
+  earlier version of this entry, read off the flag's `--help` text alone,
+  said the CLI always restarts; that was wrong, and the remediation commands
+  no longer carry `--no-restart`. They still end with a `SHOW` to confirm.
 - **The checkpoint trend must be cut at the counters' stats_reset.** A 90-day
   rate average blended pre- and post-reset regimes; checkpoint_pressure fits
   only post-reset points and falls back to the counters card when that
