@@ -526,6 +526,31 @@ export const Analysis = z.object({
       })
       .nullable()
       .default(null),
+    // Restart history from the same server-log tails (restartlog.ts): each
+    // startup paired with the stop before it. Timestamps + enums only.
+    restartLog: z
+      .object({
+        total: z.number(),
+        restarts: z.array(
+          z.object({
+            at: z.string(),
+            stopAt: z.string().nullable(),
+            stopMode: z.enum(["fast", "smart", "immediate"]).nullable(),
+            shutdownCheckpoint: z.enum(["none", "started", "completed"]),
+            shutDownLogged: z.boolean(),
+            startup: z.enum(["clean", "recovery"]),
+            verdict: z.enum([
+              "clean",
+              "clean_stop_unseen",
+              "stop_cut_off_clean_start",
+              "stop_cut_off_recovered",
+              "crash",
+            ]),
+          }),
+        ),
+      })
+      .nullable()
+      .default(null),
   }),
   metrics: z.object({
     available: z.boolean(),

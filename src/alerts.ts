@@ -457,6 +457,14 @@ export const EXCLUSIONS: Record<string, { clause: ExclusionClause; why: string }
     clause: "no-metric",
     why: "Postgres server-log evidence; no metric family",
   },
+  restart_shutdown_cut_off: {
+    clause: "no-metric",
+    why: "Postgres server-log evidence (restart history); no metric family",
+  },
+  restart_crash_recovery: {
+    clause: "no-metric",
+    why: "Postgres server-log evidence (restart history); no metric family",
+  },
   wraparound_projected: {
     clause: "no-metric",
     why: "pg_stat_database xid age with trend projection; no metric family. Same store-scalar path as txid_wraparound (txid_max_age via export-prometheus), and predict_linear over it would duplicate the finding's own sufficiency-gated projection",

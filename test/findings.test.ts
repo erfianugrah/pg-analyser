@@ -99,6 +99,7 @@ function base(): Analysis {
       waitSamples: [],
       lockWave: null,
       freezeLog: null,
+      restartLog: null,
       dbSizeBytes: null,
       bloatExact: [],
       indexAdvisor: [],
@@ -543,6 +544,52 @@ describe("disk resize-aware projection", () => {
     // 78 GiB used of 150 GiB at 2 GiB/day -> ~36 days, against the NEW size.
     expect(fill?.title).toContain("of 150.0 GB");
     expect(fill?.title).toMatch(/~3[5-7] days to full/);
+  });
+
+  test("accelerating growth projects at the recent rate from today's usage, quoting both rates", () => {
+    // Measured shape: weekly growth doubled over 90 days, and a single 90-day
+    // line (anchored on its own fitted end) read ~33 days where the recent
+    // rate from actual usage read ~22.
+    const a = base();
+    // GiB, because the report's "GB" is bytesGb()'s 1024^3.
+    const GiB = 2 ** 30;
+    const used = Array.from(
+      { length: 60 },
+      (_, i) => (i < 46 ? 100 + i : 145 + (i - 45) * 3) * GiB,
+    );
+    const size = Array(60).fill(300 * GiB);
+    const pct = used.map((u) => (u / (300 * GiB)) * 100);
+    a.trends = [series("Disk used (%)", pct), series("Disk size (bytes)", size)];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "disk_fill_projection");
+    // 187 GB used of 300 GB at 3 GB/day -> ~38 days (the 59-day line says far more).
+    expect(f?.title).toMatch(/~3[6-9] days to full/);
+    expect(f?.evidence).toContain("3.0 GB/day over the last 14d");
+    expect(f?.evidence).toMatch(/GB\/day over 59d/);
+  });
+
+  test("autoscale steps at ~90% headline the next expansion, not days to 100%", () => {
+    const a = base();
+    // used +2 GB/day from 60 GB; volume steps 100 -> 150 -> 200 GB each time
+    // used crosses 90% of the size in force.
+    const used: number[] = [];
+    const size: number[] = [];
+    let cap = 100;
+    for (let d = 0; d <= 45; d++) {
+      const u = 60 + 2 * d;
+      if (u >= 0.9 * cap) cap += 50;
+      used.push(u * 2 ** 30);
+      size.push(cap * 2 ** 30);
+    }
+    const pct = used.map((u, i) => (u / (size[i] as number)) * 100);
+    a.trends = [series("Disk used (%)", pct), series("Disk size (bytes)", size)];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "disk_fill_projection");
+    // 150 GB used of 200 GB; next trigger at 90% = 180 GB -> 15 days at 2 GB/day.
+    expect(f?.title).toMatch(/next auto-expansion in ~1[4-6] days/);
+    expect(f?.title).toContain("~90%");
+    // grows instead of filling: a billed step, not an outage
+    expect(f?.severity).toBe("med");
+    expect(f?.evidence).toContain("+50.0 GB");
+    expect(f?.evidence).toMatch(/full in ~2[4-6] days if autoscale did not grow it/);
   });
 
   test("steady rising disk projects in absolute bytes", () => {
@@ -3910,5 +3957,114 @@ describe("review-pass rule fixes: accuracy against a real no-PAT run shape", () 
     expect(f?.evidence).toMatch(
       /Expansions at \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC, \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC\./,
     );
+  });
+});
+
+describe("restart history from the server log", () => {
+  const ev = (over: Partial<NonNullable<Analysis["sql"]["restartLog"]>["restarts"][number]>) => ({
+    at: "2026-09-28 22:22:50",
+    stopAt: "2026-09-28 22:22:40",
+    stopMode: "fast" as const,
+    shutdownCheckpoint: "started" as const,
+    shutDownLogged: false,
+    startup: "recovery" as const,
+    verdict: "stop_cut_off_recovered" as const,
+    ...over,
+  });
+
+  test("a cut-off stop is a med finding naming the restart and the matching stats reset", () => {
+    const a = base();
+    a.sql.restartLog = {
+      total: 2,
+      restarts: [
+        ev({}),
+        ev({
+          at: "2026-09-20 01:00:00",
+          stopAt: "2026-09-20 00:59:00",
+          shutdownCheckpoint: "completed",
+          shutDownLogged: true,
+          startup: "clean",
+          verdict: "clean",
+        }),
+      ],
+    };
+    a.sql.checkpointer = [
+      {
+        timed: 1,
+        requested: 1,
+        write_ms: 1,
+        sync_ms: 1,
+        buffers_written: 1,
+        stats_reset: "2026-09-28 22:22:47.292042+00",
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "restart_shutdown_cut_off");
+    expect(f?.severity).toBe("med");
+    expect(f?.title).toContain("1 of 2 restarts");
+    expect(f?.evidence).toContain("2026-09-28 22:22:40");
+    expect(f?.evidence).toContain("pg_stat_checkpointer.stats_reset");
+    expect(derivePositives(a).some((p) => /restarts .* shut down cleanly/.test(p.title))).toBe(
+      false,
+    );
+  });
+
+  test("crash recovery with no shutdown request is its own finding", () => {
+    const a = base();
+    a.sql.restartLog = {
+      total: 1,
+      restarts: [
+        ev({ stopAt: null, stopMode: null, shutdownCheckpoint: "none", verdict: "crash" }),
+      ],
+    };
+    const f = deriveFindings(a).find((x) => x.heuristicId === "restart_crash_recovery");
+    expect(f?.severity).toBe("med");
+    expect(f?.title).toContain("no shutdown request");
+    expect(deriveFindings(a).some((x) => x.heuristicId === "restart_shutdown_cut_off")).toBe(false);
+  });
+
+  test("all-clean restarts are a positive, not a finding", () => {
+    const a = base();
+    a.sql.restartLog = {
+      total: 2,
+      restarts: [
+        ev({
+          shutdownCheckpoint: "completed",
+          shutDownLogged: true,
+          startup: "clean",
+          verdict: "clean",
+        }),
+        ev({
+          stopAt: null,
+          stopMode: null,
+          shutdownCheckpoint: "none",
+          startup: "clean",
+          verdict: "clean_stop_unseen",
+        }),
+      ],
+    };
+    expect(deriveFindings(a).some((x) => x.heuristicId?.startsWith("restart_"))).toBe(false);
+    expect(
+      derivePositives(a).some((p) =>
+        p.title.includes("2 restarts in the scanned server log started from a clean shutdown"),
+      ),
+    ).toBe(true);
+  });
+
+  test("a stop whose checkpoint finished but never logged 'is shut down' is noted, not called clean", () => {
+    const a = base();
+    a.sql.restartLog = {
+      total: 1,
+      restarts: [
+        ev({
+          shutdownCheckpoint: "completed",
+          startup: "clean",
+          verdict: "stop_cut_off_clean_start",
+        }),
+      ],
+    };
+    const f = deriveFindings(a).find((x) => x.heuristicId === "restart_shutdown_cut_off");
+    expect(f?.severity).toBe("low");
+    expect(f?.evidence).toContain("checkpoint finished");
+    expect(derivePositives(a).some((p) => p.title.includes("clean shutdown"))).toBe(false);
   });
 });

@@ -89,6 +89,7 @@ function base(): Analysis {
       waitSamples: [],
       lockWave: null,
       freezeLog: null,
+      restartLog: null,
       dbSizeBytes: null,
       bloatExact: [],
       indexAdvisor: [],

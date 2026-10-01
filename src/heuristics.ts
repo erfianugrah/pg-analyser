@@ -177,6 +177,14 @@ export const THRESHOLDS = {
    * track to hit 100% within this many days (capped to ~3x the observed span
    * so we never extrapolate far past the data we actually have). */
   diskFillHorizonDays: 120,
+  /** Disk-fill rate window: the projection uses the slope of the last N days
+   * (when that segment passes sufficient()), because a whole-window line
+   * averages in slower past growth - measured: 8.90 GB/day over 90d against
+   * 11.19 GB/day over the last 14d on an accelerating project. */
+  diskFillRecentDays: 14,
+  /** Autoscale is inferred when every past expansion fired with used % inside
+   * this band (measured: 89.2-89.9% before each of four steps). */
+  diskAutoscaleTriggerBand: [85, 95] as const,
   /** Checkpoint pressure: fraction of checkpoints that were REQUESTED (forced
    * by WAL filling) rather than timed. A high share means max_wal_size is too
    * small - Postgres is checkpointing on WAL pressure, not the interval. */
@@ -2043,6 +2051,30 @@ VACUUM (FREEZE, VERBOSE, ANALYZE) <schema>.<oldest_table>;`,
     remediation:
       "Priority one: run anti-wraparound vacuum as a superuser immediately. First clear any xmin holders (old replication slots, prepared transactions, long-running backends, hot standby feedback) per xmin_horizon_blocked. Then VACUUM the oldest tables repeatedly until datfrozenxid stops advancing and no more warnings appear in the log. An anti-wraparound vacuum cannot be killed, so let it run to completion.",
     docUrl: "https://www.postgresql.org/docs/current/routine-vacuuming.html",
+    reviewed: R,
+  },
+  restart_shutdown_cut_off: {
+    id: "restart_shutdown_cut_off",
+    plane: "Compute",
+    howToVerify:
+      "Read the server log around each listed time: on the stop side, 'received fast shutdown request' then 'checkpoint starting: shutdown' with no 'database system is shut down'; on the next start, 'database system shutdown was interrupted' / 'database system was not properly shut down; automatic recovery in progress'. Compare the stop-to-start gap with how long a shutdown checkpoint takes here (the 'checkpoint complete ... total=' line of a recent clean stop).",
+    whyItMatters:
+      "A fast shutdown writes every dirty buffer in a final checkpoint before it exits. When the server is stopped before that finishes, the next start replays WAL from the last checkpoint (crash recovery), which lengthens the outage, and the cumulative statistics (pg_stat_statements, pg_stat_checkpointer, table counters) are usually lost - so tuning evidence restarts from zero at every such restart. A large shared_buffers with many dirty pages makes the shutdown checkpoint long, and a stop with a short grace period cuts it off.",
+    remediation:
+      "Find what stops the server and give it enough time: on self-hosted Postgres, raise the supervisor's stop timeout (systemd TimeoutStopSec, docker stop -t, Kubernetes terminationGracePeriodSeconds) above the shutdown checkpoint's duration, or issue a CHECKPOINT shortly before a planned stop so the shutdown one has little to write. On a managed platform the stop path is not yours to tune; raise it with the provider, citing the times listed here.",
+    docUrl: "https://www.postgresql.org/docs/current/server-shutdown.html",
+    reviewed: R,
+  },
+  restart_crash_recovery: {
+    id: "restart_crash_recovery",
+    plane: "Compute",
+    howToVerify:
+      "Read the server log in the minutes before each listed start for 'terminated by signal', 'out of memory' or a FATAL/PANIC line, and check the host for an OOM-killer event at that time. A stop request in an older, unscanned log file would also explain the gap - check the file the restart rotated from.",
+    whyItMatters:
+      "Crash recovery with no shutdown request in front of it means the server stopped without being asked: a backend crashed and the postmaster reinitialised, or the process was killed. Each one is an outage, replays WAL, and usually resets the cumulative statistics.",
+    remediation:
+      "Attribute each event first (the verify step). For the OOM killer: lower per-backend memory (work_mem, maintenance_work_mem, connection count) or move to a larger instance. For a backend crash: capture the FATAL/PANIC context and the statement, and check for extension or version bugs. A managed project's host events are the provider's to explain; raise them with the times listed here.",
+    docUrl: "https://www.postgresql.org/docs/current/server-shutdown.html",
     reviewed: R,
   },
   scrape_down: {

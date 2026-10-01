@@ -390,6 +390,107 @@ export function configTuningFindings(a: Analysis): Finding[] {
  * coverage window (rotation may keep hours, not days) so a quiet result is
  * honestly scoped.
  */
+/** pg_stat_checkpointer.stats_reset as epoch seconds, or null. */
+function checkpointerResetAt(a: Analysis): number | null {
+  const raw = a.sql.checkpointer[0]?.stats_reset;
+  if (raw == null) return null;
+  // Postgres prints a whole-hour offset as a bare "+00"/"+09", which
+  // Date.parse rejects (NaN) without the ":00". Anchored after the time so
+  // a date-only string ("2026-08-01") is left for Date.parse as-is.
+  const iso = String(raw)
+    .replace(" ", "T")
+    .replace(/(\d{2}:\d{2}(?:\.\d+)?[+-]\d{2})$/, "$1:00");
+  const ms = Date.parse(iso);
+  return Number.isFinite(ms) ? ms / 1000 : null;
+}
+
+/**
+ * Restart history (restartlog.ts): how each restart in the scanned log tails
+ * stopped. The log says whether the stop finished (`database system is shut
+ * down`) and whether the next start ran crash recovery; it cannot say who or
+ * what stopped the server, so the titles name the signal only. A stats_reset
+ * within 10 minutes of a restart is named next to it, since a cut-off stop
+ * is the usual reason the cumulative stats were lost (version-dependent:
+ * AGENTS.md 2026-10-01).
+ */
+export function restartLogFindings(a: Analysis): Finding[] {
+  const rl = a.sql.restartLog;
+  if (!rl || rl.restarts.length === 0) return [];
+  const out: Finding[] = [];
+  const lw = a.sql.lockWave;
+  const scanned = lw
+    ? ` Scanned: the newest ${Math.round(lw.coverage.bytesScanned / 1e6)} MB of ${lw.coverage.files} log file(s), so older restarts are not counted.`
+    : "";
+  const resetAt = checkpointerResetAt(a);
+  const resetNote = (() => {
+    if (resetAt == null) return "";
+    const hit = rl.restarts.find((r) => {
+      const t = Date.parse(`${r.at.replace(" ", "T")}Z`) / 1000;
+      return Number.isFinite(t) && Math.abs(t - resetAt) <= 600;
+    });
+    return hit
+      ? ` pg_stat_checkpointer.stats_reset (${a.sql.checkpointer[0]?.stats_reset}) lines up with the ${hit.at} restart.`
+      : "";
+  })();
+  const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
+
+  const cut = rl.restarts.filter((r) => r.verdict === "stop_cut_off_recovered");
+  const half = rl.restarts.filter((r) => r.verdict === "stop_cut_off_clean_start");
+  const halfNote = half.length
+    ? ` ${plural(half.length, "other stop")} (${half.map((r) => r.stopAt).join(", ")}): the shutdown checkpoint finished but 'database system is shut down' was never logged, and the next start was clean.`
+    : "";
+  if (cut.length) {
+    const modes = [...new Set(cut.map((r) => r.stopMode))].join("/");
+    out.push({
+      severity: "med",
+      category: "Capacity",
+      title: `${cut.length} of ${plural(rl.total, "restart")} in the server log ran crash recovery after a ${modes} shutdown request`,
+      evidence:
+        cut
+          .slice(-5)
+          .map(
+            (r) =>
+              `stop ${r.stopAt} -> start ${r.at}: shutdown checkpoint ${r.shutdownCheckpoint === "none" ? "never logged as started" : r.shutdownCheckpoint === "started" ? "started, never completed" : "completed"}, 'database system is shut down' never logged, next start ran crash recovery.`,
+          )
+          .join(" ") +
+        halfNote +
+        resetNote +
+        scanned,
+      anchor: "#infra",
+      ...meta("restart_shutdown_cut_off"),
+    });
+  } else if (half.length) {
+    out.push({
+      severity: "low",
+      category: "Capacity",
+      title: `${half.length} of ${plural(rl.total, "restart")} in the server log stopped before 'database system is shut down' was logged`,
+      evidence:
+        `${half.map((r) => `stop ${r.stopAt} -> start ${r.at}`).join(", ")}: the shutdown checkpoint finished and the next start was clean. In a local test, Postgres 17.4/17.11 kept the cumulative stats across this shape and 18.6 lost them.` +
+        resetNote +
+        scanned,
+      anchor: "#infra",
+      ...meta("restart_shutdown_cut_off"),
+    });
+  }
+  const crash = rl.restarts.filter((r) => r.verdict === "crash");
+  if (crash.length) {
+    out.push({
+      severity: "med",
+      category: "Capacity",
+      title: `Postgres ran crash recovery ${plural(crash.length, "time")} with no shutdown request before it in the scanned log`,
+      evidence: `Starts at ${crash
+        .slice(-5)
+        .map((r) => r.at)
+        .join(
+          ", ",
+        )} logged 'not properly shut down' / 'was interrupted' with no shutdown request in the preceding 30 minutes of the scanned text. Either the server process died (a backend crash, the OOM killer) or the stop was logged in a file older than the scan.${resetNote}${scanned}`,
+      anchor: "#infra",
+      ...meta("restart_crash_recovery"),
+    });
+  }
+  return out;
+}
+
 export function lockWaveFindings(a: Analysis): Finding[] {
   const lw = a.sql.lockWave;
   if (!lw) return [];
@@ -908,6 +1009,15 @@ export type DiskProjection = {
   expansions: ResizeEvent[];
   /** True when the series had enough points to trust a trend. */
   sufficient: boolean;
+  /** Slope over the last THRESHOLDS.diskFillRecentDays, when that segment is sufficient. */
+  slopeRecentBytesPerDay?: number | null;
+  /** Slope over the whole window (slopeBytesPerDay is the one projected). */
+  slopeFullBytesPerDay?: number | null;
+  /** Used % at which past expansions fired, when every one sat in the trigger band. */
+  autoscaleTriggerPct?: number | null;
+  /** Used % just before each expansion (for the evidence). */
+  preExpansionPcts?: number[];
+  daysToNextExpansion?: number | null;
 };
 
 /** Provisioned size in force at `t`: the last size sample at or before it
@@ -960,16 +1070,49 @@ export function projectDataDisk(
     const usedBytesNow = usedBytesPts.length
       ? (usedBytesPts[usedBytesPts.length - 1] as Point).v
       : null;
-    if (enough && usedBytesPts.length && sizeBytesNow != null) {
+    if (enough && usedBytesPts.length && sizeBytesNow != null && usedBytesNow != null) {
       const s = trendStat(usedBytesPts)!;
+      // Project at the RECENT rate from ACTUAL usage. A whole-window line
+      // averages in slower past growth, and anchoring on its fitted end puts
+      // "now" below the real level on an accelerating curve - both bias the
+      // date late (measured: ~33 days shown against ~22 at the current pace).
+      const lastT = (usedBytesPts[usedBytesPts.length - 1] as Point).t;
+      const recentPts = usedBytesPts.filter(
+        (p) => lastT - p.t <= THRESHOLDS.diskFillRecentDays * 86400,
+      );
+      const r = sufficient(recentPts) ? trendStat(recentPts) : null;
+      const rate = r ? r.slopePerDay : s.slopePerDay;
+      const rising = s.direction === "rising" || (r != null && r.slopePerDay > 0);
+      const daysTo = (target: number) => {
+        const d = (target - usedBytesNow) / rate;
+        return rising && rate > 0 && d > 0 && Number.isFinite(d) ? d : null;
+      };
+      // Autoscale: the used % just before each expansion. When every one sits
+      // in the trigger band, the volume grows at that % rather than filling.
+      const pre = expansions
+        .map((e) => {
+          const before = pctPts.filter((p) => p.t < e.at);
+          return before.length ? (before[before.length - 1] as Point).v : null;
+        })
+        .filter((v): v is number => v != null);
+      const [lo, hi] = THRESHOLDS.diskAutoscaleTriggerBand;
+      const triggerPct =
+        pre.length > 0 && pre.length === expansions.length && pre.every((v) => v >= lo && v <= hi)
+          ? Math.ceil(Math.max(...pre))
+          : null;
       return {
         usedPctNow,
         usedBytesNow,
         sizeBytesNow,
-        slopeBytesPerDay: s.slopePerDay,
-        daysToFull: s.direction === "rising" ? projectDaysTo(s, sizeBytesNow) : null,
+        slopeBytesPerDay: rate,
+        slopeRecentBytesPerDay: r ? r.slopePerDay : null,
+        slopeFullBytesPerDay: s.slopePerDay,
+        daysToFull: daysTo(sizeBytesNow),
+        autoscaleTriggerPct: triggerPct,
+        preExpansionPcts: pre,
+        daysToNextExpansion: triggerPct != null ? daysTo((triggerPct / 100) * sizeBytesNow) : null,
         spanDays: s.spanDays,
-        rising: s.direction === "rising",
+        rising,
         expansion: lastExp,
         expansions,
         sufficient: true,
@@ -2658,8 +2801,9 @@ export function deriveFindings(a: Analysis): Finding[] {
 
   // Disk fill projection - capped to a horizon we can actually see (~3x the
   // observed span). The DATA disk is resize-aware: it reconstructs used-BYTES
-  // and projects toward the provisioned size, segmenting after any expansion so
-  // a manual/auto resize is never trended as a fill (or as a false "stable").
+  // (continuous across a resize, unlike the %) and projects them at the recent
+  // rate toward the provisioned size; when past expansions all fired at ~90%,
+  // the card leads with the next expansion instead of "days to full".
   const dataDisk = projectDataDisk(
     pointsOf("Disk used (%)"),
     pointsOf("Disk size (bytes)"),
@@ -2693,11 +2837,40 @@ export function deriveFindings(a: Analysis): Finding[] {
         dataDisk.usedBytesNow != null && dataDisk.sizeBytesNow != null
           ? `${bytesGb(dataDisk.usedBytesNow)} of ${bytesGb(dataDisk.sizeBytesNow)}`
           : `${Math.round(dataDisk.usedPctNow)}% used`;
+      const perDay = (b: number | null | undefined) =>
+        b == null ? null : `${(b / (1024 * 1024 * 1024)).toFixed(1)} GB/day`;
+      const recent = perDay(dataDisk.slopeRecentBytesPerDay);
+      const full = perDay(dataDisk.slopeFullBytesPerDay);
+      const rates = [
+        recent ? `${recent} over the last ${THRESHOLDS.diskFillRecentDays}d` : null,
+        full ? `${full} over ${Math.round(dataDisk.spanDays)}d` : null,
+      ]
+        .filter(Boolean)
+        .join(", ");
+      const days = Math.round(dataDisk.daysToFull);
+      const auto = dataDisk.autoscaleTriggerPct;
+      const nextExp = dataDisk.daysToNextExpansion;
+      const steps = dataDisk.expansions.map((e) => e.toBytes - e.fromBytes);
+      const stepNote = steps.length
+        ? `Past expansions fired at ${(dataDisk.preExpansionPcts ?? []).map((p) => `${p.toFixed(1)}%`).join(", ")} used and added ${steps.map((b) => `+${bytesGb(b)}`).join(", ")}. `
+        : "";
       out.push({
-        severity: dataDisk.daysToFull <= 30 ? "high" : "med",
+        // An autoscaling volume grows at the trigger instead of filling, so
+        // the near-term event is a billed step, not an outage: med. A volume
+        // with no inferred autoscale keeps high inside 30 days.
+        severity: auto != null ? "med" : dataDisk.daysToFull <= 30 ? "high" : "med",
         category: "Capacity",
-        title: `Data disk filling: ${absNote} -> ~${Math.round(dataDisk.daysToFull)} days to full`,
+        title:
+          auto != null && nextExp != null
+            ? `Data disk: next auto-expansion in ~${Math.round(nextExp)} days (at ~${auto}% of ${bytesGb(dataDisk.sizeBytesNow ?? 0)}); ${absNote} used`
+            : `Data disk filling: ${absNote} -> ~${days} days to full`,
         anchor: "#trends",
+        evidence:
+          `${rates ? `Growth ${rates}; projected at the ${recent ? "recent" : "whole-window"} rate from current usage. ` : ""}` +
+          stepNote +
+          (auto != null
+            ? `At that rate the volume would be full in ~${days} days if autoscale did not grow it.`
+            : `~${days} days to full at that rate.`),
         ...meta("disk_fill_projection"),
       });
     }
@@ -2728,18 +2901,7 @@ export function deriveFindings(a: Analysis): Finding[] {
   // read 28% (below the firing threshold, so the finding fired NOTHING),
   // while the raw counter since the actual last reset read 63% - the trend
   // window hid worse current pressure than any prior reading had shown.
-  const cpResetAt = (() => {
-    const raw = a.sql.checkpointer[0]?.stats_reset;
-    if (raw == null) return null;
-    // Postgres prints a whole-hour offset as a bare "+00"/"+09", which
-    // Date.parse rejects (NaN) without the ":00". Anchored after the time so
-    // a date-only string ("2026-08-01") is left for Date.parse as-is.
-    const iso = String(raw)
-      .replace(" ", "T")
-      .replace(/(\d{2}:\d{2}(?:\.\d+)?[+-]\d{2})$/, "$1:00");
-    const ms = Date.parse(iso);
-    return Number.isFinite(ms) ? ms / 1000 : null;
-  })();
+  const cpResetAt = checkpointerResetAt(a);
   const seg = (pts: Point[]) => (cpResetAt != null ? pts.filter((p) => p.t > cpResetAt) : pts);
   const reqPts = seg(pointsOf("Requested checkpoints/s"));
   const timedPts = seg(pointsOf("Timed checkpoints/s"));
@@ -3330,6 +3492,7 @@ export function deriveFindings(a: Analysis): Finding[] {
   out.push(...contentionEpisodeFindings(a));
   out.push(...liveLockContentionFindings(a));
   out.push(...lockWaveFindings(a));
+  out.push(...restartLogFindings(a));
 
   // Security config (auth / network / SSL) - pg-analyser-original Security findings.
   out.push(...securityConfigFindings(a));
@@ -3369,6 +3532,20 @@ export function derivePositives(a: Analysis): Positive[] {
       title: "Lock-wait logging is enabled (log_lock_waits=on)",
     });
 
+  // Restart history: every restart in the scanned log started from a clean
+  // control file and none was cut off mid-stop (restartLogFindings owns the rest).
+  const rl = a.sql.restartLog;
+  if (rl && rl.restarts.length > 0) {
+    const allClean = rl.restarts.every(
+      (r) => r.verdict === "clean" || r.verdict === "clean_stop_unseen",
+    );
+    if (allClean)
+      out.push({
+        category: "Capacity",
+        title: `${rl.total} restart${rl.total === 1 ? "" : "s"} in the scanned server log started from a clean shutdown`,
+      });
+  }
+
   // Trend-health counterweights to the capacity findings (data-aware: only when
   // there's a real window). A finding and its positive are mutually exclusive.
   const tpoints = (title: string) => a.trends.find((t) => t.title === title)?.points ?? [];
@@ -3405,8 +3582,8 @@ export function derivePositives(a: Analysis): Positive[] {
         title: `Memory within healthy range: avg ${Math.round(s.mean)}%, peak ${Math.round(s.max)}% over ${Math.round(s.spanDays)}d`,
       });
   }
-  // Resize-aware: reconstruct used-bytes and segment after any expansion, so we
-  // never claim "stable" by trending the used-% across a volume resize cliff.
+  // Resize-aware: trend reconstructed used-bytes (continuous across a resize),
+  // so we never claim "stable" by trending the used-% across a resize cliff.
   // When the series is too short to trust, emit NOTHING (neither the
   // false-calm nor a scary claim).
   const diskProj = projectDataDisk(
