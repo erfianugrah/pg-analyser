@@ -535,8 +535,8 @@ src/
                  Sorts by timestamp; converts a numeric log offset ("+08") to
                  UTC. Timestamps + enums only, newest 20 kept, plus the UTC
                  coverage of every matched line as contiguous segments (a gap
-                 over 6 h splits; newest 8 kept) - one from-to span had read
-                 "2026-02-26 to 2026-10-01" off 74 MB of rotated files on a
+                 over 6 h splits; newest 8 kept) - one from-to span had
+                 claimed seven months off 74 MB of rotated files on a
                  project that restarted inside that span. Input: collect.ts reads
                  every UNCOMPRESSED log file newest-first in 16 MB windows
                  through logGrepQuery (filtered server-side, so only stop/start/

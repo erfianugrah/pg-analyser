@@ -3962,8 +3962,8 @@ describe("review-pass rule fixes: accuracy against a real no-PAT run shape", () 
 
 describe("restart history from the server log", () => {
   const ev = (over: Partial<NonNullable<Analysis["sql"]["restartLog"]>["restarts"][number]>) => ({
-    at: "2026-09-28 22:22:50",
-    stopAt: "2026-09-28 22:22:40",
+    at: "2024-09-28 22:21:00",
+    stopAt: "2024-09-28 22:20:30",
     stopMode: "fast" as const,
     shutdownCheckpoint: "started" as const,
     shutDownLogged: false,
@@ -3979,8 +3979,8 @@ describe("restart history from the server log", () => {
       restarts: [
         ev({}),
         ev({
-          at: "2026-09-20 01:00:00",
-          stopAt: "2026-09-20 00:59:00",
+          at: "2024-09-20 01:00:00",
+          stopAt: "2024-09-20 00:59:00",
           shutdownCheckpoint: "completed",
           shutDownLogged: true,
           startup: "clean",
@@ -3995,13 +3995,13 @@ describe("restart history from the server log", () => {
         write_ms: 1,
         sync_ms: 1,
         buffers_written: 1,
-        stats_reset: "2026-09-28 22:22:47.292042+00",
+        stats_reset: "2024-09-28 22:20:00.000000+00",
       },
     ];
     const f = deriveFindings(a).find((x) => x.heuristicId === "restart_shutdown_cut_off");
     expect(f?.severity).toBe("med");
     expect(f?.title).toContain("1 of 2 restarts");
-    expect(f?.evidence).toContain("2026-09-28 22:22:40");
+    expect(f?.evidence).toContain("2024-09-28 22:20:30");
     expect(f?.evidence).toContain("pg_stat_checkpointer.stats_reset");
     expect(derivePositives(a).some((p) => /restarts .* shut down cleanly/.test(p.title))).toBe(
       false,
@@ -4076,8 +4076,8 @@ describe("restart history coverage", () => {
       total: 0,
       restarts: [],
       coverage: {
-        from: "2026-09-28 05:00:00",
-        to: "2026-10-01 09:19:00",
+        from: "2024-09-28 05:00:00",
+        to: "2024-10-01 09:19:00",
         files: 3,
         bytesScanned: 200_000_000,
         method: "grep",
@@ -4085,7 +4085,7 @@ describe("restart history coverage", () => {
       },
     };
     const p = derivePositives(a).find((x) => x.title.startsWith("No restart"));
-    expect(p?.title).toContain("2026-09-28 05:00 to 2026-10-01 09:19 UTC");
+    expect(p?.title).toContain("2024-09-28 05:00 to 2024-10-01 09:19 UTC");
     expect(p?.title).toContain("200 MB of 3 uncompressed log file(s)");
     expect(deriveFindings(a).some((x) => x.heuristicId?.startsWith("restart_"))).toBe(false);
   });
@@ -4096,8 +4096,8 @@ describe("restart history coverage", () => {
       total: 1,
       restarts: [
         {
-          at: "2026-09-28 22:22:50",
-          stopAt: "2026-09-28 22:22:40",
+          at: "2024-09-28 22:21:00",
+          stopAt: "2024-09-28 22:20:30",
           stopMode: "fast",
           shutdownCheckpoint: "started",
           shutDownLogged: false,
@@ -4106,8 +4106,8 @@ describe("restart history coverage", () => {
         },
       ],
       coverage: {
-        from: "2026-09-28 05:00:00",
-        to: "2026-10-01 09:19:00",
+        from: "2024-09-28 05:00:00",
+        to: "2024-10-01 09:19:00",
         files: 3,
         bytesScanned: 200_000_000,
         method: "grep",
@@ -4115,7 +4115,7 @@ describe("restart history coverage", () => {
       },
     };
     const f = deriveFindings(a).find((x) => x.heuristicId === "restart_shutdown_cut_off");
-    expect(f?.evidence).toContain("2026-09-28 05:00 to 2026-10-01 09:19 UTC");
+    expect(f?.evidence).toContain("2024-09-28 05:00 to 2024-10-01 09:19 UTC");
   });
 });
 
@@ -4126,8 +4126,8 @@ describe("restart card wording follows the parsed facts", () => {
       total: 1,
       restarts: [
         {
-          at: "2026-10-01 09:40:52",
-          stopAt: "2026-10-01 09:40:52",
+          at: "2024-10-01 09:40:52",
+          stopAt: "2024-10-01 09:40:52",
           stopMode: "immediate",
           shutdownCheckpoint: "none",
           shutDownLogged: true,
@@ -4136,8 +4136,8 @@ describe("restart card wording follows the parsed facts", () => {
         },
       ],
       coverage: {
-        from: "2026-10-01 09:40:52",
-        to: "2026-10-01 09:41:07",
+        from: "2024-10-01 09:40:52",
+        to: "2024-10-01 09:41:07",
         files: 1,
         bytesScanned: 90_554,
         method: "grep",
@@ -4159,41 +4159,41 @@ describe("restart scan span with gaps", () => {
       total: 0,
       restarts: [],
       coverage: {
-        from: "2026-02-26 01:05:02",
-        to: "2026-10-01 10:00:08",
+        from: "2024-02-26 01:05:00",
+        to: "2024-10-01 10:00:00",
         files: 4,
         bytesScanned: 74_025_159,
         method: "grep",
         truncated: false,
         lines: 900,
         segments: [
-          { from: "2026-02-26 01:05:02", to: "2026-02-26 03:00:00" },
-          { from: "2026-09-30 22:00:00", to: "2026-10-01 10:00:08" },
+          { from: "2024-02-26 01:05:00", to: "2024-02-26 03:00:00" },
+          { from: "2024-09-30 22:00:00", to: "2024-10-01 10:00:00" },
         ],
       },
     };
     const p = derivePositives(a).find((x) => x.title.startsWith("No restart"));
     expect(p?.title).toContain(
-      "2026-09-30 22:00 to 2026-10-01 10:00 UTC continuously, plus 1 earlier fragment(s) back to 2026-02-26",
+      "2024-09-30 22:00 to 2024-10-01 10:00 UTC continuously, plus 1 earlier fragment(s) back to 2024-02-26",
     );
-    expect(p?.title).not.toContain("2026-02-26 01:05 to 2026-10-01 10:00");
+    expect(p?.title).not.toContain("2024-02-26 01:05 to 2024-10-01 10:00");
   });
 });
 
 describe("restart coverage line stays readable and names an uncovered reset", () => {
   const cov = {
-    from: "2026-07-17 13:51:36",
-    to: "2026-10-01 10:09:09",
+    from: "2024-07-17 13:50:00",
+    to: "2024-10-01 10:10:00",
     files: 4,
     bytesScanned: 75_000_000,
     method: "grep" as const,
     truncated: false,
     lines: 712,
     segments: [
-      { from: "2026-07-17 13:51:36", to: "2026-07-17 17:17:52" },
-      { from: "2026-07-19 22:41:30", to: "2026-07-19 22:41:30" },
-      { from: "2026-09-07 20:26:55", to: "2026-09-07 23:56:55" },
-      { from: "2026-09-29 12:27:18", to: "2026-10-01 10:09:09" },
+      { from: "2024-07-17 13:50:00", to: "2024-07-17 17:15:00" },
+      { from: "2024-07-19 22:40:00", to: "2024-07-19 22:40:00" },
+      { from: "2024-09-07 20:25:00", to: "2024-09-07 23:55:00" },
+      { from: "2024-09-29 12:25:00", to: "2024-10-01 10:10:00" },
     ],
   };
 
@@ -4201,9 +4201,9 @@ describe("restart coverage line stays readable and names an uncovered reset", ()
     const a = base();
     a.sql.restartLog = { total: 0, restarts: [], coverage: cov };
     const p = derivePositives(a).find((x) => x.title.startsWith("No restart"));
-    expect(p?.title).toContain("2026-09-29 12:27 to 2026-10-01 10:09 UTC continuously");
-    expect(p?.title).toContain("plus 3 earlier fragment(s) back to 2026-07-17");
-    expect(p?.title).not.toContain("2026-07-19 22:41");
+    expect(p?.title).toContain("2024-09-29 12:25 to 2024-10-01 10:10 UTC continuously");
+    expect(p?.title).toContain("plus 3 earlier fragment(s) back to 2024-07-17");
+    expect(p?.title).not.toContain("2024-07-19 22:40");
   });
 
   test("a stats_reset outside every covered stretch is named", () => {
@@ -4216,12 +4216,12 @@ describe("restart coverage line stays readable and names an uncovered reset", ()
         write_ms: 1,
         sync_ms: 1,
         buffers_written: 1,
-        stats_reset: "2026-09-28 22:22:47.292042+00",
+        stats_reset: "2024-09-28 22:20:00.000000+00",
       },
     ];
     const p = derivePositives(a).find((x) => x.title.startsWith("No restart"));
     expect(p?.title).toContain(
-      "pg_stat_checkpointer.stats_reset 2026-09-28 22:22 UTC falls outside the covered log",
+      "pg_stat_checkpointer.stats_reset 2024-09-28 22:20 UTC falls outside the covered log",
     );
   });
 });
@@ -4233,10 +4233,10 @@ describe("a stats_reset older than all readable log is not flagged", () => {
       total: 0,
       restarts: [],
       coverage: {
-        from: "2026-08-26 20:50:52",
-        to: "2026-10-01 10:08:00",
+        from: "2024-08-26 20:45:00",
+        to: "2024-10-01 10:08:00",
         lines: 10,
-        segments: [{ from: "2026-08-26 20:50:52", to: "2026-10-01 10:08:00" }],
+        segments: [{ from: "2024-08-26 20:45:00", to: "2024-10-01 10:08:00" }],
       },
     };
     a.sql.checkpointer = [
@@ -4246,7 +4246,7 @@ describe("a stats_reset older than all readable log is not flagged", () => {
         write_ms: 1,
         sync_ms: 1,
         buffers_written: 1,
-        stats_reset: "2025-06-26 09:43:24.864124+00",
+        stats_reset: "2023-06-26 09:40:00.000000+00",
       },
     ];
     const p = derivePositives(a).find((x) => x.title.startsWith("No restart"));

@@ -899,7 +899,7 @@ export async function collect(
     }
 
     // Restart history needs more than the tails: a busy database fills 4 MB
-    // in hours (measured on one project: 11177557 bytes of tail spanning
+    // in hours (measured on one project: ~11 MB of tail spanning
     // 3.40 h of lock events = 3.29 MB/h, an upper bound), and restarts are
     // days apart. Read every UNCOMPRESSED file newest-first in 16 MB windows,
     // filtered server-side (logGrepQuery), so only the stop/start/checkpoint
