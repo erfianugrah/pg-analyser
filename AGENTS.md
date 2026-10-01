@@ -528,14 +528,21 @@ src/
                  returns null if no evidence or on collection error. Bounded sampling
                  of matching lines for evidence. No side effects; used in both PAT
                  read-only (logs accessible via SQL) and superuser tiers.
-  restartlog.ts  Pure server-log restart classifier (2026-10-01), run over the
-                 same log tails as locklog/freezelog -> analysis.sql.restartLog.
-                 Pairs each startup line with the stop before it (30 min) and
-                 classifies: clean / clean_stop_unseen / stop_cut_off_clean_start
-                 / stop_cut_off_recovered / crash. Sorts by timestamp first
-                 (collect joins file tails newest-first). Timestamps + enums
-                 only, newest 20 kept. Feeds restart_shutdown_cut_off,
-                 restart_crash_recovery and the all-clean positive.
+  restartlog.ts  Pure server-log restart classifier (2026-10-01) ->
+                 analysis.sql.restartLog. Pairs each startup line with the stop
+                 before it (30 min) and classifies: clean / clean_stop_unseen /
+                 stop_cut_off_clean_start / stop_cut_off_recovered / crash.
+                 Sorts by timestamp; converts a numeric log offset ("+08") to
+                 UTC. Timestamps + enums only, newest 20 kept, plus the UTC
+                 coverage span of every matched line. Input: collect.ts reads
+                 every UNCOMPRESSED log file newest-first in 16 MB windows
+                 through logGrepQuery (filtered server-side, so only stop/start/
+                 checkpoint lines cross the wire), up to 256 MB (~78 h at a
+                 measured 3.29 MB/h); falls back to the lock-wave tails. .gz
+                 rotations are unreadable over SQL. Feeds restart_shutdown_
+                 cut_off, restart_crash_recovery, the all-clean positive and a
+                 "No restart in the scanned server log (span)" line. Verified
+                 end to end on a local PG 18.6 cluster (clean + immediate stop).
   store.ts       SQLite history store (bun:sqlite): `snapshot` appends full
                  Analysis + denormalized metric_samples/sql_scalars; keyed by
                  ref at ~/.pg-analyser/history.db; prune to retention. Also holds
