@@ -285,8 +285,10 @@ src/
                  PG15+, feeding jit_overhead) and checkpointer/checkpointerPre17
                  (counters moved pg_stat_bgwriter -> pg_stat_checkpointer in
                  PG17; both alias one shape; feeds checkpoint_pressure_counters,
-                 the no-PAT lens for the trends-based checkpoint_pressure,
-                 suppressed when that series exists). Same 2026-08-11 batch:
+                 the fallback for the trends-based checkpoint_pressure: that one
+                 fits only trend points after the counters' stats_reset, and the
+                 counters finding fires when that segment is too short to
+                 trust). Same 2026-08-11 batch:
                  pgssSchema probe + withPgssSchema rewrite (self-hosted pgss
                  lives in `public`, not `extensions` - without the probe every
                  pgss plane silently empties via safe()'s expected-absence). Wraparound forensics (2026-08) adds FOUR holder
@@ -681,6 +683,38 @@ src/
 - Scraper dirs contain a live credential in `prometheus.yml` - gitignored.
 
 ## Verified upstream facts (Supabase, 2026-07)
+
+2026-10-01 additions (fourth live no-PAT report review, PG 17.4 project with
+90 days of Grafana trends):
+
+- **Used bytes are continuous across a disk resize.** Size-in-force x used-%
+  read 912.9 -> 914.5 -> 916.2 GiB across an auto-expansion while the % series
+  dropped. projectDataDisk now fits used BYTES over the whole window
+  (`sizeInForce`, last size at/before each point) instead of segmenting at
+  the last resize; segmenting had blanked a valid ~27-day projection when the
+  resize was a day before the end. Only the "Disk stable" % reads post-resize.
+- **`supabase postgres-config update` restarts the database unless passed
+  `--no-restart`** (CLI v2.118.0 `--help`), even for parameters the docs list
+  as "Restart: No" (max_wal_size, work_mem). Every remediation command that
+  uses it carries `--no-restart` plus a `SHOW` to confirm.
+- **The checkpoint trend must be cut at the counters' stats_reset.** A 90-day
+  rate average blended pre- and post-reset regimes; checkpoint_pressure fits
+  only post-reset points and falls back to the counters card when that
+  segment is too short. Both cards quote `max_wal_size` / `checkpoint_timeout`
+  (added to the pg_settings allowlist - a "raise max_wal_size" card that
+  could not say the current value).
+- **A stats reset with clean-looking logs is possible.** Bare PG 18.6 cluster,
+  4 GB of dirty shared_buffers: SIGINT then SIGKILL the postmaster 1 s later;
+  the surviving checkpointer finished the shutdown checkpoint, the next start
+  logged `database system was shut down at` (no recovery), and
+  pg_stat_checkpointer came back zeroed. So "fast shutdown request" in the
+  log does not mean the stats survived; do not word a reset as a crash.
+- **Grafana 401/403 are terminal for the run**, like a 3xx login redirect:
+  queryWindow throws on the first one instead of retrying each panel, and
+  panel errors from the auto-scope re-query replace the first pass's rather
+  than reporting twice.
+- **An unresolved lock bucket aggregates the whole scanned span**, so the
+  10-minute cascade thresholds cannot grade it; it is capped at low.
 
 2026-09-09 additions (third live no-PAT report review, PG 17.6 project):
 
