@@ -65,3 +65,4 @@ sbperf.work.env
 
 # self-correcting-loop harness scratch (manifest + run report)
 .pi/
+.claude/
