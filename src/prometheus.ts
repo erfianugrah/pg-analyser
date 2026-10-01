@@ -229,6 +229,11 @@ export async function fetchTrends(
   // that only fails later at JSON parse with a confusing error.
   const reqInit: RequestInit = { ...(init ?? {}), redirect: "manual" };
 
+  // Panel errors are buffered per pass and only the final pass's are reported,
+  // so a re-scoped second pass doesn't report every broken panel twice.
+  let panelErrors: Array<[string, string]> = [];
+  const collect = (panel: string, message: string) => panelErrors.push([panel, message]);
+
   // Pass 1: the requested window.
   let series = await queryWindow(
     base,
@@ -237,7 +242,7 @@ export async function fetchTrends(
     end,
     reqInit,
     refMatcher,
-    opts.onPanelError,
+    collect,
   );
   // Auto-scope to the real data span: a young project (created days ago) or a
   // freshly-started scraper has no data across most of a 30/90-day window, so a
@@ -256,7 +261,8 @@ export async function fetchTrends(
   const dataStart = probed ?? (inferred.length ? Math.min(...inferred) : null);
   if (dataStart != null) {
     const spanDays = (end - dataStart) / 86400;
-    if (spanDays > 0 && spanDays < days * 0.6)
+    if (spanDays > 0 && spanDays < days * 0.6) {
+      panelErrors = [];
       series = await queryWindow(
         base,
         panels,
@@ -264,9 +270,11 @@ export async function fetchTrends(
         end,
         reqInit,
         refMatcher,
-        opts.onPanelError,
+        collect,
       );
+    }
   }
+  for (const [panel, message] of panelErrors) opts.onPanelError?.(panel, message);
   return series;
 }
 
@@ -440,6 +448,16 @@ async function queryWindow(
         `datasource redirected (HTTP ${res.status}${loc.includes("accounts.google") || loc.includes("/oauth2/") ? " to SSO login" : ""}) - the session cookie/token is missing or expired for this datasource`,
       );
     }
+    // A rejected bearer token answers 401/403 with no redirect - just as
+    // universal, so fail fast rather than isolating it per panel.
+    if (res.status === 401)
+      throw new Error(
+        "datasource rejected the request (HTTP 401) - the session cookie/token is missing or expired for this datasource",
+      );
+    if (res.status === 403)
+      throw new Error(
+        "datasource refused the request (HTTP 403) - the token/cookie authenticated but has no access to this datasource",
+      );
     if (!res.ok) {
       const body = (await res.text()).replace(/\s+/g, " ").slice(0, 200);
       panelFailed(panel.title, `datasource HTTP ${res.status} for "${panel.title}": ${body}`);

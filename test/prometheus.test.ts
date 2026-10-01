@@ -245,6 +245,50 @@ describe("fetchTrends ref scoping", () => {
     ).rejects.toThrow(/all \d+ panels returned 0 series.*Name="x-r1"/);
   });
 
+  test("a 401 fails fast like a redirect - one request, not one per panel", async () => {
+    // A rejected bearer token comes back 401 with no redirect; per-panel
+    // isolation must not turn that into ~22 requests and ~22 notes.
+    let rangeCalls = 0;
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      if (String(url).includes("query_range")) rangeCalls++;
+      return new Response("unauthorized", { status: 401 });
+    }) as typeof fetch;
+    await expect(fetchTrends("https://grafana", 30, "r1")).rejects.toThrow(
+      /token is missing or expired/,
+    );
+    expect(rangeCalls).toBe(1);
+  });
+
+  test("a broken panel is reported once even when the auto-scope second pass runs", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      const u = String(url);
+      // dataStart probe: data began 2 days ago, so a 30d request re-scopes.
+      if (u.includes("/api/v1/query?"))
+        return new Response(
+          JSON.stringify({
+            status: "success",
+            data: { result: [{ value: [now, String(now - 2 * 86400)] }] },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      if (u.includes("pg_database_size_bytes"))
+        return new Response(
+          JSON.stringify({ status: "error", errorType: "bad_data", error: "unknown metric" }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      return new Response(
+        JSON.stringify({ status: "success", data: { result: [{ values: [[now, "1"]] }] } }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+    const panelErrors: string[] = [];
+    await fetchTrends("http://prom:9090", 30, "r1", {
+      onPanelError: (panel) => panelErrors.push(panel),
+    });
+    expect(panelErrors).toEqual(["Database size"]);
+  });
+
   test("one bad panel doesn't discard the others - isolated and reported via onPanelError", async () => {
     // Measured on a live report: a single panel querying a metric family this
     // datasource doesn't have (or a malformed query) aborted the WHOLE trends
