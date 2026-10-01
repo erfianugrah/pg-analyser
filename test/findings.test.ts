@@ -3026,7 +3026,7 @@ describe("checkpoint + jit counters (version-gated planes)", () => {
     );
   });
 
-  test("checkpoint_pressure_counters: suppressed when the trends series exists (windowed rate wins)", () => {
+  test("checkpoint_pressure_counters: suppressed when the post-reset trend segment is sufficient (windowed rate wins)", () => {
     const a = base();
     a.sql.checkpointer = [
       {
@@ -3035,13 +3035,48 @@ describe("checkpoint + jit counters (version-gated planes)", () => {
         write_ms: 1,
         sync_ms: 1,
         buffers_written: 5,
-        stats_reset: "2026-08-01",
+        stats_reset: "2026-08-01 00:00:00.000000+00",
       },
     ];
-    a.trends = [{ title: "Requested checkpoints/s", unit: "", points: [{ t: 1, v: 0.1 }] }];
+    const resetT = Date.parse("2026-08-01T00:00:00Z") / 1000; // the reference timestamp, independent of the parser under test;
+    const pts = Array.from({ length: 15 }, (_, i) => ({ t: resetT + (i + 1) * 86400, v: 0.1 }));
+    a.trends = [
+      { title: "Requested checkpoints/s", unit: "", points: pts },
+      { title: "Timed checkpoints/s", unit: "", points: pts.map((p) => ({ ...p, v: 0.05 })) },
+    ];
     expect(deriveFindings(a).some((x) => x.heuristicId === "checkpoint_pressure_counters")).toBe(
       false,
     );
+  });
+
+  test("checkpoint_pressure_counters: NOT suppressed when the trend window spans the reset (insufficient post-reset segment)", () => {
+    // Measured on a live report: a 90-day trend window spanning a restart that
+    // reset pg_stat_checkpointer blended 18 days of a since-ended regime into
+    // today's reading, diluting the share below the firing threshold entirely
+    // and hiding real current pressure (a raw counter of 62.6% read as a
+    // blended 28.2% trend average, which fired nothing). A trend series
+    // merely EXISTING must not suppress the cleaner, always-since-the-reset
+    // counter reading when the post-reset slice of it is too thin to trust.
+    const a = base();
+    a.sql.checkpointer = [
+      {
+        timed: 10,
+        requested: 90,
+        write_ms: 1,
+        sync_ms: 1,
+        buffers_written: 5,
+        stats_reset: "2026-08-01 00:00:00.000000+00",
+      },
+    ];
+    const resetT = Date.parse("2026-08-01T00:00:00Z") / 1000; // the reference timestamp, independent of the parser under test;
+    // All points land BEFORE the reset - a stale, now-superseded regime.
+    const pts = Array.from({ length: 15 }, (_, i) => ({ t: resetT - (i + 1) * 86400, v: 0.01 }));
+    a.trends = [
+      { title: "Requested checkpoints/s", unit: "", points: pts },
+      { title: "Timed checkpoints/s", unit: "", points: pts.map((p) => ({ ...p, v: 0.09 })) },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "checkpoint_pressure_counters");
+    expect(f?.title).toContain("90%");
   });
 
   test("jit_overhead: >=30% jit share on a meaningful statement -> low finding", () => {
