@@ -96,6 +96,7 @@ function makeAnalysis(opts: {
       waitSamples: [],
       lockWave: null,
       freezeLog: null,
+      restartLog: null,
       dbSizeBytes: null,
       bloatExact: [],
       indexAdvisor: [],

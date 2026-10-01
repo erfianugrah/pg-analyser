@@ -89,6 +89,7 @@ function base(ref = "r", collectedAt = "2026-01-01T00:00:00Z"): Analysis {
       waitSamples: [],
       lockWave: null,
       freezeLog: null,
+      restartLog: null,
       dbSizeBytes: null,
       bloatExact: [],
       indexAdvisor: [],

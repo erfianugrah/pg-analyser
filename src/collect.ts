@@ -5,6 +5,7 @@ import { type Logger, log } from "./log.ts";
 import { Management } from "./management.ts";
 import { parsePrometheus } from "./metrics.ts";
 import { fetchIncidentSeries, fetchTrends } from "./prometheus.ts";
+import { parseRestartLog } from "./restartlog.ts";
 import { isUnwrappedAuth } from "./rls.ts";
 import { type Analysis, MetricSample, type SqlRow } from "./schemas.ts";
 import { collectSplinterLints } from "./splinter.ts";
@@ -830,6 +831,7 @@ export async function collect(
   // literal-free LockWaveSummary is stored in analysis.json.
   let lockWave: Analysis["sql"]["lockWave"] = null;
   let freezeLog: Analysis["sql"]["freezeLog"] = null;
+  let restartLog: Analysis["sql"]["restartLog"] = null;
   if (logProbe?.readable && probeRows.length > 0) {
     const CHUNK = 4_000_000;
     const RUN_BUDGET = 20_000_000;
@@ -880,6 +882,7 @@ export async function collect(
         }
         lockWave = summary;
         freezeLog = parseFreezeLog(text);
+        restartLog = parseRestartLog(text);
       }
     } catch (err) {
       clog.debug("log read failed", { error: String(err) });
@@ -1012,6 +1015,7 @@ export async function collect(
       waitSamples,
       lockWave,
       freezeLog,
+      restartLog,
     },
     metrics: { available: metricsText != null, samples },
     trends,
