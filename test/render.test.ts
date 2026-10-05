@@ -296,6 +296,79 @@ describe("render", () => {
     }
   });
 
+  describe("contents sidebar", () => {
+    // Every section anchor the renderer emits: id'd h2 headings, evidence
+    // drills (<details id>), and the embedded narrative block.
+    const sectionIds = (html: string): string[] => {
+      const body = html.slice(html.indexOf("<main"));
+      return [
+        ...body.matchAll(
+          /<h2 id="([^"]+)"|<details open id="([^"]+)"|<div class=narrative id="([^"]+)"/g,
+        ),
+      ].map((m) => m[1] ?? m[2] ?? m[3] ?? "");
+    };
+    const navHtml = (html: string): string =>
+      html.match(/<nav class=rnav[\s\S]*?<\/nav>/)?.[0] ?? "";
+    const navHrefs = (html: string): string[] =>
+      [...navHtml(html).matchAll(/href="#([^"]+)"/g)].map((m) => m[1] ?? "");
+    const rich = (): Analysis => {
+      const a = fixture({ narrative: "## Deep dive\nLooks fine." });
+      a.sql.longRunning = [{ pid: 1, duration: "00:10:00", query: "select 1" }];
+      a.sql.fkUnindexed = [
+        { schema: "public", table: "public.t", constraint: "c", definition: "d" },
+      ];
+      a.errors = [{ source: "sql:bloat", message: "boom" }];
+      return a;
+    };
+
+    test("one entry per rendered section, in document order", () => {
+      for (const [a, opts] of [
+        [fixture(), {}],
+        [rich(), { narrative: true }],
+        [rich(), {}],
+      ] as const) {
+        const html = render(a, opts);
+        const ids = sectionIds(html);
+        expect(ids.length).toBeGreaterThan(10);
+        expect(navHrefs(html)).toEqual(ids);
+      }
+    });
+
+    test("every sidebar href resolves to exactly one element id", () => {
+      const html = render(rich(), { narrative: true });
+      for (const id of navHrefs(html)) {
+        const n = [...html.matchAll(new RegExp(`\\bid="${id}"`, "g"))].length;
+        expect({ id, n }).toEqual({ id, n: 1 });
+      }
+    });
+
+    test("conditional sections appear only when rendered; labels drop notes, keep counts", () => {
+      const plain = navHrefs(render(fixture()));
+      expect(plain).not.toContain("longrunning");
+      expect(plain).not.toContain("notes");
+      const html = render(rich());
+      const hrefs = navHrefs(html);
+      expect(hrefs).toContain("longrunning");
+      expect(hrefs).toContain("fkunindexed");
+      expect(hrefs).toContain("notes"); // collection notes gained a stable id
+      const nav = navHtml(html);
+      expect(nav).toContain(">Query outliers<");
+      expect(nav).not.toContain("top 5 by share"); // drill note stays out
+      expect(nav).toMatch(/Collection notes<\/span><span class=n>1</);
+    });
+
+    test("hidden overlay section drops out of the sidebar", () => {
+      const overlay: Overlay = { hide: new Set(["outliers"]), notes: {} };
+      expect(navHrefs(render(fixture(), { overlay }))).not.toContain("outliers");
+    });
+
+    test("sidebar is hidden in print and the report stays tag-balanced", () => {
+      const html = render(rich(), { narrative: true });
+      expect(html).toMatch(/@media print\{[^}]*nav\.rnav\{display:none\}/);
+      expect(tagBalance(html)).toBe(true);
+    });
+  });
+
   test("no-PAT header: collapses ref (ref) and drops unknown region/status", () => {
     const html = render(
       fixture({
@@ -521,7 +594,8 @@ describe("render", () => {
   });
 
   test("audit flow: TL;DR verdict -> findings -> evidence (pyramid)", () => {
-    const html = render(fixture());
+    // Scope to the body: the contents sidebar repeats section labels before it.
+    const html = render(fixture()).split("<main>")[1] ?? "";
     const tldrIdx = html.indexOf("class=tldr");
     const findIdx = html.indexOf('id="findings"');
     const evidenceIdx = html.indexOf('id="evidence"');

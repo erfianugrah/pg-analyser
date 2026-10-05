@@ -492,6 +492,73 @@ function baseDrill(id: string, title: string, note: string, body: string): strin
   return `<details open id="${id}"><summary><span class=h2>${esc(title)}</span>${note ? ` <span class=note>${esc(note)}</span>` : ""}</summary>${body}</details>`;
 }
 
+/** One sidebar entry: an anchor id, its (already-escaped) label, optional count. */
+export interface NavEntry {
+  id: string;
+  label: string;
+  count: string | null;
+}
+
+/**
+ * Derive the contents sidebar from the rendered section HTML itself, so it can
+ * never drift from what the report shows: every id'd `<h2>`, every evidence
+ * drill (`baseDrill` -> `<details open id>`), and the embedded narrative. Hidden
+ * or data-gated sections render as "" and therefore never get an entry. Labels
+ * keep the heading text and its count badge; the grey note spans are dropped.
+ * All captured text is already HTML-escaped by the section builders.
+ */
+export function navEntries(sectionsHtml: string): NavEntry[] {
+  const re =
+    /<h2 id="([^"]+)">([\s\S]*?)<\/h2>|<details open id="([^"]+)"><summary><span class=h2>([^<]*)<\/span>|<div class=narrative id="([^"]+)">/g;
+  const out: NavEntry[] = [];
+  for (const m of sectionsHtml.matchAll(re)) {
+    if (m[1] != null) {
+      const inner = m[2] ?? "";
+      const label = (inner.split("<span")[0] ?? "").replace(/<[^>]*>/g, "").trim();
+      const count = inner.match(/<span class=count>([^<]*)<\/span>/)?.[1] ?? null;
+      out.push({ id: m[1], label, count });
+    } else if (m[3] != null) {
+      out.push({ id: m[3], label: m[4] ?? m[3], count: null });
+    } else if (m[5] != null) {
+      out.push({ id: m[5], label: "Executive summary", count: null });
+    }
+  }
+  return out;
+}
+
+/**
+ * Sidebar markup. Plain anchor links (works with JS off); `<details open>` so
+ * narrow screens can fold it - the inline script closes it there and marks the
+ * current section via IntersectionObserver. No `<` directly before a letter in
+ * the script, so naive tag scanners don't misread it.
+ */
+function navSidebar(entries: NavEntry[]): string {
+  if (!entries.length) return "";
+  const items = entries
+    .map(
+      (e) =>
+        `<li><a href="#${e.id}"><span>${e.label}</span>${e.count != null ? `<span class=n>${e.count}</span>` : ""}</a></li>`,
+    )
+    .join("");
+  return `<nav class=rnav aria-label="Report sections"><details open><summary>Contents</summary><ol>${items}</ol></details></nav>`;
+}
+
+const NAV_SCRIPT = `<script>(()=>{
+const nav=document.querySelector("nav.rnav");if(!nav)return;
+const wide=matchMedia("(min-width:1100px)");
+const det=nav.querySelector("details");if(det && !wide.matches)det.open=false;
+if(!("IntersectionObserver" in window))return;
+const items=[];
+for(const l of nav.querySelectorAll("a[href^='#']")){const el=document.getElementById(l.getAttribute("href").slice(1));if(el)items.push({l,h:el.tagName==="DETAILS"?(el.querySelector("summary")||el):el});}
+let cur=null;
+const pick=()=>{const y=innerHeight*0.25;let best=null;for(const it of items){if(it.h.getBoundingClientRect().top <= y)best=it;else break;}
+if(innerHeight+scrollY >= document.documentElement.scrollHeight-2 && items.length)best=items[items.length-1];
+if(best===cur)return;if(cur){cur.l.classList.remove("on");cur.l.removeAttribute("aria-current");}cur=best;if(!cur)return;
+cur.l.classList.add("on");cur.l.setAttribute("aria-current","location");
+if(wide.matches){const r=cur.l.getBoundingClientRect(),n=nav.getBoundingClientRect();if(r.top < n.top || r.bottom > n.bottom)nav.scrollTop+=r.top-n.top-n.height/3;}};
+const io=new IntersectionObserver(pick,{rootMargin:"0px 0px -75% 0px"});for(const it of items)io.observe(it.h);pick();
+})();</script>`;
+
 // --- Audit front-page + deep-dive (TL;DR -> per-finding -> evidence) ---
 
 const SEV_WORD: Record<Severity, string> = { high: "HIGH", med: "MED", low: "LOW" };
@@ -1175,7 +1242,7 @@ ${a.sql.authAudit.length ? drill("auth", "Auth adoption", "users, confirmed, 30-
 ${a.sql.cronJobs.length ? drill("cron", "Scheduled jobs (pg_cron)", "schedule + 7-day run health per job (failed runs surfaced as a finding)", sqlTable(a.sql.cronJobs, { mono: ["jobname", "schedule"] })) : ""}
 ${show.apivol ? drill("apivol", "API request volume", "rolled up over the collected window; peak bucket noted", errored.has("apiCounts") ? '<p class="empty warn-text">not collected</p>' : apiVolumeSummary(a)) : ""}
 ${drill("metrics", "Infra metrics", "scrape status + how to build history", metricsStatus(a))}
-${a.errors.length ? `<h2>Collection notes <span class=count>${a.errors.length}</span></h2>${collectionNotes(a)}` : ""}
+${a.errors.length ? `<h2 id="notes">Collection notes <span class=count>${a.errors.length}</span></h2>${collectionNotes(a)}` : ""}
 `;
 
   return `<!doctype html><html lang=en><head><meta charset=utf-8>
@@ -1297,8 +1364,30 @@ ${faviconTag(brand)}
   figure.spark figcaption{font-size:12px;font-weight:600;margin-bottom:3px}
   figure.spark svg{display:block;border:1px solid var(--line);background:var(--spark);border-radius:2px}
   figure.spark .note{display:block;margin-top:1px}
+  /* --- contents sidebar (screen only; never printed) --- */
+  nav.rnav{font-size:12px;line-height:1.3}
+  nav.rnav details{margin:0}
+  nav.rnav summary{border:none;padding:0 0 4px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--mut)}
+  nav.rnav ol{list-style:none;margin:0;padding:0}
+  nav.rnav li{break-inside:avoid}
+  nav.rnav a{display:flex;justify-content:space-between;gap:6px;padding:2px 6px;color:var(--fg);text-decoration:none;border-left:2px solid transparent}
+  nav.rnav a:hover{background:var(--panel)}
+  nav.rnav a.on{border-left-color:var(--accent);background:var(--panel);font-weight:600}
+  nav.rnav .n{color:var(--mut);font-variant-numeric:tabular-nums}
+  @media screen and (min-width:1100px){
+    body{max-width:1440px}
+    .layout{display:grid;grid-template-columns:210px minmax(0,1fr);gap:0 28px;align-items:start}
+    nav.rnav{position:sticky;top:0;max-height:100vh;overflow-y:auto;padding:14px 0}
+  }
+  @media screen and (max-width:1099.98px){
+    nav.rnav{margin:12px 0 0;border:1px solid var(--line);border-radius:4px;padding:6px 10px}
+    nav.rnav summary{padding:0}
+    nav.rnav details[open] summary{padding-bottom:4px}
+    nav.rnav ol{columns:3 170px;column-gap:16px}
+  }
   @page{size:A4;margin:14mm 12mm}
   @media print{
+    nav.rnav{display:none}
     body{padding:0;max-width:none;font-size:11.5px}
     h1{font-size:17px}
     /* keep a heading with the content that follows it */
@@ -1324,6 +1413,9 @@ ${brandHead(brand, "Supabase performance report")}
     `pg-analyser <code>${esc(m.sbperfVersion)}</code>`,
   ])}</div>
 ${banner}
+<div class=layout>
+${navSidebar(navEntries(sections))}
+<main>
 ${sections}
 <p class=meta style="margin-top:32px">Data sources: ${
     m.managementApi === false
@@ -1331,6 +1423,9 @@ ${sections}
       : `the Supabase Management API, ${m.sqlSource === "superuser" ? "superuser SQL (--db-url)" : "read-only SQL"}, and the project metrics endpoint`
   }.</p>
 ${noPatFooter}
+</main>
+</div>
+${NAV_SCRIPT}
 </body></html>`;
 }
 
