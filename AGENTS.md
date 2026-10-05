@@ -503,7 +503,11 @@ src/
                  touches analysis.json or the narrate input. Hideable ids are
                  the drill() section ids. Overlays gitignored (keep .example).
   report/pdf     HTML -> PDF via headless Chromium --print-to-pdf (no Playwright
-                 dep; system Chrome discovered on PATH or PG_ANALYSER_CHROME)
+                 dep; system Chrome discovered on PATH or PG_ANALYSER_CHROME).
+                 --generate-pdf-document-outline turns the group h1 / section h2
+                 headings into PDF bookmarks; the print-only contents page
+                 (nav.ptoc, same navGroups() data as the sidebar) gives
+                 clickable internal links. No page numbers (no target-counter()).
   narrate.ts     LLM pass over the corpus + enriched findings -> narrative.md.
                  Grounded: hands the model the ranked findings (with catalogued
                  remediation + doc URL), positives, and a BOUNDED evidence digest

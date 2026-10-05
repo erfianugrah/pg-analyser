@@ -444,6 +444,73 @@ describe("render", () => {
       expect(html).toMatch(/@media print\{[^}]*nav\.rnav\{display:none\}/);
       expect(tagBalance(html)).toBe(true);
     });
+
+    describe("printed contents", () => {
+      const tocHtml = (html: string): string =>
+        html.match(/<nav class=ptoc[\s\S]*?<\/nav>/)?.[0] ?? "";
+      const tocOutline = (html: string): [string, string[]][] =>
+        [
+          ...tocHtml(html).matchAll(
+            /<div class=g><div class=gl>([^<]*)<\/div><ol>([\s\S]*?)<\/ol><\/div>/g,
+          ),
+        ].map((m) => [
+          (m[1] ?? "").replaceAll("&amp;", "&"),
+          [...(m[2] ?? "").matchAll(/href="#([^"]+)"/g)].map((h) => h[1] ?? ""),
+        ]);
+
+      test("sits before the body, print-only: hidden on screen, shown in print", () => {
+        const html = render(rich(), { narrative: true });
+        const at = html.indexOf("<nav class=ptoc");
+        expect(at).toBeGreaterThan(-1);
+        expect(at).toBeLessThan(html.indexOf("<main"));
+        expect(html).toMatch(/\n\s*nav\.ptoc\{display:none\}/);
+        expect(html).toMatch(/@media print\{(?:[^{}]*\{[^{}]*\})*?\s*nav\.ptoc\{display:block/);
+        expect(tagBalance(html)).toBe(true);
+      });
+
+      test("same groups and entries as the sidebar: one per section, NAV_GROUPS order", () => {
+        for (const [a, opts] of [
+          [fixture(), {}],
+          [rich(), { narrative: true }],
+          [kitchenSink(), {}],
+        ] as const) {
+          const html = render(a, opts);
+          const outline = tocOutline(html);
+          expect(outline.length).toBeGreaterThan(3);
+          expect(outline).toEqual(navOutline(html));
+          const labels = outline.map(([l]) => l);
+          expect(labels).toEqual(groupLabels.filter((l) => labels.includes(l)));
+          const hrefs = outline.flatMap(([, h]) => h);
+          expect([...hrefs].sort()).toEqual([...sectionIds(html)].sort());
+        }
+      });
+
+      test("every printed link resolves to exactly one element id", () => {
+        const html = render(kitchenSink(), { narrative: true });
+        const hrefs = [...tocHtml(html).matchAll(/href="#([^"]+)"/g)].map((m) => m[1] ?? "");
+        expect(hrefs.length).toBeGreaterThan(40);
+        for (const id of hrefs) {
+          const n = [...html.matchAll(new RegExp(`\\bid="${id}"`, "g"))].length;
+          expect({ id, n }).toEqual({ id, n: 1 });
+        }
+      });
+    });
+
+    test("heading levels give the PDF outline two tiers: group h1 > section h2", () => {
+      const html = render(kitchenSink());
+      const body = html.slice(html.indexOf("<main"));
+      // Group headings are h1, never h2.
+      expect(body).not.toContain("<h2 class=ghead");
+      expect([...body.matchAll(/<h1 class=ghead>/g)].length).toBe(NAV_GROUPS.length);
+      // Every evidence drill title is a real h2 (Chromium builds the outline
+      // from heading elements only), and the old span form is gone.
+      const drills = [...body.matchAll(/<details open id="[^"]+"><summary>(<[^>]+>)/g)];
+      expect(drills.length).toBeGreaterThan(20);
+      for (const m of drills) expect(m[1]).toBe("<h2 class=h2>");
+      expect(body).not.toContain("<span class=h2>");
+      // Finding cards stay one level below their section.
+      expect(body).toMatch(/<div class=fhead>[\s\S]*?<h3>/);
+    });
   });
 
   test("no-PAT header: collapses ref (ref) and drops unknown region/status", () => {
@@ -1339,16 +1406,16 @@ describe("body order follows NAV_GROUPS", () => {
   test("each non-empty group gets one visible body heading, in map order, before its sections", () => {
     const html = render(kitchenSink());
     const b = body(html);
-    const heads = [...b.matchAll(/<h2 class=ghead[^>]*>([^<]*)<\/h2>/g)].map((m) =>
+    const heads = [...b.matchAll(/<h1 class=ghead[^>]*>([^<]*)<\/h1>/g)].map((m) =>
       (m[1] ?? "").replaceAll("&amp;", "&"),
     );
     expect(heads).toEqual(NAV_GROUPS.map((g) => g.label));
     // Every group's first rendered section comes after its heading and before
     // the next group's heading.
     NAV_GROUPS.forEach((g, i) => {
-      const at = b.indexOf(`>${g.label.replaceAll("&", "&amp;")}</h2>`);
+      const at = b.indexOf(`>${g.label.replaceAll("&", "&amp;")}</h1>`);
       const next = NAV_GROUPS[i + 1];
-      const end = next ? b.indexOf(`>${next.label.replaceAll("&", "&amp;")}</h2>`) : b.length;
+      const end = next ? b.indexOf(`>${next.label.replaceAll("&", "&amp;")}</h1>`) : b.length;
       for (const id of g.ids) {
         const p = b.indexOf(`id="${id}"`);
         if (p === -1) continue;
@@ -1363,8 +1430,8 @@ describe("body order follows NAV_GROUPS", () => {
       notes: {},
     };
     const b = body(render(fixture(), { overlay }));
-    expect(b).not.toContain(">Platform services</h2>");
-    expect(body(render(fixture()))).toContain(">Platform services</h2>");
+    expect(b).not.toContain(">Platform services</h1>");
+    expect(body(render(fixture()))).toContain(">Platform services</h1>");
   });
 
   test("no detail lost: section ids, table rows, findings and charts match the pre-regroup render", () => {

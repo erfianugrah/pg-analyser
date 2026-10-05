@@ -24,18 +24,10 @@ export async function htmlToPdf(html: string, outPath: string): Promise<void> {
   const htmlPath = join(dir, "report.html");
   try {
     await Bun.write(htmlPath, html);
-    const proc = Bun.spawn(
-      [
-        chrome,
-        "--headless=new",
-        "--no-sandbox",
-        "--disable-gpu",
-        "--no-pdf-header-footer",
-        `--print-to-pdf=${outPath}`,
-        `file://${htmlPath}`,
-      ],
-      { stdout: "pipe", stderr: "pipe" },
-    );
+    const proc = Bun.spawn(chromePrintArgs(chrome, outPath, htmlPath), {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
     const code = await proc.exited;
     if (code !== 0 || !existsSync(outPath)) {
       const err = await new Response(proc.stderr).text();
@@ -44,6 +36,25 @@ export async function htmlToPdf(html: string, outPath: string): Promise<void> {
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+}
+
+/**
+ * The headless print command line. `--generate-pdf-document-outline` writes
+ * PDF bookmarks from the heading elements (verified on Chromium 153 and
+ * chrome-headless-shell 145-151): the report's group `<h1 class=ghead>` and
+ * section `<h2>` headings become a two-level outline.
+ */
+export function chromePrintArgs(chrome: string, outPath: string, htmlPath: string): string[] {
+  return [
+    chrome,
+    "--headless=new",
+    "--no-sandbox",
+    "--disable-gpu",
+    "--no-pdf-header-footer",
+    "--generate-pdf-document-outline",
+    `--print-to-pdf=${outPath}`,
+    `file://${htmlPath}`,
+  ];
 }
 
 async function findChrome(): Promise<string | null> {

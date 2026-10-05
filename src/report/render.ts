@@ -588,20 +588,25 @@ const sdesc = (html: string): string => (html ? `<p class=sdesc>${html}</p>` : "
  * Report body: each NAV_GROUPS group that has at least one rendered section,
  * as a group heading followed by its sections in map order. This is the only
  * place body order is decided, so it cannot drift from the sidebar. The group
- * heading has no id, so navEntries() never lists it as a section.
+ * heading has no id, so navEntries() never lists it as a section. Groups are
+ * `<h1>` and sections `<h2>` so Chromium's heading-derived PDF outline nests
+ * section bookmarks under their group (styled to look like the old h2).
  */
 export function renderGroups(bySection: Record<SectionId, string>): string {
   return NAV_GROUPS.map((g) => {
     const parts = g.ids.map((id) => bySection[id].trim()).filter(Boolean);
-    return parts.length ? `<h2 class=ghead>${esc(g.label)}</h2>\n${parts.join("\n")}` : "";
+    return parts.length ? `<h1 class=ghead>${esc(g.label)}</h1>\n${parts.join("\n")}` : "";
   })
     .filter(Boolean)
     .join("\n");
 }
 
-/** Collapsible evidence section (open by default so PDF shows everything). */
+/**
+ * Collapsible evidence section (open by default so PDF shows everything). The
+ * title is a real (inline-styled) `<h2>` so it gets a PDF outline entry.
+ */
 function baseDrill(id: SectionId, title: string, note: string, body: string): string {
-  return `<details open id="${id}"><summary><span class=h2>${esc(title)}</span></summary>${sdesc(esc(note))}${body}</details>`;
+  return `<details open id="${id}"><summary><h2 class=h2>${esc(title)}</h2></summary>${sdesc(esc(note))}${body}</details>`;
 }
 
 /** One sidebar entry: an anchor id, its (already-escaped) label, optional count. */
@@ -621,7 +626,7 @@ export interface NavEntry {
  */
 export function navEntries(sectionsHtml: string): NavEntry[] {
   const re =
-    /<h2 id="([^"]+)">([\s\S]*?)<\/h2>|<details open id="([^"]+)"><summary><span class=h2>([^<]*)<\/span>|<div class=narrative id="([^"]+)">/g;
+    /<h2 id="([^"]+)">([\s\S]*?)<\/h2>|<details open id="([^"]+)"><summary><h2 class=h2>([^<]*)<\/h2>|<div class=narrative id="([^"]+)">/g;
   const out: NavEntry[] = [];
   for (const m of sectionsHtml.matchAll(re)) {
     if (m[1] != null) {
@@ -678,17 +683,36 @@ export function navGroups(entries: NavEntry[]): NavGroup[] {
 function navSidebar(entries: NavEntry[]): string {
   if (!entries.length) return "";
   const groups = navGroups(entries)
-    .map((g) => {
-      const items = g.entries
-        .map(
-          (e) =>
-            `<li><a href="#${e.id}"><span>${e.label}</span>${e.count != null ? `<span class=n>${e.count}</span>` : ""}</a></li>`,
-        )
-        .join("");
-      return `<details open class=g><summary>${esc(g.label)}</summary><ol>${items}</ol></details>`;
-    })
+    .map(
+      (g) =>
+        `<details open class=g><summary>${esc(g.label)}</summary><ol>${navItems(g)}</ol></details>`,
+    )
     .join("");
   return `<nav class=rnav aria-label="Report sections"><details open><summary>Contents</summary><div class=gs>${groups}</div></details></nav>`;
+}
+
+/** One group's entries as `<li>` anchor links (shared by sidebar and print contents). */
+function navItems(g: NavGroup): string {
+  return g.entries
+    .map(
+      (e) =>
+        `<li><a href="#${e.id}"><span>${e.label}</span>${e.count != null ? `<span class=n>${e.count}</span>` : ""}</a></li>`,
+    )
+    .join("");
+}
+
+/**
+ * Print-only contents page: the sidebar's groups and entries (same
+ * navGroups() data, so the two cannot disagree) as static anchor links, which
+ * Chromium keeps as internal link annotations in the PDF. No page numbers:
+ * Chromium has no CSS target-counter().
+ */
+function printContents(entries: NavEntry[]): string {
+  if (!entries.length) return "";
+  const groups = navGroups(entries)
+    .map((g) => `<div class=g><div class=gl>${esc(g.label)}</div><ol>${navItems(g)}</ol></div>`)
+    .join("");
+  return `<nav class=ptoc aria-label="Contents"><div class=ph>Contents</div><div class=gs>${groups}</div></nav>`;
 }
 
 const NAV_SCRIPT = `<script>(()=>{
@@ -1717,6 +1741,7 @@ ${capabilitiesSection(a)}`,
       : "",
   };
   const sections = scrollTables(renderGroups(bySection));
+  const nav = navEntries(sections);
 
   return `<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
@@ -1728,17 +1753,19 @@ ${faviconTag(brand)}
   *{box-sizing:border-box}
   body{font:14px/1.45 -apple-system,Segoe UI,Roboto,sans-serif;color:var(--fg);background:var(--bg);margin:0 auto;padding:24px;max-width:1200px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   h1{font-size:20px;margin:0 0 4px}
-  /* Heading hierarchy: group (h2.ghead, heavy rule above) > section (h2 /
-     drill summary, light rule below) > sub-item (.lead). One spacing rhythm:
-     48px before a group, 28px before a section, 12px before a sub-item. */
+  /* Heading hierarchy: group (h1.ghead, heavy rule above) > section (h2 /
+     drill summary h2, light rule below) > sub-item (.lead). One spacing rhythm:
+     48px before a group, 28px before a section, 12px before a sub-item. The
+     h1/h2 levels drive the PDF outline; the look is set here, not by level. */
   h2,.h2{font-size:15px;font-weight:700}
   h2{margin:28px 0 0;padding-bottom:3px;border-bottom:1px solid var(--line)}
   details{margin:28px 0 0}
   summary{border-bottom:1px solid var(--line);padding-bottom:3px;cursor:pointer;list-style-position:inside}
   summary .h2{margin-right:4px}
-  h2.ghead{font-size:19px;margin:48px 0 0;padding:8px 0 0;border-top:3px solid var(--fg);border-bottom:none;letter-spacing:.01em}
-  main>h2.ghead:first-child{margin-top:8px}
-  h2.ghead+h2,h2.ghead+details,h2.ghead+section,h2.ghead+div{margin-top:14px}
+  summary h2.h2{display:inline;margin:0 4px 0 0;padding:0;border:none}
+  h1.ghead{font-size:19px;font-weight:700;margin:48px 0 0;padding:8px 0 0;border-top:3px solid var(--fg);border-bottom:none;letter-spacing:.01em}
+  main>h1.ghead:first-child{margin-top:8px}
+  h1.ghead+h2,h1.ghead+details,h1.ghead+section,h1.ghead+div{margin-top:14px}
   .sdesc{margin:5px 0 8px;color:var(--mut);font-size:12.5px;line-height:1.45;max-width:120ch}
   .meta{color:var(--mut);font-size:12px;margin-bottom:8px}
   .meta code{background:var(--code);padding:1px 4px;border-radius:2px}
@@ -1878,9 +1905,20 @@ ${faviconTag(brand)}
     nav.rnav .gs{columns:3 170px;column-gap:16px}
     nav.rnav details.g:first-child{margin-top:0}
   }
+  /* --- printed contents page (print only; screen has the sidebar) --- */
+  nav.ptoc{display:none}
   @page{size:A4;margin:14mm 12mm}
   @media print{
     nav.rnav{display:none}
+    nav.ptoc{display:block;break-after:page;margin:14px 0 0;font-size:12px;line-height:1.3}
+    nav.ptoc .ph{font-size:16px;font-weight:700;padding:8px 0 0;border-top:3px solid var(--fg);margin:0 0 10px}
+    nav.ptoc .gs{columns:3;column-gap:20px}
+    nav.ptoc .g{break-inside:avoid;margin:0 0 12px}
+    nav.ptoc .gl{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--mut);border-bottom:1px solid var(--line);padding:0 0 2px;margin:0 0 3px}
+    nav.ptoc ol{list-style:none;margin:0;padding:0}
+    nav.ptoc li{break-inside:avoid}
+    nav.ptoc a{display:flex;justify-content:space-between;gap:6px;padding:1px 0}
+    nav.ptoc .n{color:var(--mut);font-variant-numeric:tabular-nums}
     /* Chromium used to shrink the whole page to fit the widest table (an
        unwrappable header row); with tables now fitting the page width, keep
        that same print density explicitly instead of by accident. */
@@ -1888,7 +1926,7 @@ ${faviconTag(brand)}
     h1{font-size:17px}
     /* keep a heading with the content that follows it */
     h1,h2,.h2,summary,.sdesc,.lead{break-after:avoid;page-break-after:avoid;break-inside:avoid}
-    h2.ghead{font-size:16px;margin-top:30px}
+    h1.ghead{font-size:16px;margin-top:30px}
     .tw{overflow:visible}
     /* repeat table headers on every page a long table spans */
     thead{display:table-header-group}
@@ -1911,8 +1949,9 @@ ${brandHead(brand, "Supabase performance report")}
     `pg-analyser <code>${esc(m.sbperfVersion)}</code>`,
   ])}</div>
 ${banner}
+${printContents(nav)}
 <div class=layout>
-${navSidebar(navEntries(sections))}
+${navSidebar(nav)}
 <main>
 ${sections}
 <p class=meta style="margin-top:32px">Data sources: ${
