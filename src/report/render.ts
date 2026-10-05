@@ -87,25 +87,53 @@ function sqlTable(
   // snake_case identifier (schema.table_name) wraps at natural points instead
   // of one character per line when its column is squeezed in the PDF.
   const breakableMono = (v: unknown) => esc(v).replace(/([._-])/g, "$1<wbr>");
-  const th = cols.map((c) => `<th>${esc(c)}</th>`).join("");
-  const body = shown
-    .map(
-      (r) =>
-        "<tr>" +
-        cols
-          .map((c) =>
-            mono.has(c) ? `<td class=mono>${breakableMono(r[c])}</td>` : `<td>${esc(r[c])}</td>`,
-          )
-          .join("") +
-        "</tr>",
-    )
+  // Right-align columns whose every shown value is a number (or a number with a
+  // size/percent/time unit) so magnitudes line up for scanning.
+  const num = new Set(cols.filter((c) => !mono.has(c) && isNumericColumn(shown, c)));
+  // Header names are snake_case; let them break after "_" instead of forcing
+  // the column (and the page) wider than its values need.
+  const th = cols
+    .map((c) => `<th${num.has(c) ? " class=num" : ""}>${esc(c).replace(/_/g, "_<wbr>")}</th>`)
     .join("");
+  const cell = (c: string, v: unknown): string => {
+    if (mono.has(c)) {
+      // Long text (query, definition) gets a wider minimum so it wraps into a
+      // readable block instead of a narrow column of fragments.
+      const wide = String(v ?? "").length > 60 ? " wide" : "";
+      return `<td class="mono${wide}">${breakableMono(v)}</td>`;
+    }
+    return num.has(c) ? `<td class=num>${esc(v)}</td>` : `<td>${esc(v)}</td>`;
+  };
+  const body = shown.map((r) => `<tr>${cols.map((c) => cell(c, r[c])).join("")}</tr>`).join("");
   const more =
     opts.limit && rows.length > opts.limit
       ? `<p class=empty>+${rows.length - opts.limit} more rows</p>`
       : "";
   return `<table><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table>${more}`;
 }
+
+/** A cell value that reads as a quantity: 12, 1,024, 3.5%, 12 ms, 1.2 GB. */
+const NUMERIC_CELL = /^-?\d[\d,]*(\.\d+)?\s?(%|ms|s|x|bytes|B|kB|KB|MB|GB|TB)?$/;
+
+/** True when every non-empty value of `col` is numeric (and at least one is). */
+function isNumericColumn(rows: SqlRow[], col: string): boolean {
+  let seen = false;
+  for (const r of rows) {
+    const v = r[col];
+    if (v == null || v === "" || v === "-") continue;
+    if (typeof v === "boolean" || typeof v === "object") return false;
+    if (typeof v !== "number" && !NUMERIC_CELL.test(String(v).trim())) return false;
+    seen = true;
+  }
+  return seen;
+}
+
+/**
+ * Put every table in a horizontal scroll box, so a table wider than the
+ * viewport scrolls inside its own box instead of widening the whole page.
+ */
+const scrollTables = (html: string): string =>
+  html.replace(/<table\b/g, "<div class=tw><table").replace(/<\/table>/g, "</table></div>");
 
 /** A single inline-SVG horizontal bar (self-contained, print-safe). */
 function barSvg(frac: number): string {
@@ -342,13 +370,16 @@ function apiVolumeSummary(a: Analysis): string {
   const grand = services.reduce((sum, [name]) => sum + (totals[name] ?? 0), 0);
   const cells = services
     .filter(([name]) => (totals[name] ?? 0) > 0)
-    .map(([name]) => `<tr><td>${name}</td><td>${(totals[name] ?? 0).toLocaleString()}</td></tr>`)
+    .map(
+      ([name]) =>
+        `<tr><td>${name}</td><td class=num>${(totals[name] ?? 0).toLocaleString()}</td></tr>`,
+    )
     .join("");
   const peakLine =
     peak.total > 0
       ? `<p class=note>Peak bucket: ${esc(peak.ts)} - ${peak.total.toLocaleString()} requests.</p>`
       : "";
-  return `<p class=note>${grand.toLocaleString()} total requests over the collected window (${rows.length} buckets).</p><table><thead><tr><th>service</th><th>requests</th></tr></thead><tbody>${cells}</tbody></table>${peakLine}`;
+  return `<p class=note>${grand.toLocaleString()} total requests over the collected window (${rows.length} buckets).</p><table><thead><tr><th>service</th><th class=num>requests</th></tr></thead><tbody>${cells}</tbody></table>${peakLine}`;
 }
 
 const fmtVal = (v: number, unit: string): string =>
@@ -431,6 +462,9 @@ function trendSourceLabel(a: Analysis): string {
   }
 }
 
+const TRENDS_NOTE =
+  "infra over time - read for headroom vs cost (over-provisioned = downsize, near-ceiling = upsize). Single-point series show a marker until more snapshots accrue.";
+
 function trendsSection(a: Analysis): string {
   if (!a.trends.length) {
     // Trends can be empty for two very different reasons: nothing was ever
@@ -444,11 +478,11 @@ function trendsSection(a: Analysis): string {
     // it here instead, next to where the charts would have been.
     const failure = a.errors.find((e) => e.source === "trends");
     if (!failure) return "";
-    return `<h2 id="trends">Resource snapshot <span class=note>infra over time - read for headroom vs cost (over-provisioned = downsize, near-ceiling = upsize). Single-point series show a marker until more snapshots accrue.</span></h2>
+    return `<h2 id="trends">Resource snapshot</h2>${sdesc(TRENDS_NOTE)}
 <p class=empty>${esc(failure.message)}</p>`;
   }
   const src = trendSourceLabel(a);
-  const srcNote = src ? ` <span class=note>Source: ${src}.</span>` : "";
+  const srcNote = src ? ` Source: ${src}.` : "";
   // EBS burst-balance is a CloudWatch-only metric (not on the Supabase metrics
   // endpoint or the history store), so those panels are absent unless a
   // CloudWatch-scraping Prometheus fed the trends. Say so when they're missing
@@ -458,7 +492,7 @@ function trendsSection(a: Analysis): string {
     !hasEbs && (a.meta.trendSource === "store" || a.meta.trendSource === "prometheus")
       ? `<p class=note>EBS burst-balance (IOPS / throughput) panels are shown only when a CloudWatch-scraping Prometheus feeds the trends - they are not exposed by the Supabase metrics endpoint or the history store, so their absence here is not a health signal.</p>`
       : "";
-  return `<h2 id="trends">Resource snapshot <span class=note>infra over time - read for headroom vs cost (over-provisioned = downsize, near-ceiling = upsize). Single-point series show a marker until more snapshots accrue.</span>${srcNote}</h2>
+  return `<h2 id="trends">Resource snapshot</h2>${sdesc(TRENDS_NOTE + srcNote)}
 <div class=sparks>${a.trends.map(sparkline).join("")}</div>${ebsNote}`;
 }
 
@@ -492,8 +526,8 @@ function positivesSection(positives: Positive[]): string {
  * which group a section belongs to: `drill()` only accepts a `SectionId`, so a
  * new evidence drill does not typecheck until it is classified here, and a
  * render test scans this file so a new id'd `<h2>` fails until it is too.
- * Groups render in this order; members keep report (document) order. The body
- * order of the report is independent of this map.
+ * It is also the body order: renderGroups() emits groups in this order and
+ * members in the order listed, so sidebar order equals page order.
  */
 export const NAV_GROUPS = [
   { label: "Overview", ids: ["summary", "trends", "healthy", "findings", "evidence"] },
@@ -547,9 +581,27 @@ export const NAV_GROUPS = [
 /** Any section anchor id the contents sidebar knows how to group. */
 export type SectionId = (typeof NAV_GROUPS)[number]["ids"][number];
 
+/** One-line section description, set as its own paragraph under the heading. */
+const sdesc = (html: string): string => (html ? `<p class=sdesc>${html}</p>` : "");
+
+/**
+ * Report body: each NAV_GROUPS group that has at least one rendered section,
+ * as a group heading followed by its sections in map order. This is the only
+ * place body order is decided, so it cannot drift from the sidebar. The group
+ * heading has no id, so navEntries() never lists it as a section.
+ */
+export function renderGroups(bySection: Record<SectionId, string>): string {
+  return NAV_GROUPS.map((g) => {
+    const parts = g.ids.map((id) => bySection[id].trim()).filter(Boolean);
+    return parts.length ? `<h2 class=ghead>${esc(g.label)}</h2>\n${parts.join("\n")}` : "";
+  })
+    .filter(Boolean)
+    .join("\n");
+}
+
 /** Collapsible evidence section (open by default so PDF shows everything). */
 function baseDrill(id: SectionId, title: string, note: string, body: string): string {
-  return `<details open id="${id}"><summary><span class=h2>${esc(title)}</span>${note ? ` <span class=note>${esc(note)}</span>` : ""}</summary>${body}</details>`;
+  return `<details open id="${id}"><summary><span class=h2>${esc(title)}</span></summary>${sdesc(esc(note))}${body}</details>`;
 }
 
 /** One sidebar entry: an anchor id, its (already-escaped) label, optional count. */
@@ -1057,7 +1109,7 @@ export function render(
   const brand = opts.brand ?? DEFAULT_BRAND;
   const overlay = opts.overlay ?? EMPTY_OVERLAY;
   // Local drill: honour the reviewer overlay (hide sections, append notes)
-  // while leaving the 22 call sites in the template unchanged.
+  // at one choke-point for every evidence drill below.
   const drill = (id: SectionId, title: string, note: string, body: string): string => {
     // A hidden section is dropped entirely - any note keyed to it goes with it.
     if (overlay.hide.has(id)) return "";
@@ -1197,8 +1249,13 @@ export function render(
   const statsWindow = a.sql.statsResetAge ? ` (over ${a.sql.statsResetAge.split(".")[0]})` : "";
   const outliersNote = `top 5 by share of DB time - app workload only; platform, migration, DDL and transaction-control statements filtered out${statsWindow}`;
   const verdict = computeVerdict(findings, degraded);
-  const sections = `
-<section class=tldr>
+  // Every report section, produced by id. The body emits them in NAV_GROUPS
+  // order (group by group, members in map order) under a heading per group,
+  // so page order and the contents sidebar are one ordering. Keyed by
+  // SectionId, so a new map id does not typecheck until it has a producer
+  // here. "" = not rendered (data-gated, hidden by the overlay, or empty).
+  const bySection: Record<SectionId, string> = {
+    summary: `<section class=tldr>
   <div class="verdict ${verdict.cls}">${esc(verdict.text)}</div>
   <div class=scorecard>
     <div class=sc-main>
@@ -1214,23 +1271,17 @@ ${execSummarySection(findings, positives, degraded, narrativeHtml)}${
     ? `
 <section class="overlay-note">${mdToHtml(overlay.notes.top)}</section>`
     : ""
-}
-
-${trendsSection(a)}
-
-${positivesSection(positives)}
-
-<h2 id="findings">Findings worth addressing <span class=count>${findings.length}</span></h2>
-${auditFindings(findings, degraded)}
-
-<h2 id="evidence">Evidence &amp; drill-down</h2>
-<p class=note>Substantiating data for every finding above - each finding's "Evidence" link lands in one of these sections.</p>
-
-<h2 id="capabilities">Capabilities</h2>
-<p class=note>Optional Postgres features, detected from the database - shown whether in use or not.</p>
-${capabilitiesSection(a)}
-
-<h2 id="infra">Infrastructure</h2>
+}`,
+    trends: trendsSection(a),
+    healthy: positivesSection(positives),
+    findings: `<h2 id="findings">Findings worth addressing <span class=count>${findings.length}</span></h2>
+${auditFindings(findings, degraded)}`,
+    evidence: `<h2 id="evidence">Evidence &amp; drill-down</h2>
+${sdesc(`Substantiating data for every finding above - each finding's "Evidence" link lands in one of these sections.`)}`,
+    capabilities: `<h2 id="capabilities">Capabilities</h2>
+${sdesc("Optional Postgres features, detected from the database - shown whether in use or not.")}
+${capabilitiesSection(a)}`,
+    infra: `<h2 id="infra">Infrastructure</h2>
 <table class=kv>
   <tr><td>Postgres version</td><td class=mono>${esc(m.pgVersion)}</td><td>${upgradeNote}</td></tr>
   <tr><td>Disk</td><td class=mono>${diskLine}</td><td>${diskUsed}${autoscaleLine ? `<br><span class=note>${autoscaleLine}</span>` : ""}${modifiableLine ? `<br><span class=note>${modifiableLine}</span>` : ""}</td></tr>
@@ -1243,103 +1294,429 @@ ${capabilitiesSection(a)}
   <tr><td>Cache hit (index)</td><td class=mono>${a.sql.indexHitPct == null ? "-" : `${a.sql.indexHitPct}%`}</td><td>${a.sql.indexHitPct != null && a.sql.indexHitPct < 99 ? '<span class="badge warn">below 99%</span>' : ""}</td></tr>
   <tr><td>Stats window</td><td class=mono>${esc(a.sql.statsResetAge ? a.sql.statsResetAge.split(".")[0] : "-")}</td><td class=note>pg_stat_statements age; cache-hit/outliers are relative to this</td></tr>
   <tr><td>Table stats window</td><td class=mono>${esc(a.sql.tableStatsResetAge ? a.sql.tableStatsResetAge.split(".")[0] : "not recorded (never reset)")}</td><td class=note>pg_stat_database reset; unused-index / dead-tuple / cache-hit signals are relative to this. Null = counters never explicitly reset (accumulating since stats init)</td></tr>
-</table>
-
-<h2 id="config">PG tuning params</h2>${errored.has("sql:pgSettings") ? '<p class="empty warn-text">not collected</p>' : pgSettingsTable(a.sql.pgSettings)}
-
-${drill("rls", "RLS policies", "auth.*() should be wrapped: (select auth.uid())", errored.has("sql:rlsPolicies") ? '<p class="empty warn-text">not collected - see notes</p>' : rlsTable(a.sql.rlsPolicies))}
-
-${drill("seccfg", "Security configuration", "auth policy, network restrictions, SSL enforcement (Management API)", securityConfigSection(a))}
-
-${a.sql.hbaRules.length ? drill("hba", "Host-based auth (pg_hba)", "pg_hba_file_rules (superuser SQL); auth method per source. trust/password/ident from a non-loopback address is a real risk - SSL posture is proxy-terminated and not shown here", sqlTable(a.sql.hbaRules, { mono: ["address", "user_name"] })) : ""}
-
-<h2 id="adv-perf">Advisors - performance <span class=count>${a.advisors.performance.length}</span></h2>${errored.has("advisors:performance") ? '<p class="empty warn-text">not collected</p>' : advisorTable(a.advisors.performance)}
-<h2 id="adv-sec">Advisors - security <span class=count>${a.advisors.security.length}</span></h2>${errored.has("advisors:security") ? '<p class="empty warn-text">not collected</p>' : advisorTable(a.advisors.security)}
-
-${drill("outliers", "Query outliers", outliersNote, chartFor(a.sql.topStatements, errored.has("sql:topStatements"), { labelKey: "query", valueKey: "pct", display: (r) => `${r.pct}% (${r.total_ms}ms)`, limit: 5 }) + sec(a.sql.topStatements, "sql:topStatements", { mono: ["query"], hide: ["queryid"], limit: 5 }))}
-${drill("calls", "Most-frequent queries", "top 5 by call count - chatty / hot-path app workload (platform/migration/DDL noise filtered)", chartFor(a.sql.topByCalls, errored.has("sql:topByCalls"), { labelKey: "query", valueKey: "pct_calls", display: (r) => `${r.pct_calls}% (${r.calls} calls)`, limit: 5 }) + sec(a.sql.topByCalls, "sql:topByCalls", { mono: ["query"], hide: ["queryid"], limit: 5 }))}
-${drill("tables", "Biggest tables", "by total relation size (heap + indexes + TOAST); TOAST is out-of-line storage for oversized values (large JSON/blob/vectors)", sec(a.sql.biggestTables, "sql:biggestTables", { mono: ["table"], hide: ["schema", "total_bytes", "index_bytes", "toast_bytes"], limit: 20 }))}
-${drill("extensions", "Extensions", "installed extensions + versions; pgvector ANN-index health", errored.has("sql:extensions") ? '<p class="empty warn-text">not collected</p>' : extensionsSection(a))}
-${drill("unused", "Index usage", "all indexes by size; unused = never scanned, non-constraint", sec(a.sql.indexStats, "sql:indexStats", { mono: ["index", "table"], hide: ["schema"] }))}
-${drill("dupidx", "Duplicate indexes", "identical index definitions on one table - keep one, drop the rest", errored.has("sql:duplicateIndexes") ? '<p class="empty warn-text">not collected</p>' : a.sql.duplicateIndexes.length ? sqlTable(a.sql.duplicateIndexes, { mono: ["indexes"], hide: ["schema"] }) : "<p class=empty>none found</p>")}
-${drill("rlsunindexed", "RLS columns without an index", "policy-compared column with no covering index -> seq scan per row check", errored.has("sql:rlsUnindexed") ? '<p class="empty warn-text">not collected</p>' : a.sql.rlsUnindexed.length ? sqlTable(a.sql.rlsUnindexed, { mono: ["table", "column"], hide: ["schema"] }) : "<p class=empty>none found</p>")}
-${drill("rlsdeps", "RLS policy dependencies", "tables/functions each policy's USING/WITH CHECK references (pg_depend); self-reference is detected from the policy text (42P17 recursion), a table dep means no security-definer wrapper", errored.has("sql:rlsPolicyDeps") ? '<p class="empty warn-text">not collected</p>' : a.sql.rlsPolicyDeps.length ? sqlTable(a.sql.rlsPolicyDeps, { mono: ["table", "policy", "dep"], hide: ["permissive", "cmd", "dep_rls", "dep_volatility", "dep_sec_def"] }) : "<p class=empty>no cross-table or function dependencies</p>")}
-${drill("seqscan", "Sequential-scan heavy", "seq_scan > idx_scan, >1k rows", sec(a.sql.seqScanHeavy, "sql:seqScanHeavy", { mono: ["table"], hide: ["schema"] }))}
-${a.sql.fkUnindexed.length ? drill("fkunindexed", "Unindexed foreign keys", "FK referencing columns with no covering index - seq scan of the child on every parent UPDATE/DELETE", sqlTable(a.sql.fkUnindexed, { mono: ["table", "constraint", "definition"], hide: ["schema"] })) : ""}
-${a.sql.invalidIndexes.length ? drill("invalididx", "Invalid indexes", "failed CONCURRENTLY builds - ignored by the planner but still write overhead; drop + rebuild", sqlTable(a.sql.invalidIndexes, { mono: ["index", "table"], hide: ["schema"] })) : ""}
-${a.sql.managedNoPk.length ? drill("managednopk", "Managed-schema tables missing a primary key", "auth/storage tables with no PK - their constraints/indexes were dropped (botched migration or auth-schema takeover); rebuild the primary key + unique/FK constraints", sqlTable(a.sql.managedNoPk, { mono: ["table"], hide: ["schema"] })) : ""}
-${a.sql.visibilityMap.length ? drill("visibilitymap", "Visibility-map readiness", "large tables with a low all-visible page fraction (relallvisible/relpages) - index-only scans still hit the heap; vacuum to refresh", sqlTable(a.sql.visibilityMap, { mono: ["table"], hide: ["schema"] })) : ""}
-${drill("bloat", "Estimated bloat", "reclaimable wasted space (pg_stats estimate)", sec(a.sql.bloat, "sql:bloat", { mono: ["name"], hide: ["waste_bytes"] }))}
-${a.sql.bloatExact.length ? drill("bloatexact", "Measured bloat (pgstattuple)", "exact dead-tuple + free-space bytes on the biggest tables (pgstattuple_approx; superuser + extension installed)", sec(a.sql.bloatExact, "sql:bloatExact", { mono: ["name"], hide: ["total_bytes", "dead_bytes", "free_bytes", "reclaimable_bytes"] })) : ""}
-${drill("traffic", "Read/write profile", "per-table read-heavy vs write-heavy", sec(a.sql.trafficProfile, "sql:trafficProfile", { mono: ["table"] }))}
-${a.sql.tableIoStats.length ? drill("tableio", "Per-table I/O (cache hit)", "heap/index/TOAST blocks read-from-disk vs served-from-cache, per table (pg_statio); low TOAST hit% + high toast reads = de-toasting an out-of-line column from disk every scan", sec(a.sql.tableIoStats, "sql:tableIoStats", { mono: ["table"], hide: ["schema"] })) : ""}
-${drill("deadtuples", "Dead tuples / autovacuum", "overdue = dead tuples past the table's autovacuum threshold", sec(a.sql.deadTuples, "sql:deadTuples", { mono: ["table"], hide: ["schema"] }))}
-${a.sql.neverVacuumed.length ? drill("nevervacuumed", "No vacuum on record", "tables with no vacuum in the cumulative-stats window (>=10k rows) - no visibility map, stale planner stats", sqlTable(a.sql.neverVacuumed, { mono: ["table"], hide: ["schema"] })) : ""}
-${a.sql.hotUpdates.length ? drill("hotupdates", "Low HOT-update ratio", "high-update tables where few UPDATEs were HOT (heap-only) - each non-HOT update adds an entry to every index and leaves a dead heap tuple; caused by an updated column that is indexed, or full pages (fillfactor)", sqlTable(a.sql.hotUpdates, { mono: ["table"], hide: ["schema"] })) : ""}
-${show.roles ? drill("roles", "Role connection usage", "active connections vs each role's limit - which service (PostgREST, Storage, pooler) holds the connections", sec(a.sql.roleStats, "sql:roleStats", { mono: ["role"] })) : ""}
-${
-  show.txid
-    ? drill(
-        "txid",
-        "Transaction-ID wraparound",
-        "age(relfrozenxid) and datfrozenxid vs 2B ceiling; shown when a table or the database approaches the wraparound threshold",
-        errored.has("sql:txidWraparound") || errored.has("sql:databaseFreezeAge")
-          ? `<p class="empty warn-text">not collected - see notes</p>`
-          : (() => {
-              const parts: string[] = [];
-              if (a.sql.databaseFreezeAge.length) {
-                const body = a.sql.databaseFreezeAge
-                  .map(
-                    (r) =>
-                      `<tr><td class=mono>${esc(r.datname)}</td><td class=mono>${esc(r.xid_age ?? "-")}</td><td class=mono>${esc(r.remaining ?? "-")}</td><td class=mono>${esc(r.mxid_age ?? "-")}</td></tr>`,
-                  )
-                  .join("");
-                parts.push(
-                  `<p class=lead>Database freeze age</p><table><thead><tr><th>database</th><th>xid_age</th><th>remaining</th><th>mxid_age</th></tr></thead><tbody>${body}</tbody></table>`,
-                );
-              }
-              if (a.sql.txidWraparound.length) {
-                const body = a.sql.txidWraparound
-                  .map(
-                    (r) =>
-                      `<tr><td class=mono>${esc(r.table)}</td><td class=mono>${esc(r.xid_age ?? "-")}</td><td class=mono>${esc(r.remaining ?? "-")}</td><td class=mono>${esc(r.toast_age ?? "-")}</td></tr>`,
-                  )
-                  .join("");
-                parts.push(
-                  `<p class=lead>Table wraparound ages</p><table><thead><tr><th>table</th><th>xid_age</th><th>remaining</th><th>toast_age</th></tr></thead><tbody>${body}</tbody></table>`,
-                );
-              }
-              return parts.length
-                ? parts.join("\n")
-                : `<p class=empty>no tables or database approaching wraparound</p>`;
-            })(),
-      )
-    : ""
-}
-${a.sql.multixactWraparound.length ? drill("multixact", "Multixact-ID wraparound", "mxid_age(relminmxid) vs its own 2B ceiling - consumed by heavy row locking, separate from txid", sqlTable(a.sql.multixactWraparound, { mono: ["table"], hide: ["schema"] })) : ""}
-${a.sql.sequenceExhaustion.length ? drill("sequences", "Sequence exhaustion", "int4/serial sequences approaching their 2^31 ceiling - a hard INSERT failure when full", sqlTable(a.sql.sequenceExhaustion, { mono: ["sequence"], hide: ["schema"] })) : ""}
-${show.slots ? drill("slots", "Replication slots", "retained WAL; inactive slots pin disk", sqlTable(a.sql.replicationSlots, { mono: ["slot_name"], hide: ["retained_wal_bytes"] })) : ""}
-${show.xmin ? drill("xmin", "Transaction-ID horizon blockers", "replication slots, prepared transactions, active backends, standby feedback holding old xmin/xid - must be cleared before the freeze horizon advances", xminHoldersSection(a)) : ""}
-${show.walarchiving ? drill("walarchiving", "WAL archiving", "pg_stat_archiver + archive_mode (superuser SQL); continuous WAL shipping is the mechanism PITR relies on - inferred here, not the platform add-on flag", sqlTable(a.sql.walArchiving, { mono: ["last_archived_wal"] })) : ""}
-${a.sql.queryIoStats.length ? drill("queryio", "Query I/O + latency stability", "per-query temp-file spill (work_mem), disk-read miss %, and latency variation (stddev/mean) - the depth top-by-time misses", sqlTable(a.sql.queryIoStats, { mono: ["query"], hide: ["queryid", "temp_blks_written", "shared_blks_read"] })) : ""}
-${a.sql.topByWal.length ? drill("walbystatement", "WAL by statement", "top WAL-generating statements (pg_stat_statements.wal_bytes) - write-amplification attribution", sqlTable(a.sql.topByWal, { mono: ["query"], hide: ["queryid", "wal_bytes"] })) : ""}
-${a.sql.jitTopStatements.length ? drill("jit", "JIT compilation share", "statements paying LLVM jit generation+emission time (pg_stat_statements jit_*, PG15+) - pure overhead on short OLTP queries", sqlTable(a.sql.jitTopStatements, { mono: ["query"], hide: ["queryid", "total_ms"] })) : ""}
-${a.sql.checkpointer.length ? drill("checkpointer", "Checkpoints", "cumulative timed vs requested (WAL-forced) checkpoints - requested share high = max_wal_size undersized; PG17+ reads pg_stat_checkpointer, earlier pg_stat_bgwriter", sqlTable(a.sql.checkpointer, {})) : ""}
-${a.sql.ioByBackend.length ? drill("iobackend", "I/O by backend type", "who does the reads/writes/fsyncs (pg_stat_io, PG16+) - client vs checkpointer vs bgwriter vs autovacuum; time columns need track_io_timing=on", sqlTable(a.sql.ioByBackend, { mono: ["backend_type"] })) : ""}
-${drill("connections", "Connections", "by state", sec(a.sql.connections, "sql:connections"))}
-${a.pooler?.length ? drill("pooler", "Connection pooler (Supavisor)", "configured pool mode / size per database; route app traffic here (transaction mode, port 6543) instead of direct connections", poolerSection(a)) : ""}
-${show.longrunning ? drill("longrunning", "Long-running queries", "point-in-time snapshot: running > 5 min at collection", sqlTable(a.sql.longRunning, { mono: ["query"] })) : ""}
-${show.locks ? drill("locks", "Exclusive locks", "point-in-time snapshot: relation-level strong locks at collection", sqlTable(a.sql.locks, { mono: ["query", "relation"] })) : ""}
-${show.lockwave ? drill("lockwave", "Lock-wait log (retrospective)", "per-minute buckets parsed from server logs: waits, timeout cancels, deadlocks - the only on-box record of a transient lock-queue cascade, separate from the live snapshot above", sqlTable(a.sql.lockWave!.buckets, {})) : ""}
-${show.blocking ? drill("blocking", "Blocking chains", "point-in-time snapshot at collection", sqlTable(a.sql.blocking, { mono: ["blocked_query", "blocking_query"] })) : ""}
-${drill("functions", "Edge functions", "invocation stats over the last day", functionsSection(a))}
-${drill("storage", "Storage", "buckets + object usage", storageSection(a))}
-${a.sql.authAudit.length ? drill("auth", "Auth adoption", "users, confirmed, 30-day active, MFA-enrolled (from the auth schema; complements the auth policy config)", authSection(a)) : ""}
-${a.sql.cronJobs.length ? drill("cron", "Scheduled jobs (pg_cron)", "schedule + 7-day run health per job (failed runs surfaced as a finding)", sqlTable(a.sql.cronJobs, { mono: ["jobname", "schedule"] })) : ""}
-${show.apivol ? drill("apivol", "API request volume", "rolled up over the collected window; peak bucket noted", errored.has("apiCounts") ? '<p class="empty warn-text">not collected</p>' : apiVolumeSummary(a)) : ""}
-${drill("metrics", "Infra metrics", "scrape status + how to build history", metricsStatus(a))}
-${a.errors.length ? `<h2 id="notes">Collection notes <span class=count>${a.errors.length}</span></h2>${collectionNotes(a)}` : ""}
-`;
+</table>`,
+    config: `<h2 id="config">PG tuning params</h2>${errored.has("sql:pgSettings") ? '<p class="empty warn-text">not collected</p>' : pgSettingsTable(a.sql.pgSettings)}`,
+    seccfg: drill(
+      "seccfg",
+      "Security configuration",
+      "auth policy, network restrictions, SSL enforcement (Management API)",
+      securityConfigSection(a),
+    ),
+    hba: a.sql.hbaRules.length
+      ? drill(
+          "hba",
+          "Host-based auth (pg_hba)",
+          "pg_hba_file_rules (superuser SQL); auth method per source. trust/password/ident from a non-loopback address is a real risk - SSL posture is proxy-terminated and not shown here",
+          sqlTable(a.sql.hbaRules, { mono: ["address", "user_name"] }),
+        )
+      : "",
+    extensions: drill(
+      "extensions",
+      "Extensions",
+      "installed extensions + versions; pgvector ANN-index health",
+      errored.has("sql:extensions")
+        ? '<p class="empty warn-text">not collected</p>'
+        : extensionsSection(a),
+    ),
+    "adv-perf": `<h2 id="adv-perf">Advisors - performance <span class=count>${a.advisors.performance.length}</span></h2>${errored.has("advisors:performance") ? '<p class="empty warn-text">not collected</p>' : advisorTable(a.advisors.performance)}`,
+    "adv-sec": `<h2 id="adv-sec">Advisors - security <span class=count>${a.advisors.security.length}</span></h2>${errored.has("advisors:security") ? '<p class="empty warn-text">not collected</p>' : advisorTable(a.advisors.security)}`,
+    outliers: drill(
+      "outliers",
+      "Query outliers",
+      outliersNote,
+      chartFor(a.sql.topStatements, errored.has("sql:topStatements"), {
+        labelKey: "query",
+        valueKey: "pct",
+        display: (r) => `${r.pct}% (${r.total_ms}ms)`,
+        limit: 5,
+      }) +
+        sec(a.sql.topStatements, "sql:topStatements", {
+          mono: ["query"],
+          hide: ["queryid"],
+          limit: 5,
+        }),
+    ),
+    calls: drill(
+      "calls",
+      "Most-frequent queries",
+      "top 5 by call count - chatty / hot-path app workload (platform/migration/DDL noise filtered)",
+      chartFor(a.sql.topByCalls, errored.has("sql:topByCalls"), {
+        labelKey: "query",
+        valueKey: "pct_calls",
+        display: (r) => `${r.pct_calls}% (${r.calls} calls)`,
+        limit: 5,
+      }) +
+        sec(a.sql.topByCalls, "sql:topByCalls", { mono: ["query"], hide: ["queryid"], limit: 5 }),
+    ),
+    queryio: a.sql.queryIoStats.length
+      ? drill(
+          "queryio",
+          "Query I/O + latency stability",
+          "per-query temp-file spill (work_mem), disk-read miss %, and latency variation (stddev/mean) - the depth top-by-time misses",
+          sqlTable(a.sql.queryIoStats, {
+            mono: ["query"],
+            hide: ["queryid", "temp_blks_written", "shared_blks_read"],
+          }),
+        )
+      : "",
+    walbystatement: a.sql.topByWal.length
+      ? drill(
+          "walbystatement",
+          "WAL by statement",
+          "top WAL-generating statements (pg_stat_statements.wal_bytes) - write-amplification attribution",
+          sqlTable(a.sql.topByWal, { mono: ["query"], hide: ["queryid", "wal_bytes"] }),
+        )
+      : "",
+    jit: a.sql.jitTopStatements.length
+      ? drill(
+          "jit",
+          "JIT compilation share",
+          "statements paying LLVM jit generation+emission time (pg_stat_statements jit_*, PG15+) - pure overhead on short OLTP queries",
+          sqlTable(a.sql.jitTopStatements, { mono: ["query"], hide: ["queryid", "total_ms"] }),
+        )
+      : "",
+    traffic: drill(
+      "traffic",
+      "Read/write profile",
+      "per-table read-heavy vs write-heavy",
+      sec(a.sql.trafficProfile, "sql:trafficProfile", { mono: ["table"] }),
+    ),
+    rls: drill(
+      "rls",
+      "RLS policies",
+      "auth.*() should be wrapped: (select auth.uid())",
+      errored.has("sql:rlsPolicies")
+        ? '<p class="empty warn-text">not collected - see notes</p>'
+        : rlsTable(a.sql.rlsPolicies),
+    ),
+    rlsunindexed: drill(
+      "rlsunindexed",
+      "RLS columns without an index",
+      "policy-compared column with no covering index -> seq scan per row check",
+      errored.has("sql:rlsUnindexed")
+        ? '<p class="empty warn-text">not collected</p>'
+        : a.sql.rlsUnindexed.length
+          ? sqlTable(a.sql.rlsUnindexed, { mono: ["table", "column"], hide: ["schema"] })
+          : "<p class=empty>none found</p>",
+    ),
+    rlsdeps: drill(
+      "rlsdeps",
+      "RLS policy dependencies",
+      "tables/functions each policy's USING/WITH CHECK references (pg_depend); self-reference is detected from the policy text (42P17 recursion), a table dep means no security-definer wrapper",
+      errored.has("sql:rlsPolicyDeps")
+        ? '<p class="empty warn-text">not collected</p>'
+        : a.sql.rlsPolicyDeps.length
+          ? sqlTable(a.sql.rlsPolicyDeps, {
+              mono: ["table", "policy", "dep"],
+              hide: ["permissive", "cmd", "dep_rls", "dep_volatility", "dep_sec_def"],
+            })
+          : "<p class=empty>no cross-table or function dependencies</p>",
+    ),
+    tables: drill(
+      "tables",
+      "Biggest tables",
+      "by total relation size (heap + indexes + TOAST); TOAST is out-of-line storage for oversized values (large JSON/blob/vectors)",
+      sec(a.sql.biggestTables, "sql:biggestTables", {
+        mono: ["table"],
+        hide: ["schema", "total_bytes", "index_bytes", "toast_bytes"],
+        limit: 20,
+      }),
+    ),
+    unused: drill(
+      "unused",
+      "Index usage",
+      "all indexes by size; unused = never scanned, non-constraint",
+      sec(a.sql.indexStats, "sql:indexStats", { mono: ["index", "table"], hide: ["schema"] }),
+    ),
+    dupidx: drill(
+      "dupidx",
+      "Duplicate indexes",
+      "identical index definitions on one table - keep one, drop the rest",
+      errored.has("sql:duplicateIndexes")
+        ? '<p class="empty warn-text">not collected</p>'
+        : a.sql.duplicateIndexes.length
+          ? sqlTable(a.sql.duplicateIndexes, { mono: ["indexes"], hide: ["schema"] })
+          : "<p class=empty>none found</p>",
+    ),
+    seqscan: drill(
+      "seqscan",
+      "Sequential-scan heavy",
+      "seq_scan > idx_scan, >1k rows",
+      sec(a.sql.seqScanHeavy, "sql:seqScanHeavy", { mono: ["table"], hide: ["schema"] }),
+    ),
+    fkunindexed: a.sql.fkUnindexed.length
+      ? drill(
+          "fkunindexed",
+          "Unindexed foreign keys",
+          "FK referencing columns with no covering index - seq scan of the child on every parent UPDATE/DELETE",
+          sqlTable(a.sql.fkUnindexed, {
+            mono: ["table", "constraint", "definition"],
+            hide: ["schema"],
+          }),
+        )
+      : "",
+    invalididx: a.sql.invalidIndexes.length
+      ? drill(
+          "invalididx",
+          "Invalid indexes",
+          "failed CONCURRENTLY builds - ignored by the planner but still write overhead; drop + rebuild",
+          sqlTable(a.sql.invalidIndexes, { mono: ["index", "table"], hide: ["schema"] }),
+        )
+      : "",
+    managednopk: a.sql.managedNoPk.length
+      ? drill(
+          "managednopk",
+          "Managed-schema tables missing a primary key",
+          "auth/storage tables with no PK - their constraints/indexes were dropped (botched migration or auth-schema takeover); rebuild the primary key + unique/FK constraints",
+          sqlTable(a.sql.managedNoPk, { mono: ["table"], hide: ["schema"] }),
+        )
+      : "",
+    visibilitymap: a.sql.visibilityMap.length
+      ? drill(
+          "visibilitymap",
+          "Visibility-map readiness",
+          "large tables with a low all-visible page fraction (relallvisible/relpages) - index-only scans still hit the heap; vacuum to refresh",
+          sqlTable(a.sql.visibilityMap, { mono: ["table"], hide: ["schema"] }),
+        )
+      : "",
+    bloat: drill(
+      "bloat",
+      "Estimated bloat",
+      "reclaimable wasted space (pg_stats estimate)",
+      sec(a.sql.bloat, "sql:bloat", { mono: ["name"], hide: ["waste_bytes"] }),
+    ),
+    bloatexact: a.sql.bloatExact.length
+      ? drill(
+          "bloatexact",
+          "Measured bloat (pgstattuple)",
+          "exact dead-tuple + free-space bytes on the biggest tables (pgstattuple_approx; superuser + extension installed)",
+          sec(a.sql.bloatExact, "sql:bloatExact", {
+            mono: ["name"],
+            hide: ["total_bytes", "dead_bytes", "free_bytes", "reclaimable_bytes"],
+          }),
+        )
+      : "",
+    tableio: a.sql.tableIoStats.length
+      ? drill(
+          "tableio",
+          "Per-table I/O (cache hit)",
+          "heap/index/TOAST blocks read-from-disk vs served-from-cache, per table (pg_statio); low TOAST hit% + high toast reads = de-toasting an out-of-line column from disk every scan",
+          sec(a.sql.tableIoStats, "sql:tableIoStats", { mono: ["table"], hide: ["schema"] }),
+        )
+      : "",
+    deadtuples: drill(
+      "deadtuples",
+      "Dead tuples / autovacuum",
+      "overdue = dead tuples past the table's autovacuum threshold",
+      sec(a.sql.deadTuples, "sql:deadTuples", { mono: ["table"], hide: ["schema"] }),
+    ),
+    nevervacuumed: a.sql.neverVacuumed.length
+      ? drill(
+          "nevervacuumed",
+          "No vacuum on record",
+          "tables with no vacuum in the cumulative-stats window (>=10k rows) - no visibility map, stale planner stats",
+          sqlTable(a.sql.neverVacuumed, { mono: ["table"], hide: ["schema"] }),
+        )
+      : "",
+    hotupdates: a.sql.hotUpdates.length
+      ? drill(
+          "hotupdates",
+          "Low HOT-update ratio",
+          "high-update tables where few UPDATEs were HOT (heap-only) - each non-HOT update adds an entry to every index and leaves a dead heap tuple; caused by an updated column that is indexed, or full pages (fillfactor)",
+          sqlTable(a.sql.hotUpdates, { mono: ["table"], hide: ["schema"] }),
+        )
+      : "",
+    txid: show.txid
+      ? drill(
+          "txid",
+          "Transaction-ID wraparound",
+          "age(relfrozenxid) and datfrozenxid vs 2B ceiling; shown when a table or the database approaches the wraparound threshold",
+          errored.has("sql:txidWraparound") || errored.has("sql:databaseFreezeAge")
+            ? `<p class="empty warn-text">not collected - see notes</p>`
+            : (() => {
+                const parts: string[] = [];
+                if (a.sql.databaseFreezeAge.length) {
+                  const body = a.sql.databaseFreezeAge
+                    .map(
+                      (r) =>
+                        `<tr><td class=mono>${esc(r.datname)}</td><td class=num>${esc(r.xid_age ?? "-")}</td><td class=num>${esc(r.remaining ?? "-")}</td><td class=num>${esc(r.mxid_age ?? "-")}</td></tr>`,
+                    )
+                    .join("");
+                  parts.push(
+                    `<p class=lead>Database freeze age</p><table><thead><tr><th>database</th><th class=num>xid_age</th><th class=num>remaining</th><th class=num>mxid_age</th></tr></thead><tbody>${body}</tbody></table>`,
+                  );
+                }
+                if (a.sql.txidWraparound.length) {
+                  const body = a.sql.txidWraparound
+                    .map(
+                      (r) =>
+                        `<tr><td class=mono>${esc(r.table)}</td><td class=num>${esc(r.xid_age ?? "-")}</td><td class=num>${esc(r.remaining ?? "-")}</td><td class=num>${esc(r.toast_age ?? "-")}</td></tr>`,
+                    )
+                    .join("");
+                  parts.push(
+                    `<p class=lead>Table wraparound ages</p><table><thead><tr><th>table</th><th class=num>xid_age</th><th class=num>remaining</th><th class=num>toast_age</th></tr></thead><tbody>${body}</tbody></table>`,
+                  );
+                }
+                return parts.length
+                  ? parts.join("\n")
+                  : `<p class=empty>no tables or database approaching wraparound</p>`;
+              })(),
+        )
+      : "",
+    multixact: a.sql.multixactWraparound.length
+      ? drill(
+          "multixact",
+          "Multixact-ID wraparound",
+          "mxid_age(relminmxid) vs its own 2B ceiling - consumed by heavy row locking, separate from txid",
+          sqlTable(a.sql.multixactWraparound, { mono: ["table"], hide: ["schema"] }),
+        )
+      : "",
+    sequences: a.sql.sequenceExhaustion.length
+      ? drill(
+          "sequences",
+          "Sequence exhaustion",
+          "int4/serial sequences approaching their 2^31 ceiling - a hard INSERT failure when full",
+          sqlTable(a.sql.sequenceExhaustion, { mono: ["sequence"], hide: ["schema"] }),
+        )
+      : "",
+    xmin: show.xmin
+      ? drill(
+          "xmin",
+          "Transaction-ID horizon blockers",
+          "replication slots, prepared transactions, active backends, standby feedback holding old xmin/xid - must be cleared before the freeze horizon advances",
+          xminHoldersSection(a),
+        )
+      : "",
+    checkpointer: a.sql.checkpointer.length
+      ? drill(
+          "checkpointer",
+          "Checkpoints",
+          "cumulative timed vs requested (WAL-forced) checkpoints - requested share high = max_wal_size undersized; PG17+ reads pg_stat_checkpointer, earlier pg_stat_bgwriter",
+          sqlTable(a.sql.checkpointer, {}),
+        )
+      : "",
+    iobackend: a.sql.ioByBackend.length
+      ? drill(
+          "iobackend",
+          "I/O by backend type",
+          "who does the reads/writes/fsyncs (pg_stat_io, PG16+) - client vs checkpointer vs bgwriter vs autovacuum; time columns need track_io_timing=on",
+          sqlTable(a.sql.ioByBackend, { mono: ["backend_type"] }),
+        )
+      : "",
+    walarchiving: show.walarchiving
+      ? drill(
+          "walarchiving",
+          "WAL archiving",
+          "pg_stat_archiver + archive_mode (superuser SQL); continuous WAL shipping is the mechanism PITR relies on - inferred here, not the platform add-on flag",
+          sqlTable(a.sql.walArchiving, { mono: ["last_archived_wal"] }),
+        )
+      : "",
+    slots: show.slots
+      ? drill(
+          "slots",
+          "Replication slots",
+          "retained WAL; inactive slots pin disk",
+          sqlTable(a.sql.replicationSlots, { mono: ["slot_name"], hide: ["retained_wal_bytes"] }),
+        )
+      : "",
+    roles: show.roles
+      ? drill(
+          "roles",
+          "Role connection usage",
+          "active connections vs each role's limit - which service (PostgREST, Storage, pooler) holds the connections",
+          sec(a.sql.roleStats, "sql:roleStats", { mono: ["role"] }),
+        )
+      : "",
+    connections: drill(
+      "connections",
+      "Connections",
+      "by state",
+      sec(a.sql.connections, "sql:connections"),
+    ),
+    pooler: a.pooler?.length
+      ? drill(
+          "pooler",
+          "Connection pooler (Supavisor)",
+          "configured pool mode / size per database; route app traffic here (transaction mode, port 6543) instead of direct connections",
+          poolerSection(a),
+        )
+      : "",
+    longrunning: show.longrunning
+      ? drill(
+          "longrunning",
+          "Long-running queries",
+          "point-in-time snapshot: running > 5 min at collection",
+          sqlTable(a.sql.longRunning, { mono: ["query"] }),
+        )
+      : "",
+    locks: show.locks
+      ? drill(
+          "locks",
+          "Exclusive locks",
+          "point-in-time snapshot: relation-level strong locks at collection",
+          sqlTable(a.sql.locks, { mono: ["query", "relation"] }),
+        )
+      : "",
+    lockwave: show.lockwave
+      ? drill(
+          "lockwave",
+          "Lock-wait log (retrospective)",
+          "per-minute buckets parsed from server logs: waits, timeout cancels, deadlocks - the only on-box record of a transient lock-queue cascade, separate from the live snapshot above",
+          sqlTable(a.sql.lockWave!.buckets, {}),
+        )
+      : "",
+    blocking: show.blocking
+      ? drill(
+          "blocking",
+          "Blocking chains",
+          "point-in-time snapshot at collection",
+          sqlTable(a.sql.blocking, { mono: ["blocked_query", "blocking_query"] }),
+        )
+      : "",
+    functions: drill(
+      "functions",
+      "Edge functions",
+      "invocation stats over the last day",
+      functionsSection(a),
+    ),
+    storage: drill("storage", "Storage", "buckets + object usage", storageSection(a)),
+    auth: a.sql.authAudit.length
+      ? drill(
+          "auth",
+          "Auth adoption",
+          "users, confirmed, 30-day active, MFA-enrolled (from the auth schema; complements the auth policy config)",
+          authSection(a),
+        )
+      : "",
+    cron: a.sql.cronJobs.length
+      ? drill(
+          "cron",
+          "Scheduled jobs (pg_cron)",
+          "schedule + 7-day run health per job (failed runs surfaced as a finding)",
+          sqlTable(a.sql.cronJobs, { mono: ["jobname", "schedule"] }),
+        )
+      : "",
+    apivol: show.apivol
+      ? drill(
+          "apivol",
+          "API request volume",
+          "rolled up over the collected window; peak bucket noted",
+          errored.has("apiCounts")
+            ? '<p class="empty warn-text">not collected</p>'
+            : apiVolumeSummary(a),
+        )
+      : "",
+    metrics: drill(
+      "metrics",
+      "Infra metrics",
+      "scrape status + how to build history",
+      metricsStatus(a),
+    ),
+    notes: a.errors.length
+      ? `<h2 id="notes">Collection notes <span class=count>${a.errors.length}</span></h2>${collectionNotes(a)}`
+      : "",
+  };
+  const sections = scrollTables(renderGroups(bySection));
 
   return `<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
@@ -1351,14 +1728,21 @@ ${faviconTag(brand)}
   *{box-sizing:border-box}
   body{font:14px/1.45 -apple-system,Segoe UI,Roboto,sans-serif;color:var(--fg);background:var(--bg);margin:0 auto;padding:24px;max-width:1200px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   h1{font-size:20px;margin:0 0 4px}
+  /* Heading hierarchy: group (h2.ghead, heavy rule above) > section (h2 /
+     drill summary, light rule below) > sub-item (.lead). One spacing rhythm:
+     48px before a group, 28px before a section, 12px before a sub-item. */
   h2,.h2{font-size:15px;font-weight:700}
-  h2{margin:26px 0 6px;padding-bottom:3px;border-bottom:2px solid var(--fg)}
-  details{margin:26px 0 0}
-  summary{border-bottom:2px solid var(--fg);padding-bottom:3px;cursor:pointer;list-style-position:inside}
+  h2{margin:28px 0 0;padding-bottom:3px;border-bottom:1px solid var(--line)}
+  details{margin:28px 0 0}
+  summary{border-bottom:1px solid var(--line);padding-bottom:3px;cursor:pointer;list-style-position:inside}
   summary .h2{margin-right:4px}
+  h2.ghead{font-size:19px;margin:48px 0 0;padding:8px 0 0;border-top:3px solid var(--fg);border-bottom:none;letter-spacing:.01em}
+  main>h2.ghead:first-child{margin-top:8px}
+  h2.ghead+h2,h2.ghead+details,h2.ghead+section,h2.ghead+div{margin-top:14px}
+  .sdesc{margin:5px 0 8px;color:var(--mut);font-size:12.5px;line-height:1.45;max-width:120ch}
   .meta{color:var(--mut);font-size:12px;margin-bottom:8px}
   .meta code{background:var(--code);padding:1px 4px;border-radius:2px}
-  .lead{font-weight:600;margin:6px 0}
+  .lead{font-weight:600;font-size:13px;margin:12px 0 4px}
   .banner{padding:8px 12px;border-radius:4px;font-size:13px;margin:8px 0}
   .banner.bad{background:var(--errbg)}.banner.ok{background:var(--okbg)}
   ul.positives{margin:6px 0;padding-left:20px;columns:2;column-gap:28px}
@@ -1380,7 +1764,7 @@ ${faviconTag(brand)}
   section.tldr{margin:10px 0 26px}
   .verdict{padding:14px 18px;border-radius:6px;font-size:18px;font-weight:700;margin:0 0 16px}
   .verdict.ok{background:var(--okbg)}.verdict.warn{background:var(--warnbg)}.verdict.bad{background:var(--errbg)}
-  .scorecard{display:grid;grid-template-columns:1fr 320px;gap:28px;align-items:start}
+  .scorecard{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:28px;align-items:start}
   .sc-label{font-size:13px;font-weight:600;color:var(--mut);margin-bottom:2px}
   .sc-sub{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:var(--mut);margin:14px 0 6px}
   ol.priorities{margin:0;padding-left:22px;font-size:14px}
@@ -1415,7 +1799,7 @@ ${faviconTag(brand)}
   .fstep{display:inline-block;min-width:34px;font-weight:700;font-size:10.5px;letter-spacing:.04em;color:var(--mut);text-transform:uppercase;margin-right:4px}
   .fbody code{background:var(--code);border:1px solid var(--line);border-radius:3px;padding:0 4px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   ul.fsteps code{border:none;background:none;padding:0;word-break:break-all}
-  pre.fsql{background:var(--code);border:1px solid var(--line);border-radius:4px;padding:8px 10px;margin:7px 0 2px;overflow-x:auto;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.45;white-space:pre;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  pre.fsql{background:var(--code);border:1px solid var(--line);border-radius:4px;padding:8px 10px;margin:7px 0 2px;overflow-x:auto;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   pre.fsql code{background:none;padding:0;white-space:inherit;font-family:inherit}
   .ftext p{margin:0 0 5px}.ftext>p:last-child{margin-bottom:0}
   .fadv{margin:7px 0 0;font-size:12px;word-break:break-all}
@@ -1431,14 +1815,19 @@ ${faviconTag(brand)}
   table.chart td{border:none;padding:3px 0;vertical-align:middle}
   table.chart td.mono{width:42%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;padding-right:20px}
   table.chart td.barcell{width:auto;padding-right:12px}
-  table.chart td.num{width:130px;font-family:ui-monospace,Menlo,monospace;font-size:11px;white-space:nowrap;text-align:right;color:var(--mut)}
+  table.chart td.num{width:200px;font-family:ui-monospace,Menlo,monospace;font-size:11px;white-space:nowrap;text-align:right;color:var(--mut)}
   svg.bar{display:block;width:100%}
   table{border-collapse:collapse;width:100%;font-size:12.5px;margin:2px 0}
+  /* a wide table scrolls inside its own box, never the page */
+  .tw{overflow-x:auto;margin:4px 0}
+  .tw>table{margin:0}
   th,td{text-align:left;padding:4px 8px;border:1px solid var(--line);vertical-align:top}
-  th{background:var(--panel);font-weight:600;white-space:nowrap}
+  th{background:var(--panel);font-weight:600;vertical-align:bottom}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
   tbody tr:nth-child(even){background:var(--stripe)}
   tbody tr.flag{background:var(--warnbg)}
   td.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;white-space:pre-wrap;max-width:620px;word-break:break-word}
+  td.mono.wide{min-width:36ch;max-width:none;line-height:1.4}
   table.kv td:first-child,table.kv td:nth-child(2){white-space:nowrap;width:1%}
   table.kv td:first-child{font-weight:600}
   table.kv td:nth-child(3){width:100%;word-break:break-word}
@@ -1456,6 +1845,11 @@ ${faviconTag(brand)}
   .sparks{display:grid;grid-template-columns:repeat(3,1fr);gap:12px 16px;margin-top:8px}
   @media (max-width:900px){.sparks{grid-template-columns:repeat(2,1fr)}}
   @media (max-width:560px){.sparks{grid-template-columns:1fr}}
+  @media screen and (max-width:760px){
+    body{padding:14px}
+    .scorecard{grid-template-columns:minmax(0,1fr);gap:12px}
+    ul.positives{columns:1}
+  }
   figure.spark{margin:0}
   figure.spark figcaption{font-size:12px;font-weight:600;margin-bottom:3px}
   figure.spark svg{display:block;border:1px solid var(--line);background:var(--spark);border-radius:2px}
@@ -1487,10 +1881,15 @@ ${faviconTag(brand)}
   @page{size:A4;margin:14mm 12mm}
   @media print{
     nav.rnav{display:none}
-    body{padding:0;max-width:none;font-size:11.5px}
+    /* Chromium used to shrink the whole page to fit the widest table (an
+       unwrappable header row); with tables now fitting the page width, keep
+       that same print density explicitly instead of by accident. */
+    body{padding:0;max-width:none;font-size:11.5px;zoom:.8}
     h1{font-size:17px}
     /* keep a heading with the content that follows it */
-    h1,h2,.h2,summary{break-after:avoid;page-break-after:avoid;break-inside:avoid}
+    h1,h2,.h2,summary,.sdesc,.lead{break-after:avoid;page-break-after:avoid;break-inside:avoid}
+    h2.ghead{font-size:16px;margin-top:30px}
+    .tw{overflow:visible}
     /* repeat table headers on every page a long table spans */
     thead{display:table-header-group}
     tbody tr{break-inside:avoid;page-break-inside:avoid}
@@ -1663,10 +2062,10 @@ function poolerSection(a: Analysis): string {
   const body = rows
     .map(
       (p) =>
-        `<tr><td class=mono>${esc(p.database_type ?? "-")}</td><td>${esc(p.db_port ?? "-")}</td><td>${esc(p.pool_mode ?? "-")}</td><td>${esc(p.default_pool_size ?? "-")}</td><td>${esc(p.max_client_conn ?? "-")}</td></tr>`,
+        `<tr><td class=mono>${esc(p.database_type ?? "-")}</td><td class=num>${esc(p.db_port ?? "-")}</td><td>${esc(p.pool_mode ?? "-")}</td><td class=num>${esc(p.default_pool_size ?? "-")}</td><td class=num>${esc(p.max_client_conn ?? "-")}</td></tr>`,
     )
     .join("");
-  return `<table><thead><tr><th>database</th><th>port</th><th>pool mode</th><th>default pool size</th><th>max client conn</th></tr></thead><tbody>${body}</tbody></table>`;
+  return `<table><thead><tr><th>database</th><th class=num>port</th><th>pool mode</th><th class=num>default pool size</th><th class=num>max client conn</th></tr></thead><tbody>${body}</tbody></table>`;
 }
 
 /**
@@ -1685,11 +2084,11 @@ function xminHoldersSection(a: Analysis): string {
     const body = slotHolders
       .map(
         (r) =>
-          `<tr><td class=mono>${esc(r.slot_name)}</td><td>${esc(r.slot_type)}</td><td>${esc(r.xmin_age ?? "-")}</td><td>${esc(r.catalog_xmin_age ?? "-")}</td><td>${esc(r.wal_status ?? "-")}</td></tr>`,
+          `<tr><td class=mono>${esc(r.slot_name)}</td><td>${esc(r.slot_type)}</td><td class=num>${esc(r.xmin_age ?? "-")}</td><td class=num>${esc(r.catalog_xmin_age ?? "-")}</td><td>${esc(r.wal_status ?? "-")}</td></tr>`,
       )
       .join("");
     parts.push(
-      `<p class=lead>Replication slots</p><table><thead><tr><th>slot</th><th>type</th><th>xmin_age</th><th>catalog_xmin_age</th><th>wal_status</th></tr></thead><tbody>${body}</tbody></table>`,
+      `<p class=lead>Replication slots</p><table><thead><tr><th>slot</th><th>type</th><th class=num>xmin_age</th><th class=num>catalog_xmin_age</th><th>wal_status</th></tr></thead><tbody>${body}</tbody></table>`,
     );
   }
 
@@ -1698,11 +2097,11 @@ function xminHoldersSection(a: Analysis): string {
     const body = a.sql.preparedXacts
       .map(
         (r) =>
-          `<tr><td class=mono>${esc(r.gid)}</td><td>${esc(r.database)}</td><td>${esc(r.xid_age ?? "-")}</td></tr>`,
+          `<tr><td class=mono>${esc(r.gid)}</td><td>${esc(r.database)}</td><td class=num>${esc(r.xid_age ?? "-")}</td></tr>`,
       )
       .join("");
     parts.push(
-      `<p class=lead>Prepared transactions</p><table><thead><tr><th>gid</th><th>database</th><th>xid_age</th></tr></thead><tbody>${body}</tbody></table>`,
+      `<p class=lead>Prepared transactions</p><table><thead><tr><th>gid</th><th>database</th><th class=num>xid_age</th></tr></thead><tbody>${body}</tbody></table>`,
     );
   }
 
@@ -1716,11 +2115,11 @@ function xminHoldersSection(a: Analysis): string {
     const body = backendHolders
       .map(
         (r) =>
-          `<tr><td class=mono>${esc(r.pid)}</td><td>${esc(r.xmin_age ?? "-")}</td><td>${esc(r.xid_age ?? "-")}</td></tr>`,
+          `<tr><td class=mono>${esc(r.pid)}</td><td class=num>${esc(r.xmin_age ?? "-")}</td><td class=num>${esc(r.xid_age ?? "-")}</td></tr>`,
       )
       .join("");
     parts.push(
-      `<p class=lead>Active backends</p><table><thead><tr><th>pid</th><th>xmin_age</th><th>xid_age</th></tr></thead><tbody>${body}</tbody></table>`,
+      `<p class=lead>Active backends</p><table><thead><tr><th>pid</th><th class=num>xmin_age</th><th class=num>xid_age</th></tr></thead><tbody>${body}</tbody></table>`,
     );
   }
 
@@ -1730,11 +2129,11 @@ function xminHoldersSection(a: Analysis): string {
     const body = standbyHolders
       .map(
         (r) =>
-          `<tr><td class=mono>${esc(r.application_name)}</td><td>${esc(r.xmin_age ?? "-")}</td></tr>`,
+          `<tr><td class=mono>${esc(r.application_name)}</td><td class=num>${esc(r.xmin_age ?? "-")}</td></tr>`,
       )
       .join("");
     parts.push(
-      `<p class=lead>Standby hot_standby_feedback</p><table><thead><tr><th>application</th><th>xmin_age</th></tr></thead><tbody>${body}</tbody></table>`,
+      `<p class=lead>Standby hot_standby_feedback</p><table><thead><tr><th>application</th><th class=num>xmin_age</th></tr></thead><tbody>${body}</tbody></table>`,
     );
   }
 
@@ -1745,11 +2144,11 @@ function xminHoldersSection(a: Analysis): string {
     const body = a.sql.antiWraparoundVacuums
       .map(
         (r) =>
-          `<tr><td class=mono>${esc(r.pid)}</td><td>${esc(r.datname ?? "-")}</td><td>${esc(r.running_s ?? "-")}</td><td class=mono>${esc(r.query ?? "-")}</td></tr>`,
+          `<tr><td class=mono>${esc(r.pid)}</td><td>${esc(r.datname ?? "-")}</td><td class=num>${esc(r.running_s ?? "-")}</td><td class=mono>${esc(r.query ?? "-")}</td></tr>`,
       )
       .join("");
     parts.push(
-      `<p class=lead>Anti-wraparound autovacuum in flight</p><table><thead><tr><th>pid</th><th>database</th><th>running_s</th><th>query</th></tr></thead><tbody>${body}</tbody></table>`,
+      `<p class=lead>Anti-wraparound autovacuum in flight</p><table><thead><tr><th>pid</th><th>database</th><th class=num>running_s</th><th>query</th></tr></thead><tbody>${body}</tbody></table>`,
     );
   }
 
@@ -1834,12 +2233,12 @@ function authSection(a: Analysis): string {
   const total = n(r.total_users);
   const pct = (x: number) => (total > 0 ? `${Math.round((x / total) * 100)}%` : "-");
   const row = (label: string, val: string, extra = "") =>
-    `<tr><td>${label}</td><td>${val}</td><td>${extra}</td></tr>`;
+    `<tr><td>${label}</td><td class=num>${val}</td><td class=num>${extra}</td></tr>`;
   // MFA enrolment comes from the separate authMfa query (auth.mfa_factors may be
   // absent); show "-" rather than a misleading 0 when it wasn't collected.
   const mfaRow = a.sql.authMfa[0];
   const mfa = mfaRow ? n(mfaRow.mfa_users) : null;
-  return `<table><thead><tr><th>metric</th><th>count</th><th>of total</th></tr></thead><tbody>${row(
+  return `<table><thead><tr><th>metric</th><th class=num>count</th><th class=num>of total</th></tr></thead><tbody>${row(
     "Users",
     esc(total),
   )}${row("Confirmed", esc(n(r.confirmed_users)), pct(n(r.confirmed_users)))}${row(
@@ -1856,10 +2255,10 @@ function storageSection(a: Analysis): string {
   const body = a.buckets
     .map((b) => {
       const u = usage.get(b.name);
-      return `<tr><td class=mono>${esc(b.name)}</td><td>${b.public ? '<span class="badge warn">public</span>' : '<span class="badge ok">private</span>'}</td><td>${esc(u?.objects ?? 0)}</td><td>${esc(u?.size ?? "0 bytes")}</td></tr>`;
+      return `<tr><td class=mono>${esc(b.name)}</td><td>${b.public ? '<span class="badge warn">public</span>' : '<span class="badge ok">private</span>'}</td><td class=num>${esc(u?.objects ?? 0)}</td><td class=num>${esc(u?.size ?? "0 bytes")}</td></tr>`;
     })
     .join("");
-  return `<table><thead><tr><th>bucket</th><th>access</th><th>objects</th><th>size</th></tr></thead><tbody>${body}</tbody></table>`;
+  return `<table><thead><tr><th>bucket</th><th>access</th><th class=num>objects</th><th class=num>size</th></tr></thead><tbody>${body}</tbody></table>`;
 }
 
 /** Dedup identical error messages (e.g. 8x connection-timeout) into one row + count. */
