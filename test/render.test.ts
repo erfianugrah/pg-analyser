@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { sweepOutcome } from "../src/index.ts";
 import type { Overlay } from "../src/overlay.ts";
 import {
+  NAV_GROUPS,
+  navGroups,
   render,
   renderIndex,
   renderOrgIndex,
@@ -321,7 +323,19 @@ describe("render", () => {
       return a;
     };
 
-    test("one entry per rendered section, in document order", () => {
+    // Sidebar groups as rendered: heading label -> member hrefs, in order.
+    const navOutline = (html: string): [string, string[]][] =>
+      [
+        ...navHtml(html).matchAll(
+          /<details open class=g><summary>([^<]*)<\/summary><ol>([\s\S]*?)<\/ol><\/details>/g,
+        ),
+      ].map((m) => [
+        (m[1] ?? "").replaceAll("&amp;", "&"),
+        [...(m[2] ?? "").matchAll(/href="#([^"]+)"/g)].map((h) => h[1] ?? ""),
+      ]);
+    const groupLabels = NAV_GROUPS.map((g) => g.label);
+
+    test("one entry per rendered section; groups in map order, members in document order", () => {
       for (const [a, opts] of [
         [fixture(), {}],
         [rich(), { narrative: true }],
@@ -330,8 +344,71 @@ describe("render", () => {
         const html = render(a, opts);
         const ids = sectionIds(html);
         expect(ids.length).toBeGreaterThan(10);
-        expect(navHrefs(html)).toEqual(ids);
+        // Same set of anchors as the body, each exactly once.
+        expect([...navHrefs(html)].sort()).toEqual([...ids].sort());
+        const outline = navOutline(html);
+        // Group headings follow NAV_GROUPS order (a subsequence of it).
+        const labels = outline.map(([l]) => l);
+        expect(labels).toEqual(groupLabels.filter((l) => labels.includes(l)));
+        expect(labels[0]).toBe("Overview");
+        for (const [label, hrefs] of outline) {
+          // Within a group, entries keep document order...
+          expect(hrefs).toEqual(ids.filter((id) => hrefs.includes(id)));
+          // ...and every member belongs to that group in the map.
+          const group = NAV_GROUPS.find((g) => g.label === label);
+          for (const id of hrefs)
+            expect({ id, ok: (group?.ids as readonly string[]).includes(id) }).toEqual({
+              id,
+              ok: true,
+            });
+        }
       }
+    });
+
+    test("groups with no rendered entries do not appear", () => {
+      const all = navOutline(render(fixture())).map(([l]) => l);
+      expect(all).toContain("Platform services");
+      const overlay: Overlay = {
+        hide: new Set(["functions", "storage", "auth", "cron", "apivol"]),
+        notes: {},
+      };
+      const html = render(fixture(), { overlay });
+      expect(navOutline(html).map(([l]) => l)).not.toContain("Platform services");
+      expect(navHtml(html)).not.toContain("<summary>Platform services<");
+      expect(navGroups([{ id: "metrics", label: "Infra metrics", count: null }])).toEqual([
+        { label: "Collection", entries: [{ id: "metrics", label: "Infra metrics", count: null }] },
+      ]);
+    });
+
+    test("an unmapped id lands in a trailing Other group instead of vanishing", () => {
+      const groups = navGroups([
+        { id: "brand-new-section", label: "Brand new", count: "2" },
+        { id: "summary", label: "Executive summary", count: null },
+        { id: "another-new", label: "Another", count: null },
+      ]);
+      expect(groups.map((g) => g.label)).toEqual(["Overview", "Other"]);
+      expect(groups[1]?.entries.map((e) => e.id)).toEqual(["brand-new-section", "another-new"]);
+    });
+
+    test("every section id the renderer can emit is mapped to exactly one group", async () => {
+      // Scan the renderer source, not a rendered report: most sections are
+      // data-gated, so no single fixture renders them all. A new h2/drill/
+      // narrative anchor fails here until it is classified in NAV_GROUPS.
+      const src = await Bun.file(`${import.meta.dir}/../src/report/render.ts`).text();
+      const emitted = new Set(
+        [
+          ...src.matchAll(
+            /<h2 id="([\w-]+)"|\bdrill\(\s*"([\w-]+)"|<div class=narrative id="([\w-]+)"/g,
+          ),
+        ].map((m) => m[1] ?? m[2] ?? m[3] ?? ""),
+      );
+      expect(emitted.size).toBeGreaterThan(40);
+      const mapped = NAV_GROUPS.flatMap((g) => [...g.ids] as string[]);
+      expect(mapped.length).toBe(new Set(mapped).size); // no id in two groups
+      const unmapped = [...emitted].filter((id) => !mapped.includes(id));
+      expect(unmapped).toEqual([]);
+      const stale = mapped.filter((id) => !emitted.has(id));
+      expect(stale).toEqual([]);
     });
 
     test("every sidebar href resolves to exactly one element id", () => {
