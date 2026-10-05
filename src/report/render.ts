@@ -487,8 +487,68 @@ function positivesSection(positives: Positive[]): string {
 <ul class="positives">${items}</ul>`;
 }
 
+/**
+ * Contents-sidebar grouping, keyed by section anchor id. The single source for
+ * which group a section belongs to: `drill()` only accepts a `SectionId`, so a
+ * new evidence drill does not typecheck until it is classified here, and a
+ * render test scans this file so a new id'd `<h2>` fails until it is too.
+ * Groups render in this order; members keep report (document) order. The body
+ * order of the report is independent of this map.
+ */
+export const NAV_GROUPS = [
+  { label: "Overview", ids: ["summary", "trends", "healthy", "findings", "evidence"] },
+  {
+    label: "Platform & config",
+    ids: ["capabilities", "infra", "config", "seccfg", "hba", "extensions"],
+  },
+  { label: "Advisors", ids: ["adv-perf", "adv-sec"] },
+  { label: "Queries", ids: ["outliers", "calls", "queryio", "walbystatement", "jit", "traffic"] },
+  { label: "Access control (RLS)", ids: ["rls", "rlsunindexed", "rlsdeps"] },
+  {
+    label: "Tables & indexes",
+    ids: [
+      "tables",
+      "unused",
+      "dupidx",
+      "seqscan",
+      "fkunindexed",
+      "invalididx",
+      "managednopk",
+      "visibilitymap",
+      "bloat",
+      "bloatexact",
+      "tableio",
+    ],
+  },
+  {
+    label: "Maintenance",
+    ids: [
+      "deadtuples",
+      "nevervacuumed",
+      "hotupdates",
+      "txid",
+      "multixact",
+      "sequences",
+      "xmin",
+      "checkpointer",
+      "iobackend",
+      "walarchiving",
+      "slots",
+    ],
+  },
+  {
+    label: "Connections & locks",
+    ids: ["roles", "connections", "pooler", "longrunning", "locks", "lockwave", "blocking"],
+  },
+  { label: "Platform services", ids: ["functions", "storage", "auth", "cron", "apivol"] },
+  { label: "Collection", ids: ["metrics", "notes"] },
+] as const satisfies readonly { label: string; ids: readonly string[] }[];
+
+/** Any section anchor id the contents sidebar knows how to group. */
+export type SectionId = (typeof NAV_GROUPS)[number]["ids"][number];
+
 /** Collapsible evidence section (open by default so PDF shows everything). */
-function baseDrill(id: string, title: string, note: string, body: string): string {
+function baseDrill(id: SectionId, title: string, note: string, body: string): string {
   return `<details open id="${id}"><summary><span class=h2>${esc(title)}</span>${note ? ` <span class=note>${esc(note)}</span>` : ""}</summary>${body}</details>`;
 }
 
@@ -526,21 +586,57 @@ export function navEntries(sectionsHtml: string): NavEntry[] {
   return out;
 }
 
+/** One sidebar group: heading label plus its entries in document order. */
+export interface NavGroup {
+  label: string;
+  entries: NavEntry[];
+}
+
+/**
+ * Bucket sidebar entries into NAV_GROUPS (map order; document order within a
+ * group). Empty groups are dropped. An id missing from the map goes to a
+ * trailing "Other" group rather than silently disappearing.
+ */
+export function navGroups(entries: NavEntry[]): NavGroup[] {
+  const groupOf = new Map<string, number>();
+  NAV_GROUPS.forEach((g, i) => {
+    for (const id of g.ids) groupOf.set(id, i);
+  });
+  const buckets: NavEntry[][] = NAV_GROUPS.map(() => []);
+  const other: NavEntry[] = [];
+  for (const e of entries) {
+    const i = groupOf.get(e.id);
+    (i == null ? other : (buckets[i] ?? other)).push(e);
+  }
+  const out: NavGroup[] = NAV_GROUPS.map((g, i) => ({
+    label: g.label,
+    entries: buckets[i] ?? [],
+  })).filter((g) => g.entries.length);
+  if (other.length) out.push({ label: "Other", entries: other });
+  return out;
+}
+
 /**
  * Sidebar markup. Plain anchor links (works with JS off); `<details open>` so
  * narrow screens can fold it - the inline script closes it there and marks the
- * current section via IntersectionObserver. No `<` directly before a letter in
- * the script, so naive tag scanners don't misread it.
+ * current section via IntersectionObserver. Each group is its own
+ * `<details open>` so a heading click collapses it without JS. No `<` directly
+ * before a letter in the script, so naive tag scanners don't misread it.
  */
 function navSidebar(entries: NavEntry[]): string {
   if (!entries.length) return "";
-  const items = entries
-    .map(
-      (e) =>
-        `<li><a href="#${e.id}"><span>${e.label}</span>${e.count != null ? `<span class=n>${e.count}</span>` : ""}</a></li>`,
-    )
+  const groups = navGroups(entries)
+    .map((g) => {
+      const items = g.entries
+        .map(
+          (e) =>
+            `<li><a href="#${e.id}"><span>${e.label}</span>${e.count != null ? `<span class=n>${e.count}</span>` : ""}</a></li>`,
+        )
+        .join("");
+      return `<details open class=g><summary>${esc(g.label)}</summary><ol>${items}</ol></details>`;
+    })
     .join("");
-  return `<nav class=rnav aria-label="Report sections"><details open><summary>Contents</summary><ol>${items}</ol></details></nav>`;
+  return `<nav class=rnav aria-label="Report sections"><details open><summary>Contents</summary><div class=gs>${groups}</div></details></nav>`;
 }
 
 const NAV_SCRIPT = `<script>(()=>{
@@ -555,7 +651,7 @@ const pick=()=>{const y=innerHeight*0.25;let best=null;for(const it of items){if
 if(innerHeight+scrollY >= document.documentElement.scrollHeight-2 && items.length)best=items[items.length-1];
 if(best===cur)return;if(cur){cur.l.classList.remove("on");cur.l.removeAttribute("aria-current");}cur=best;if(!cur)return;
 cur.l.classList.add("on");cur.l.setAttribute("aria-current","location");
-if(wide.matches){const r=cur.l.getBoundingClientRect(),n=nav.getBoundingClientRect();if(r.top < n.top || r.bottom > n.bottom)nav.scrollTop+=r.top-n.top-n.height/3;}};
+if(wide.matches && cur.l.offsetParent){const r=cur.l.getBoundingClientRect(),n=nav.getBoundingClientRect();if(r.top < n.top || r.bottom > n.bottom)nav.scrollTop+=r.top-n.top-n.height/3;}};
 const io=new IntersectionObserver(pick,{rootMargin:"0px 0px -75% 0px"});for(const it of items)io.observe(it.h);pick();
 })();</script>`;
 
@@ -962,7 +1058,7 @@ export function render(
   const overlay = opts.overlay ?? EMPTY_OVERLAY;
   // Local drill: honour the reviewer overlay (hide sections, append notes)
   // while leaving the 22 call sites in the template unchanged.
-  const drill = (id: string, title: string, note: string, body: string): string => {
+  const drill = (id: SectionId, title: string, note: string, body: string): string => {
     // A hidden section is dropped entirely - any note keyed to it goes with it.
     if (overlay.hide.has(id)) return "";
     const overlayNote = overlay.notes[id];
@@ -1368,7 +1464,9 @@ ${faviconTag(brand)}
   nav.rnav{font-size:12px;line-height:1.3}
   nav.rnav details{margin:0}
   nav.rnav summary{border:none;padding:0 0 4px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--mut)}
-  nav.rnav ol{list-style:none;margin:0;padding:0}
+  nav.rnav ol{list-style:none;margin:0;padding:0 0 0 8px}
+  nav.rnav details.g{margin:6px 0 0;break-inside:avoid}
+  nav.rnav details.g>summary{font-size:10px;font-weight:600;padding:2px 6px 1px}
   nav.rnav li{break-inside:avoid}
   nav.rnav a{display:flex;justify-content:space-between;gap:6px;padding:2px 6px;color:var(--fg);text-decoration:none;border-left:2px solid transparent}
   nav.rnav a:hover{background:var(--panel)}
@@ -1382,8 +1480,9 @@ ${faviconTag(brand)}
   @media screen and (max-width:1099.98px){
     nav.rnav{margin:12px 0 0;border:1px solid var(--line);border-radius:4px;padding:6px 10px}
     nav.rnav summary{padding:0}
-    nav.rnav details[open] summary{padding-bottom:4px}
-    nav.rnav ol{columns:3 170px;column-gap:16px}
+    nav.rnav details[open]>summary{padding-bottom:4px}
+    nav.rnav .gs{columns:3 170px;column-gap:16px}
+    nav.rnav details.g:first-child{margin-top:0}
   }
   @page{size:A4;margin:14mm 12mm}
   @media print{
