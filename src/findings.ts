@@ -321,6 +321,7 @@ export function configTuningFindings(a: Analysis): Finding[] {
   const estRamForMaint = sbForMaint != null ? sbForMaint * 4 : null;
   if (
     maintMem != null &&
+    maintMem < THRESHOLDS.maintWorkMemOkMb * 1024 * 1024 &&
     estRamForMaint != null &&
     estRamForMaint >= THRESHOLDS.maintWorkMemMinRamGb * 1024 * 1024 * 1024 &&
     maintMem / estRamForMaint < THRESHOLDS.maintWorkMemMinFrac
@@ -2396,20 +2397,24 @@ export function deriveFindings(a: Analysis): Finding[] {
   // emptied and vacuumed keeps them), so "reset" is only claimed when no
   // vacuum or analyze is on record at all. Rows from a fixture without the
   // `maintained` column fall through to the reset reading.
+  const nearZeroLive = (r: SqlRow): boolean =>
+    num(r.est_rows) >= THRESHOLDS.staleStatsNearZeroMinEst &&
+    num(r.live_rows) < num(r.est_rows) * THRESHOLDS.staleStatsNearZeroFrac;
   const staleTables = a.sql.biggestTables.filter(
     (r) =>
-      num(r.live_rows) === 0 &&
+      (num(r.live_rows) === 0 || nearZeroLive(r)) &&
       num(r.total_bytes) >= THRESHOLDS.staleStatsMinBytes &&
       r.maintained !== true,
   );
   if (staleTables.length > 0) {
     const worst = staleTables[0] as SqlRow;
+    const liveLabel = staleTables.every((r) => num(r.live_rows) === 0) ? "0" : "near-zero";
     out.push({
       severity: "low",
       category: "Performance",
-      title: `Table statistics look stale (${staleTables.length} ${staleTables.length === 1 ? "table shows" : "tables show"} 0 live rows but ${staleTables.length === 1 ? "holds" : "hold"} data)`,
+      title: `Table statistics look stale (${staleTables.length} ${staleTables.length === 1 ? "table shows" : "tables show"} ${liveLabel} live rows but ${staleTables.length === 1 ? "holds" : "hold"} data)`,
       anchor: "#tables",
-      evidence: `Largest: ${String(worst.table)} at ${String(worst.total_size)} with 0 reported live rows${worst.dead_rows != null ? ` and ${num(worst.dead_rows).toLocaleString()} dead` : ""}, no vacuum or analyze on record${worst.est_rows != null ? `, while the catalog estimate (pg_class.reltuples) is ${num(worst.est_rows) < 0 ? "unknown (never vacuumed or analyzed)" : num(worst.est_rows).toLocaleString()}` : ""} - the signature of pg_stat counters that were reset (or never populated) with no vacuum or analyze since to re-count them${statsWindowDays(a) != null ? ` (cumulative statistics started ${statsWindowDays(a)?.toFixed(1)} days ago)` : ""}. Whether the table is also genuinely empty cannot be told from counters - ANALYZE it.`,
+      evidence: `Largest: ${String(worst.table)} at ${String(worst.total_size)} with ${num(worst.live_rows).toLocaleString()} reported live rows${worst.dead_rows != null ? ` and ${num(worst.dead_rows).toLocaleString()} dead` : ""}, no vacuum or analyze on record${worst.est_rows != null ? `, while the catalog estimate (pg_class.reltuples) is ${num(worst.est_rows) < 0 ? "unknown (never vacuumed or analyzed)" : num(worst.est_rows).toLocaleString()}` : ""} - the signature of pg_stat counters that were reset (or never populated) with no vacuum or analyze since to re-count them${statsWindowDays(a) != null ? ` (cumulative statistics started ${statsWindowDays(a)?.toFixed(1)} days ago)` : ""}. Whether the table is also genuinely empty cannot be told from counters - ANALYZE it.`,
       ...meta("stale_table_stats"),
     });
   }

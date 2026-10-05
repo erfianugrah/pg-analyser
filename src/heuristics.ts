@@ -77,6 +77,10 @@ export const THRESHOLDS = {
    * tiers with a correctly-small value are never flagged. */
   maintWorkMemMinFrac: 0.03,
   maintWorkMemMinRamGb: 8,
+  /** ...and never when it is already at or above this absolute value: the
+   * remediation recommends 256MB-1GB, so a 2GB value on a 256GB box is not
+   * "low" just because it is under 3% of RAM. */
+  maintWorkMemOkMb: 1024,
   /** checkpoint_completion_target below this spreads checkpoint I/O too tightly
    * (spiky flushes); modern Postgres defaults to 0.9. */
   checkpointCompletionMin: 0.7,
@@ -224,6 +228,13 @@ export const THRESHOLDS = {
    * reports 0 live rows but occupies at least this much disk almost certainly
    * had its counters reset (pg_statistic / size survive), not truly empty. */
   staleStatsMinBytes: 10 * 1024 * 1024,
+  /** Near-zero reading of the same contradiction: after a reset n_live_tup
+   * counts only rows inserted since, so a few hundred live rows against a
+   * reltuples in the millions is still a reset, not a small table. Fires when
+   * live rows are below this fraction of reltuples (1 in 1,000) and reltuples
+   * is at least staleStatsNearZeroMinEst. */
+  staleStatsNearZeroFrac: 1 / 1000,
+  staleStatsNearZeroMinEst: 1_000_000,
   /** Minimum slope (bytes/day) of an active slot's retained WAL before the
    * trend-based "retention climbing" finding fires - a floor so a trivially
    * rising series is not flagged. Catches the "396 MB and growing" case the
@@ -406,8 +417,15 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "The server is behind the latest minor release for its major version. Postgres minor releases are cumulative security and data-loss bugfixes only - running an old minor means shipping known, already-fixed defects. This is the single cheapest currency win: a minor upgrade needs no application change.",
     remediation:
-      "Apply the latest minor for your major line. On Supabase - UI: 'Upgrade project' button in Project Settings > Infrastructure (/dashboard/project/_/settings/infrastructure); API: POST /v1/projects/{ref}/upgrade. Self-hosted: bump the server package and restart.",
+      "Apply the latest minor for your major line. On Supabase - UI: 'Upgrade project' button in Project Settings > Infrastructure (/dashboard/project/_/settings/infrastructure); API: POST /v1/projects/{ref}/upgrade (check GET /v1/projects/{ref}/upgrade/eligibility first). If the project has read replicas, plan for them: Supabase's upgrade guide says 'Projects with read-replicas can't be upgraded. You need to delete the replicas and re-create them after upgrade completes.' - so read capacity is reduced until the new replicas finish syncing. Self-hosted: bump the server package and restart.",
     docUrl: "https://www.postgresql.org/support/versioning/",
+    refs: [
+      {
+        tier: "fix",
+        label: "Supabase: Upgrading",
+        url: "https://supabase.com/docs/guides/platform/upgrading",
+      },
+    ],
     reviewed: R,
   },
   cron_job_overrun: {
@@ -462,7 +480,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
     whyItMatters:
       "pg_stat_statements hit its entry cap and is evicting statements (dealloc > 0). The top-N query list and the outlier/latency signals - and the stats-window confidence gating built on them - are then a lossy sample: a heavy query can be evicted between scrapes and never appear. Raising the cap restores a complete picture.",
     remediation:
-      "Raise pg_stat_statements.max (default 5000) if query-level accuracy matters; it costs a little shared memory. Set it self-serve via the Database custom Postgres config (see the supported-parameters list). CLI: supabase postgres-config update --config pg_stat_statements.max=10000 --project-ref {ref} --experimental (applied on restart). API: PUT /v1/projects/{ref}/config/database/postgres.",
+      "Raise pg_stat_statements.max (default 5000) if query-level accuracy matters; it costs a little shared memory. It can only be set at server start (it sizes a shared-memory table), and on Supabase it is not in the self-serve custom Postgres config list - the postgres role can set pg_stat_statements.* only at role level, which cannot resize that table - so ask Supabase support to raise it. Until then, treat the top-N query list as a sample: a heavy query can be evicted between snapshots.",
     docUrl: "https://www.postgresql.org/docs/current/pgstatstatements.html",
     refs: [
       {
@@ -1146,7 +1164,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
   maintenance_work_mem_low: {
     id: "maintenance_work_mem_low",
     plane: "Config",
-    sql: "ALTER DATABASE postgres SET maintenance_work_mem = '256MB';",
+    sql: "-- pick a value above the current one, up to 1GB; on Supabase maintenance_work_mem is in the custom-config list:\n-- supabase postgres-config update --config maintenance_work_mem=1GB --project-ref <ref> --experimental\nALTER DATABASE postgres SET maintenance_work_mem = '1GB';",
     howToVerify:
       "After raising it, confirm autovacuum passes and CREATE INDEX complete faster (fewer index-build passes in the logs).",
     whyItMatters:
@@ -1212,7 +1230,7 @@ export const HEURISTICS: Record<string, Heuristic> = {
       "A burst of 'canceling statement due to statement timeout' lines with NO lock-wait or lock-timeout line in the same window is not a lock cascade - it is statements running past their statement_timeout. On Supabase the client roles ship with short fuses (anon 3s, authenticated 8s), so a slow report query, a batch job, a cold cache or an I/O stall in that minute cancels every request that crosses the line, and the app sees errors rather than slowness. pg_stat_statements never records the cancelled executions, so this log signal is the only place the burst is visible.",
     remediation:
       "Attribute the minute: read the csvlog for that window (the STATEMENT field names each cancelled query and the user_name column its role), and check what else ran then - a scheduled job, a report, a migration, or a database audit/collector. Then either speed the statement up (index, plan, smaller batch) or give that role or that job a longer statement_timeout via ALTER ROLE ... SET statement_timeout / SET LOCAL in the job. Do not raise the anon timeout for one report.",
-    sql: "-- who is cancelled, from the csvlog for that minute (superuser):\nselect log_time, user_name, left(query, 120) as statement\nfrom pg_read_file((select setting from pg_settings where name='log_directory') || '/postgresql.csv') as t(line)\n  -- filter the lines for 'canceling statement due to statement timeout' at <HH:MM>\nlimit 50;\n-- lengthen the fuse for the job's role, not for anon:\nALTER ROLE <job_role> SET statement_timeout = '60s';",
+    sql: "-- who is cancelled: run in the dashboard Logs Explorer (/dashboard/project/_/logs/explorer), time range = that window:\nselect timestamp, log_attributes['parsed.user_name'] as role, event_message\nfrom logs\nwhere source = 'postgres_logs'\n  and event_message ilike '%canceling statement due to statement timeout%'\norder by timestamp desc\nlimit 100;\n-- lengthen the fuse for the job's role, not for anon:\nALTER ROLE <job_role> SET statement_timeout = '60s';",
     howToVerify:
       "Re-scan the log after the next occurrence window: no statement-timeout burst, or the burst is gone once the job/role has its own timeout and the slow statement is fixed.",
     docUrl: "https://supabase.com/docs/guides/database/postgres/timeouts",

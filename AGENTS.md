@@ -702,6 +702,30 @@ src/
 
 ## Verified upstream facts (Supabase, 2026-07)
 
+2026-10-05 additions (no-PAT report review; two independent subagent reviews
+of findings vs analysis.json and of advice vs the docs):
+
+- **pg_stat_statements.max is not self-serve.** It is absent from the CLI /
+  Management API supported-parameters list on the custom Postgres config page;
+  the postgres role may set `pg_stat_statements.*` only at role level, and
+  `.max` is server-start only, so statements_evicted now routes to support.
+- **Read replicas block upgrades.** The upgrading guide: "Projects with
+  read-replicas can't be upgraded. You need to delete the replicas and
+  re-create them after upgrade completes." pg_minor_behind carries it.
+- **maintenance_work_mem is in the self-serve list**, and the finding no
+  longer fires at or above 1GB (it fired on 2048MB while its SQL set 256MB).
+- **stale_table_stats near-zero form.** After a reset n_live_tup counts only
+  post-reset inserts (a few hundred live rows against tens of millions in
+  reltuples, observed), so live rows
+  under 1 in 1,000 of a reltuples of 1M+ now count as the same contradiction.
+- **statement_timeout_burst SQL** now uses the customer's Logs Explorer
+  (`postgres_logs`, `log_attributes['parsed.user_name']`) instead of
+  `pg_read_file`, which the postgres role cannot run.
+- Known, not changed: vendored `splinter.sql` lint URLs
+  (`/guides/database/database-linter?lint=`) 308-redirect to
+  `/guides/observability/advisors?lint=`; they resolve, and editing the
+  vendored file would drift from upstream.
+
 2026-10-01 additions (fourth live no-PAT report review, PG 17.4 project with
 90 days of Grafana trends):
 

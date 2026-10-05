@@ -181,8 +181,9 @@ export const LINT_FIXES: Record<string, LintFix> = {
       "Objects in public are exposed on the PostgREST API and share the namespace your app tables use. An extension there widens the API surface and can collide with app object names - a dedicated schema keeps it off both.",
     whatToDo:
       "Consider moving the extension to a dedicated schema so its objects are not exposed on the public API surface.",
-    sql: "ALTER EXTENSION <extension> SET SCHEMA extensions;",
-    howToVerify: "Re-run the Security Advisor - the lint should clear once it is out of public.",
+    sql: "-- works only for relocatable extensions you own; check first:\nselect extname, extrelocatable, pg_get_userbyid(extowner) as owner from pg_extension where extname = '<extension>';\nALTER EXTENSION <extension> SET SCHEMA extensions;",
+    howToVerify:
+      "Re-run the Security Advisor - the lint should clear once it is out of public. If ALTER fails ('does not support SET SCHEMA' for a non-relocatable extension, or 'must be owner of extension'), the move is a drop and re-create in the new schema, which drops dependent objects - plan it, or ask support.",
   },
   rls_references_user_metadata: {
     plainTitle: "Policy trusts user-editable metadata",

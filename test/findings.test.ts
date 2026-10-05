@@ -2163,6 +2163,19 @@ describe("config tuning (static GUC findings)", () => {
     );
   });
 
+  test("maintenance_work_mem already >= 1GB on a huge instance -> NO finding (advice tops out at 1GB)", () => {
+    const huge = base();
+    // shared_buffers 64GB -> est RAM ~256GB; 2GB maint is <3% of RAM but already above
+    // the 256MB-1GB range the remediation recommends, so "raise it" would be wrong.
+    huge.sql.pgSettings = [
+      guc("shared_buffers", String((64 * 1024 * 1024 * 1024) / (8 * 1024)), "8kB"),
+      guc("maintenance_work_mem", String(2 * 1024 * 1024), "kB"),
+    ];
+    expect(deriveFindings(huge).some((x) => x.heuristicId === "maintenance_work_mem_low")).toBe(
+      false,
+    );
+  });
+
   test("maintenance_work_mem correct-for-tier on a small instance -> NO finding", () => {
     const small = base();
     // shared_buffers 256MB -> est RAM ~1GB (Micro); 64MB maint is correct, not low.
@@ -3237,6 +3250,30 @@ describe("report-review fixes (2026-09-03): rules that overreached their evidenc
     (a.sql.biggestTables[0] as Record<string, unknown>).est_rows = -1;
     f = deriveFindings(a).find((x) => x.heuristicId === "stale_table_stats");
     expect(f?.evidence).toContain("unknown (never vacuumed or analyzed)");
+  });
+
+  test("stale_table_stats: near-zero live rows against a huge reltuples (post-reset inserts only) also fires", () => {
+    const a = base();
+    // Synthetic shape after an unclean restart: n_live_tup counts only the
+    // inserts since the reset while reltuples still holds the old estimate.
+    a.sql.biggestTables = [
+      {
+        schema: "public",
+        table: "public.events",
+        total_size: "50 GB",
+        total_bytes: 53_687_091_200,
+        live_rows: 250,
+        dead_rows: 120_000,
+        est_rows: 40_000_000,
+        maintained: false,
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "stale_table_stats");
+    expect(f?.title).toContain("near-zero live rows");
+    expect(f?.evidence).toContain("250 reported live rows");
+    // A table whose live count is a real fraction of reltuples is NOT stale.
+    (a.sql.biggestTables[0] as Record<string, unknown>).live_rows = 30_000_000;
+    expect(deriveFindings(a).some((x) => x.heuristicId === "stale_table_stats")).toBe(false);
   });
 
   test("bloat_estimate_suspect: TOAST + index bytes are excluded - a vector table is explained, not suspect", () => {
