@@ -1196,3 +1196,249 @@ describe("sweepOutcome", () => {
     expect(o.row.error).toBeUndefined();
   });
 });
+
+/**
+ * Synthetic "kitchen sink": every data-gated evidence section populated, so one
+ * render exercises (nearly) every section id the report can emit. All names are
+ * made up.
+ */
+function kitchenSink(): Analysis {
+  const a = fixture({
+    trends: [
+      {
+        title: "CPU utilisation (%)",
+        unit: "%",
+        points: [
+          { t: 1_780_000_000, v: 12 },
+          { t: 1_780_086_400, v: 18 },
+        ],
+      },
+      { title: "Disk used (%)", unit: "%", points: [{ t: 1_780_086_400, v: 41 }] },
+    ],
+    security: {
+      networkRestrictions: { config: { dbAllowedCidrs: ["0.0.0.0/0"] } },
+      sslEnforcement: { currentConfig: { database: false } },
+      auth: { mailer_autoconfirm: true, password_min_length: 6, jwt_exp: 7200 },
+    } as unknown as Analysis["security"],
+    functions: [{ id: "f1", slug: "hello-fn", status: "ACTIVE" }] as Analysis["functions"],
+    functionStats: [
+      {
+        slug: "hello-fn",
+        requests: 120,
+        success: 118,
+        clientErr: 1,
+        serverErr: 1,
+        avgExecMs: 40,
+        maxExecMs: 900,
+      },
+    ] as Analysis["functionStats"],
+    buckets: [{ id: "b1", name: "avatars", public: true }] as Analysis["buckets"],
+    errors: [
+      { source: "sql:bloat", message: "boom" },
+      { source: "sql:somethingElse", message: "boom" },
+    ],
+  });
+  a.advisors.security = [
+    { name: "rls_disabled_in_public", title: "RLS Disabled", level: "ERROR", detail: "t" },
+  ];
+  const s = a.sql;
+  const q = "SELECT a_column, b_column FROM app_schema.some_table WHERE id = $1";
+  s.topStatements = Array.from({ length: 7 }, (_, i) => ({
+    total_ms: 5000 - i * 100,
+    calls: 10 + i,
+    pct: 30 - i,
+    query: `${q} -- variant ${i}`,
+    queryid: 100 + i,
+  }));
+  s.topByCalls = [{ calls: 9000, pct_calls: 70.1, total_ms: 1200, query: q, queryid: 1 }];
+  s.queryIoStats = [{ query: q, queryid: 1, calls: 10, mean_ms: 5, temp_written: "1 MB" }];
+  s.topByWal = [{ query: q, queryid: 1, wal: "3 MB", wal_bytes: 3_000_000 }];
+  s.jitTopStatements = [{ query: q, queryid: 1, jit_ms: 30, total_ms: 60, jit_pct: 50 }];
+  s.trafficProfile = [{ table: "app.t1", reads: 10, writes: 900, ratio: 0.01 }];
+  s.rlsPolicies.push({ table: "app.t2", policyname: "p2", cmd: "ALL", unwrapped_auth: false });
+  s.rlsUnindexed = [{ schema: "app", table: "app.t2", column: "owner_id" }];
+  s.rlsPolicyDeps = [{ table: "app.t2", policy: "p2", dep: "app.t3", dep_rls: true }];
+  s.biggestTables = [{ schema: "app", table: "app.t1", size: "2 GB", total_bytes: 2e9 }];
+  s.indexStats = [{ schema: "app", table: "app.t1", index: "t1_idx", size: "1 MB", scans: 0 }];
+  s.duplicateIndexes = [{ schema: "app", indexes: "a_idx, b_idx", size: "1 MB" }];
+  s.seqScanHeavy = [{ schema: "app", table: "app.t1", seq_scan: 5000, idx_scan: 2 }];
+  s.fkUnindexed = [{ schema: "app", table: "app.t2", constraint: "fk1", definition: "d" }];
+  s.invalidIndexes = [{ schema: "app", index: "bad_idx", table: "app.t1" }];
+  s.managedNoPk = [{ schema: "auth", table: "auth.thing" }];
+  s.visibilityMap = [{ schema: "app", table: "app.t1", pct_all_visible: 3 }];
+  s.bloatExact = [{ name: "app.t1", reclaimable: "10 MB", reclaimable_bytes: 1e7 }];
+  s.tableIoStats = [{ schema: "app", table: "app.t1", heap_hit_pct: 80, toast_hit_pct: 20 }];
+  s.deadTuples = [{ schema: "app", table: "app.t1", dead: 50000, overdue: true }];
+  s.neverVacuumed = [{ schema: "app", table: "app.t4", rows: 20000 }];
+  s.hotUpdates = [{ schema: "app", table: "app.t1", hot_pct: 2, updates: 90000 }];
+  s.txidWraparound = [{ table: "app.t1", xid_age: 1_700_000_000, remaining: 400_000_000 }];
+  s.databaseFreezeAge = [{ datname: "postgres", xid_age: 1_700_000_000, remaining: 4e8 }];
+  s.multixactWraparound = [{ schema: "app", table: "app.t1", mxid_age: 9e8 }];
+  s.sequenceExhaustion = [{ schema: "app", sequence: "app.t1_id_seq", pct: 91 }];
+  s.replicationSlots = [{ slot_name: "slot_a", slot_type: "logical", xmin_age: 5 }];
+  s.preparedXacts = [{ gid: "g1", database: "postgres", xid_age: 100 }];
+  s.checkpointer = [{ timed: 10, requested: 90 }];
+  s.ioByBackend = [{ backend_type: "client backend", reads: 10, writes: 2 }];
+  s.walArchiving = [{ archive_mode: "on", archived_count: 5, last_archived_wal: "0001" }];
+  s.roleStats = [{ role: "authenticator", active: 3, limit: 60 }];
+  s.longRunning = [{ pid: 1, duration: "00:10:00", query: "select 1" }];
+  s.locks = [{ pid: 2, relation: "app.t1", mode: "AccessExclusiveLock", query: "alter" }];
+  s.lockWave = {
+    coverage: {
+      from: "2026-07-01T00:00:00Z",
+      to: "2026-07-01T01:00:00Z",
+      files: 1,
+      bytesScanned: 9,
+    },
+    buckets: [
+      {
+        minute: "2026-07-01T00:10",
+        waiting: 4,
+        maxWaitMs: 900,
+        acquired: 4,
+        cancelsLock: 0,
+        cancelsStmt: 0,
+        cancelsUser: 0,
+        deadlocks: 0,
+      },
+    ],
+    topRelations: [],
+    samples: [],
+  };
+  s.blocking = [{ blocked_pid: 3, blocking_pid: 2, blocked_query: "a", blocking_query: "b" }];
+  s.authAudit = [{ total_users: 100, confirmed_users: 90, active_30d: 40 }];
+  s.authMfa = [{ mfa_users: 4 }];
+  s.extensions = [{ name: "pg_cron", installed: "1.6" }];
+  s.cronJobs = [
+    { jobname: "nightly", schedule: "0 3 * * *", active: true, failed_runs: 0, runs_7d: 7 },
+  ];
+  s.hbaRules = [{ type: "host", address: "10.0.0.0/8", user_name: "all", auth_method: "trust" }];
+  return a;
+}
+
+describe("body order follows NAV_GROUPS", () => {
+  const body = (html: string): string => html.slice(html.indexOf("<main"));
+  const ids = (html: string): string[] =>
+    [
+      ...body(html).matchAll(
+        /<h2 id="([^"]+)"|<details open id="([^"]+)"|<div class=narrative id="([^"]+)"/g,
+      ),
+    ].map((m) => m[1] ?? m[2] ?? m[3] ?? "");
+  const mapOrder = NAV_GROUPS.flatMap((g) => [...g.ids] as string[]);
+
+  test("section anchors appear in the body in NAV_GROUPS order", () => {
+    for (const a of [kitchenSink(), fixture()]) {
+      const got = ids(render(a));
+      expect(got.length).toBeGreaterThan(10);
+      expect(got).toEqual(mapOrder.filter((id) => got.includes(id)));
+    }
+    // The kitchen sink renders (nearly) every section the map knows.
+    expect(ids(render(kitchenSink())).length).toBeGreaterThanOrEqual(mapOrder.length - 1);
+  });
+
+  test("each non-empty group gets one visible body heading, in map order, before its sections", () => {
+    const html = render(kitchenSink());
+    const b = body(html);
+    const heads = [...b.matchAll(/<h2 class=ghead[^>]*>([^<]*)<\/h2>/g)].map((m) =>
+      (m[1] ?? "").replaceAll("&amp;", "&"),
+    );
+    expect(heads).toEqual(NAV_GROUPS.map((g) => g.label));
+    // Every group's first rendered section comes after its heading and before
+    // the next group's heading.
+    NAV_GROUPS.forEach((g, i) => {
+      const at = b.indexOf(`>${g.label.replaceAll("&", "&amp;")}</h2>`);
+      const next = NAV_GROUPS[i + 1];
+      const end = next ? b.indexOf(`>${next.label.replaceAll("&", "&amp;")}</h2>`) : b.length;
+      for (const id of g.ids) {
+        const p = b.indexOf(`id="${id}"`);
+        if (p === -1) continue;
+        expect({ id, inside: p > at && p < end }).toEqual({ id, inside: true });
+      }
+    });
+  });
+
+  test("an empty group renders no body heading", () => {
+    const overlay: Overlay = {
+      hide: new Set(["functions", "storage", "auth", "cron", "apivol"]),
+      notes: {},
+    };
+    const b = body(render(fixture(), { overlay }));
+    expect(b).not.toContain(">Platform services</h2>");
+    expect(body(render(fixture()))).toContain(">Platform services</h2>");
+  });
+
+  test("no detail lost: section ids, table rows, findings and charts match the pre-regroup render", () => {
+    // Golden counts recorded from the renderer before the body was regrouped
+    // (commit 5bcd1ab) for this exact fixture. Reordering and restyling must
+    // not change any of them.
+    const html = render(kitchenSink(), {});
+    const b = body(html);
+    expect([...ids(html)].sort()).toEqual(KITCHEN_SINK_IDS);
+    expect((b.match(/<tr[\s>]/g) ?? []).length).toBe(KITCHEN_SINK_COUNTS.tr);
+    expect((b.match(/class="finding /g) ?? []).length).toBe(KITCHEN_SINK_COUNTS.findings);
+    expect((b.match(/<svg[\s>]/g) ?? []).length).toBe(KITCHEN_SINK_COUNTS.svg);
+    expect((b.match(/more rows<\/p>/g) ?? []).length).toBe(KITCHEN_SINK_COUNTS.moreRows);
+  });
+});
+// Recorded at 5bcd1ab (before the body regroup) by rendering kitchenSink().
+const KITCHEN_SINK_IDS = [
+  "adv-perf",
+  "adv-sec",
+  "apivol",
+  "auth",
+  "bloat",
+  "bloatexact",
+  "blocking",
+  "calls",
+  "capabilities",
+  "checkpointer",
+  "config",
+  "connections",
+  "cron",
+  "deadtuples",
+  "dupidx",
+  "evidence",
+  "extensions",
+  "findings",
+  "fkunindexed",
+  "functions",
+  "hba",
+  "healthy",
+  "hotupdates",
+  "infra",
+  "invalididx",
+  "iobackend",
+  "jit",
+  "locks",
+  "lockwave",
+  "longrunning",
+  "managednopk",
+  "metrics",
+  "multixact",
+  "nevervacuumed",
+  "notes",
+  "outliers",
+  "pooler",
+  "queryio",
+  "rls",
+  "rlsdeps",
+  "rlsunindexed",
+  "roles",
+  "seccfg",
+  "seqscan",
+  "sequences",
+  "slots",
+  "storage",
+  "summary",
+  "tableio",
+  "tables",
+  "traffic",
+  "trends",
+  "txid",
+  "unused",
+  "visibilitymap",
+  "walarchiving",
+  "walbystatement",
+  "xmin",
+];
+const KITCHEN_SINK_COUNTS = { tr: 137, findings: 32, svg: 8, moreRows: 1 };
