@@ -703,6 +703,32 @@ describe("logDirProbe (superuser log-directory three-fact probe)", () => {
     expect(blob).not.toContain("SELECT token");
   });
 
+  test("a failing server-log tail read leaves a collection note, not a silent null", async () => {
+    // Measured: a run took ~9x longer than usual and lockWave came back null
+    // with no note - the failure only reached a debug log line.
+    const runner = {
+      source: "superuser" as const,
+      run: async (q: string) => {
+        if (/pg_ls_logdir\(\)/.test(q))
+          return [
+            {
+              node_addr: "10.0.0.7",
+              name: "postgresql.csv",
+              size: 5000,
+              modification: "2026-10-09T00:30:00Z",
+            },
+          ];
+        if (/^select pg_read_file/.test(q))
+          throw new Error("canceling statement due to statement timeout");
+        return [];
+      },
+    };
+    const a = await collect("ref", t(), "0.0.0-test", { syncCheck: false, sqlRunner: runner });
+    expect(a.sql.lockWave).toBeNull();
+    const note = a.errors.find((e) => e.source === "lockWave");
+    expect(note?.message).toContain("statement timeout");
+  });
+
   test("superuser + permission denied -> readable=false + one note, no throw", async () => {
     const runner = {
       source: "superuser" as const,
