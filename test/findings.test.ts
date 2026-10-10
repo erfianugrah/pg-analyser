@@ -1789,6 +1789,59 @@ describe("trend findings graded on the recent window, not stale history", () => 
     expect(f?.title).toContain("currently 99%");
   });
 
+  test("an estimated bloat near 1x is low, however many bytes it is", () => {
+    // pg_stats estimate of 1.1x on a large table: ~1 GB "reclaimable" is
+    // inside the estimator's noise, not a pg_repack case.
+    const a = base();
+    a.sql.bloat = [
+      { name: "public.events", bloat_x: "1.1", waste: "962 MB", waste_bytes: "1008779264" },
+    ];
+    expect(deriveFindings(a).find((x) => x.heuristicId === "table_bloat")?.severity).toBe("low");
+    a.sql.bloat = [
+      { name: "public.events", bloat_x: "2.4", waste: "962 MB", waste_bytes: "1008779264" },
+    ];
+    expect(deriveFindings(a).find((x) => x.heuristicId === "table_bloat")?.severity).toBe("med");
+  });
+
+  test("disk_oversized does not tell the reader to shrink the volume in settings", () => {
+    // Supabase docs: a disk can be increased but not decreased; it right-sizes
+    // to 1.2x the database size during a project upgrade.
+    const a = base();
+    a.trends = [
+      { title: "Disk used (%)", unit: "%", points: split(6, 6) },
+      { title: "Disk size (bytes)", unit: "bytes", points: split(2000 * 2 ** 30, 2000 * 2 ** 30) },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "disk_oversized");
+    expect(f?.remediation).not.toContain("size_gb");
+    expect(f?.remediation).toContain("project upgrade");
+    expect(f?.docUrl).toContain("reducing-disk-size");
+  });
+
+  test("the cache-hit positive names a short stats window", () => {
+    const a = base();
+    a.sql.cacheHitPct = 99.6;
+    a.sql.statsResetAge = "1 day 15:00:52";
+    const p = derivePositives(a).find((x) => x.title.startsWith("Cache hit ratio"));
+    expect(p?.title).toContain("stats window");
+  });
+
+  test("'CPU well-provisioned' describes the recent window, not a 90d average", () => {
+    // Shape: a quiet first two months, then 70-90% busy in the last two weeks.
+    // The 90d mean (~40%) had read "well-provisioned" for an instance that
+    // was running hot.
+    const a = base();
+    const pts = Array.from({ length: 90 }, (_, i) => ({
+      t: i * DAY,
+      v: i < 76 ? 30 : 70 + (i % 3) * 10,
+    }));
+    a.trends = [{ title: "CPU utilization (%)", unit: "%", points: pts }];
+    expect(derivePositives(a).some((p) => p.title.startsWith("CPU well-provisioned"))).toBe(false);
+    // Steady moderate load still earns it, scoped to the recent window.
+    a.trends = [{ title: "CPU utilization (%)", unit: "%", points: split(40, 40) }];
+    const p = derivePositives(a).find((x) => x.title.startsWith("CPU well-provisioned"));
+    expect(p?.title).toContain("last 14d");
+  });
+
   test("a healed EBS depletion inside the recent window stays med", () => {
     const a = base();
     const pts = Array.from({ length: 90 }, (_, i) => ({ t: i * DAY, v: i === 85 ? 0 : 99 }));

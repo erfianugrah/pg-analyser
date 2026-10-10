@@ -112,6 +112,10 @@ export const THRESHOLDS = {
   /** Estimated reclaimable bloat: minimum to report / bump to med. */
   bloatMinBytes: 50 * 1024 * 1024,
   bloatMedBytes: 500 * 1024 * 1024,
+  /** A pg_stats bloat ESTIMATE is med only at/above this bloat_x as well as
+   * bloatMedBytes: the estimator is noisy near 1x, and a 1.1x estimate on a
+   * large table read as ~1 GB "reclaimable" and a pg_repack recommendation. */
+  bloatMedRatio: 1.5,
   /** A single table this fraction (or more) of total DB size = worth
    * attributing in a finding ("table X is N% of the database"), so the disk
    * story names its dominant consumer instead of leaving it in a drill-down. */
@@ -1078,12 +1082,12 @@ export const HEURISTICS: Record<string, Heuristic> = {
     id: "disk_oversized",
     plane: "Storage",
     howToVerify:
-      "Confirm the used fraction stays low across peak periods, then resize the volume down (or reclaim first with pg_repack / dropping unused indexes) and re-audit.",
+      "Confirm the used fraction stays low across peak periods. After a right-size, the provisioned size should sit near 1.2x the database size.",
     whyItMatters:
-      "A volume provisioned far above its true footprint is paid-for headroom that is never used. Disk autoscaling is grow-only - it never shrinks back - so an over-provisioned volume keeps costing until an explicit resize. The true minimum footprint (used minus reclaimable) is the size to target.",
+      "A volume provisioned far above its true footprint is paid-for headroom that is never used. Disk autoscaling is grow-only - it never shrinks back - so an over-provisioned volume keeps costing until it is right-sized. The true minimum footprint (used minus reclaimable) is what a right-size lands near.",
     remediation:
-      'Reclaim first (pg_repack bloat, drop unused indexes), then resize the volume down to the true footprint plus a growth margin. Note you can modify disk attributes up to 4 times per rolling 24h. (Provisioning extra gp3 IOPS/throughput independently of size needs Large compute or above.) UI: Project Settings > Compute and Disk. API: POST /v1/projects/{ref}/config/disk with {"attributes":{"type":"gp3","size_gb":G}}.',
-    docUrl: "https://supabase.com/docs/guides/platform/compute-and-disk",
+      "On Supabase a disk can be increased but not decreased from Compute and Disk settings or the API. Disks right-size during a project upgrade, to 1.2x the database size (minimum 8 GB), so reclaim first (drop or truncate data you no longer need, pg_repack bloat, drop unused indexes) to bring the database size down, then run the project upgrade (Project Settings > Infrastructure). Deleting rows alone does not shrink the database size until the space is reclaimed. Contact support if an upgrade is not available for the project. Self-hosted: resize the volume with your storage tooling.",
+    docUrl: "https://supabase.com/docs/guides/platform/database-size#reducing-disk-size",
     reviewed: R,
   },
   checksum_failure: {

@@ -1011,6 +1011,14 @@ export function statsWindowDays(a: Analysis): number | null {
   return parseIntervalDays(a.sql.tableStatsResetAge) ?? parseIntervalDays(a.sql.statsResetAge);
 }
 
+/** " over a ~Nd stats window" when the window is short, for counter-derived
+ * positives (a ratio praised after two days of counters is not a week's). */
+function shortWindowNote(a: Analysis): string {
+  const d = statsWindowDays(a);
+  if (d == null || d >= THRESHOLDS.minStatsWindowDays) return "";
+  return ` over a ~${d < 1 ? `${Math.round(d * 24)}h` : `${d.toFixed(1)}d`} stats window`;
+}
+
 /**
  * Low-confidence caveat string for counter-derived findings when the stats
  * window is below THRESHOLDS.minStatsWindowDays, else null. Keeps the caveat
@@ -2473,8 +2481,15 @@ export function deriveFindings(a: Analysis): Finding[] {
     if (worstBloat >= THRESHOLDS.bloatMinBytes) {
       const top = a.sql.bloat.find((r) => num(r.waste_bytes) === worstBloat);
       const name = String(top?.name ?? "a table");
+      // The pg_stats estimator is noisy near 1x, so an estimate is med only
+      // when it is both large in bytes and well above the table's expected size
+      // (a row without bloat_x keeps the bytes-only grade).
       out.push({
-        severity: worstBloat >= THRESHOLDS.bloatMedBytes ? "med" : "low",
+        severity:
+          worstBloat >= THRESHOLDS.bloatMedBytes &&
+          (top?.bloat_x == null || num(top.bloat_x) >= THRESHOLDS.bloatMedRatio)
+            ? "med"
+            : "low",
         category: "Capacity",
         title: `~${String(top?.waste ?? "")} estimated reclaimable bloat on ${name} (pg_stats estimate - verify, then pg_repack)`,
         anchor: "#bloat",
@@ -3811,10 +3826,20 @@ export function derivePositives(a: Analysis): Positive[] {
       sustainedFrac(cpuPts, THRESHOLDS.cpuSustainedHighPct, ">=") >= THRESHOLDS.cpuSustainedFrac;
     const oversized =
       s.spanDays >= THRESHOLDS.cpuOversizeMinDays && s.p95 <= THRESHOLDS.cpuOversizePct;
-    if (!hot && !oversized)
+    // "Well-provisioned" is a claim about the instance running now, so on a
+    // window longer than recentSignalDays it is judged on that recent stretch
+    // (a 90d mean blends compute sizes and growth phases) and needs its p95
+    // below the sustained-high line, not just a low mean.
+    const lastT = (cpuPts[cpuPts.length - 1] as Point).t;
+    const recentPts =
+      s.spanDays > THRESHOLDS.recentSignalDays
+        ? cpuPts.filter((p) => lastT - p.t <= THRESHOLDS.recentSignalDays * 86400)
+        : cpuPts;
+    const r = recentPts.length >= 2 ? trendStat(recentPts) : null;
+    if (!hot && !oversized && r && r.p95 < THRESHOLDS.cpuSustainedHighPct)
       out.push({
         category: "Capacity",
-        title: `CPU well-provisioned: avg ${Math.round(s.mean)}%, peak ${Math.round(s.max)}% over ${Math.round(s.spanDays)}d`,
+        title: `CPU well-provisioned: avg ${Math.round(r.mean)}%, p95 ${Math.round(r.p95)}% over the last ${Math.round(r.spanDays)}d`,
       });
   }
   const memPts = tpoints("Memory used (%)");
@@ -3870,7 +3895,7 @@ export function derivePositives(a: Analysis): Positive[] {
   if (cachePraiseOk && a.sql.cacheHitPct != null && a.sql.cacheHitPct >= THRESHOLDS.cacheHitPct) {
     out.push({
       category: "Performance",
-      title: `Cache hit ratio ${a.sql.cacheHitPct}% (>= ${THRESHOLDS.cacheHitPct}% target)`,
+      title: `Cache hit ratio ${a.sql.cacheHitPct}% (>= ${THRESHOLDS.cacheHitPct}% target)${shortWindowNote(a)}`,
     });
   }
   const totalPolicies = a.sql.rlsPolicies.length;
