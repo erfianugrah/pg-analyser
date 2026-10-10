@@ -838,6 +838,7 @@ export async function collect(
     const textFiles = probeRows.filter((r) => /\.(csv|log)$/i.test(String(r.name)));
     const chunks: string[] = [];
     let total = 0;
+    const tailStart = Date.now();
     try {
       for (const f of textFiles) {
         if (total >= RUN_BUDGET) break;
@@ -907,7 +908,15 @@ export async function collect(
           };
       }
     } catch (err) {
+      // A note, not just a debug line: without it the lock-wave section of the
+      // report is simply absent and a slow failure (a statement timeout per
+      // chunk) is indistinguishable from "no lock events".
+      const secs = Math.round((Date.now() - tailStart) / 1000);
       clog.debug("log read failed", { error: String(err) });
+      errors.push({
+        source: "lockWave",
+        message: `server-log tail read failed after ${secs}s (lock-wave, freeze and restart tail skipped): ${String(err).slice(0, 200)}`,
+      });
     }
 
     // Restart history needs more than the tails: a busy database fills 4 MB
