@@ -1,12 +1,23 @@
 // Acceptance - alert pack Tasks 5/6: the pack is reachable from the CLI with no
 // credential, and the generated Prometheus stack actually loads it.
 // Contract only. Do not edit to make the implementation pass.
-import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const CLI = join(import.meta.dir, "..", "src", "index.ts");
+
+// Hygiene only (no contract change): remove the temp dirs the tests create.
+const tmpDirs: string[] = [];
+const tempDir = (): string => {
+  const d = mkdtempSync(join(tmpdir(), "pg-analyser-alerts-"));
+  tmpDirs.push(d);
+  return d;
+};
+afterAll(() => {
+  for (const d of tmpDirs) rmSync(d, { recursive: true, force: true });
+});
 
 function run(args: string[], env: Record<string, string> = {}) {
   const p = Bun.spawnSync(["bun", "run", CLI, ...args], {
@@ -23,7 +34,7 @@ function run(args: string[], env: Record<string, string> = {}) {
 
 describe("alerts-init needs no credential", () => {
   test("it writes alerts.yml with an empty environment", () => {
-    const dir = mkdtempSync(join(tmpdir(), "pg-analyser-alerts-"));
+    const dir = tempDir();
     const r = run(["alerts-init", "--dir", dir], {
       SUPABASE_ACCESS_TOKEN: "",
       PG_ANALYSER_LOG_LEVEL: "error",
@@ -35,7 +46,7 @@ describe("alerts-init needs no credential", () => {
   });
 
   test("--ref scopes the expressions to one project", () => {
-    const dir = mkdtempSync(join(tmpdir(), "pg-analyser-alerts-"));
+    const dir = tempDir();
     const r = run(["alerts-init", "--ref", "examplerefaaaaaaaaaa", "--dir", dir], {
       SUPABASE_ACCESS_TOKEN: "",
       PG_ANALYSER_LOG_LEVEL: "error",

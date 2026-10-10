@@ -1925,7 +1925,7 @@ ${faviconTag(brand)}
   @page{size:A4;margin:14mm 12mm}
   @media print{
     nav.rnav{display:none}
-    nav.ptoc{display:block;break-before:page;break-after:page;margin:0;font-size:12px;line-height:1.35}
+    nav.ptoc{display:block;break-after:page;margin:0;font-size:12px;line-height:1.35}
     nav.ptoc .ph{font-size:16px;font-weight:700;padding:8px 0 0;border-top:3px solid var(--fg);margin:0 0 10px}
     nav.ptoc .g{break-inside:avoid;margin:0 0 12px}
     nav.ptoc .gl{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--mut);border-bottom:1px solid var(--line);padding:0 0 2px;margin:0 0 3px}

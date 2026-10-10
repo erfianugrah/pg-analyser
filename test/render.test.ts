@@ -469,6 +469,15 @@ describe("render", () => {
         expect(tagBalance(html)).toBe(true);
       });
 
+      test("follows the report header on page 1 instead of forcing a page break before it", () => {
+        // A break-before left page 1 holding only the two-line header.
+        const html = render(rich(), { narrative: true });
+        const rule = html.match(/nav\.ptoc\{display:block[^}]*\}/)?.[0] ?? "";
+        expect(rule).not.toBe("");
+        expect(rule).not.toContain("break-before");
+        expect(rule).toContain("break-after:page");
+      });
+
       test("same groups and entries as the sidebar: one per section, NAV_GROUPS order", () => {
         for (const [a, opts] of [
           [fixture(), {}],
