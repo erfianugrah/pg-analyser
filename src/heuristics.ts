@@ -153,6 +153,16 @@ export const THRESHOLDS = {
    * that, nothing. Practitioner defaults, same shape as memSustainedFrac. */
   pagingSustainedFrac: 0.25,
   pagingEpisodicFrac: 0.05,
+  /** Episodic trend findings (paging, EBS depletion) are graded on the last N
+   * days when the window is longer: a 90d window spans compute changes, and a
+   * signal that stopped weeks ago describes an instance that no longer exists.
+   * Measured: every over-threshold major-fault sample in a 90d window predated
+   * a compute upgrade, yet the 90d fraction graded it "working set paging". */
+  recentSignalDays: 14,
+  /** vector_index_economics' "index >= its table" branch needs at least this
+   * much index: halving a few MB saves nothing, and a 4.8 MB index on a 4.6 MB
+   * table (0.0% of the database) had been titled "dominating storage". */
+  vectorIndexEconMinBytes: 1024 ** 3,
   /** The top query's share of DB time escalates to med only when the query
    * also carries this much total exec time in the stats window (ten minutes);
    * a 44% share of an idle database (25 s in a week, measured) is attribution,
@@ -186,6 +196,13 @@ export const THRESHOLDS = {
    * averages in slower past growth - measured: 8.90 GB/day over 90d against
    * 11.19 GB/day over the last 14d on an accelerating project. */
   diskFillRecentDays: 14,
+  /** A fall in used bytes of at least this fraction between two samples (and
+   * at least diskResizeMinAbsoluteBytes) is a data drop - a table dropped or
+   * truncated, a repack, a retention purge. Growth before it describes a
+   * workload that no longer exists, so the fill projection starts after it.
+   * Measured: a ~93% one-sample drop, after which the 14d rate still read the
+   * pre-drop growth and titled a 6%-used volume "filling". */
+  diskUsedDropFrac: 0.3,
   /** Autoscale is inferred when every past expansion fired with used % inside
    * this band (measured: 89.2-89.9% before each of four steps). */
   diskAutoscaleTriggerBand: [85, 95] as const,
@@ -273,6 +290,10 @@ export const THRESHOLDS = {
   /** Minimum sequential-scan count (in the stats window) before a table is
    * called seq-scan heavy. A handful of scans is not a workload pattern. */
   seqScanMinScans: 100,
+  /** seq_scan_heavy is med only when some qualifying table averages at least
+   * this many rows read per sequential scan (seq_tup_read / seq_scan); below
+   * it, frequent scans of a small table are often the cheapest plan -> low. */
+  seqScanMedRowsPerScan: 100_000,
 } as const;
 
 export type Plane =
@@ -1214,9 +1235,9 @@ export const HEURISTICS: Record<string, Heuristic> = {
     id: "lock_wave",
     plane: "Config",
     whyItMatters:
-      "A burst of 'still waiting for ...Lock' lines plus timeout cancellations in the server log is the signature of a lock-queue cascade (statement-timeout cancels count only when a lock line is present in the same window - a cancel-only burst is reported separately as statement_timeout_burst): a DDL statement (AccessExclusiveLock) queued behind long-running readers, with every NEW reader then queueing behind the waiting DDL - Postgres grants locks in queue order, so a lock that would not conflict still waits. The cascade is transient and invisible to any point-in-time snapshot; the log is the only on-box record of it.",
+      "A burst of 'still waiting for ...Lock' lines plus timeout cancellations in the server log is the signature of a lock-queue cascade (statement-timeout cancels count only in minutes that themselves carry a lock line - a cancel-only burst is reported separately as statement_timeout_burst): a DDL statement (AccessExclusiveLock) queued behind long-running readers, with every NEW reader then queueing behind the waiting DDL - Postgres grants locks in queue order, so a lock that would not conflict still waits. The cascade is transient and invisible to any point-in-time snapshot; the log is the only on-box record of it.",
     remediation:
-      "Attribute the window: what DDL and which scheduled jobs ran then (the top-relation column names the contended table). Prevent the next one: run migrations with a session-level lock_timeout (a few seconds) + a retry loop so a blocked ALTER fails fast instead of queueing readers; shorten or CONCURRENTLY-ify the long jobs holding AccessShareLock; avoid ALTER COLUMN ... TYPE rewrites on hot tables (add column + backfill + swap).",
+      "Attribute the window: the evidence lists who waited for what (pid, application_name, user, lock mode, relation, holder pids) when the log carries them; pg-analyser labels its own sessions application_name=pg-analyser, and a cascade involving them is graded low. Then check what DDL and which scheduled jobs ran then (the top-relation column names the contended table). Prevent the next one: run migrations with a session-level lock_timeout (a few seconds) + a retry loop so a blocked ALTER fails fast instead of queueing readers; shorten or CONCURRENTLY-ify the long jobs holding AccessShareLock; avoid ALTER COLUMN ... TYPE rewrites on hot tables (add column + backfill + swap).",
     sql: `-- live view if it is happening right now:\nselect pid, wait_event_type, wait_event, state, query_start,\n       pg_blocking_pids(pid) as blocked_by, left(query, 80) as query\nfrom pg_stat_activity\nwhere wait_event_type = 'Lock';`,
     howToVerify:
       "Re-run after the fix window: the scanned log window should show no waiting/cancellation bursts. Confirm migrations now fail fast (lock timeout in the migration session) instead of stalling readers.",

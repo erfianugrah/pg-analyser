@@ -867,7 +867,16 @@ export async function collect(
         summary.coverage.from = mins[0] ?? null;
         summary.coverage.to = mins[mins.length - 1] ?? null;
         // Resolve relids -> schema.table (same superuser session).
-        const relids = summary.topRelations.map((r) => r.relid);
+        // Event relids (<= 20 per bucket) resolve in the same query so the
+        // who-waited-for-what lines name the table, not just an oid.
+        const relids = [
+          ...new Set([
+            ...summary.topRelations.map((r) => r.relid),
+            ...summary.buckets.flatMap((b) =>
+              (b.events ?? []).flatMap((e) => (e.relid != null ? [e.relid] : [])),
+            ),
+          ]),
+        ].slice(0, 200);
         if (relids.length > 0) {
           try {
             const names = await runner.run(relationNamesQuery(relids));
@@ -876,6 +885,9 @@ export async function collect(
               ...r,
               name: nameByOid.get(r.relid) ?? null,
             }));
+            for (const b of summary.buckets)
+              for (const e of b.events ?? [])
+                if (e.relid != null) e.relation = nameByOid.get(e.relid) ?? null;
           } catch {
             /* names are best-effort; relids stay unresolved */
           }

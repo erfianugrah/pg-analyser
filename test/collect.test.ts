@@ -663,6 +663,46 @@ describe("logDirProbe (superuser log-directory three-fact probe)", () => {
     expect(blob).not.toContain("UPDATE accounts");
   });
 
+  test("lockWave events carry resolved relation names and the waiter's application_name, still no query text", async () => {
+    const f = Array(26).fill("");
+    f[0] = "2026-10-09 00:22:10.100 UTC";
+    f[1] = "postgres";
+    f[3] = "123";
+    f[11] = "LOG";
+    f[12] = "00000";
+    f[13] =
+      '"process 123 still waiting for AccessShareLock on relation 12345 of database 5 after 1000.058 ms"';
+    f[14] = '"Process holding the lock: 456. Wait queue: 123."';
+    f[19] = `"SELECT token FROM accounts WHERE ssn='123-45-6789'"`;
+    f[22] = "pg-analyser";
+    const runner = {
+      source: "superuser" as const,
+      run: async (q: string) => {
+        if (/pg_ls_logdir\(\)/.test(q))
+          return [
+            {
+              node_addr: "10.0.0.7",
+              name: "postgresql.csv",
+              size: 5000,
+              modification: "2026-10-09T00:30:00Z",
+            },
+          ];
+        if (/pg_read_file/.test(q)) return [{ chunk: f.join(",") }];
+        if (/from pg_class where oid = any/.test(q))
+          return [{ relid: 12345, name: "public.orders" }];
+        return [];
+      },
+    };
+    const a = await collect("ref", t(), "0.0.0-test", { syncCheck: false, sqlRunner: runner });
+    const e = a.sql.lockWave?.buckets[0]?.events?.[0];
+    expect(e?.relation).toBe("public.orders");
+    expect(e?.appName).toBe("pg-analyser");
+    expect(e?.holders).toEqual([456]);
+    const blob = JSON.stringify(a.sql.lockWave);
+    expect(blob).not.toContain("123-45-6789");
+    expect(blob).not.toContain("SELECT token");
+  });
+
   test("superuser + permission denied -> readable=false + one note, no throw", async () => {
     const runner = {
       source: "superuser" as const,

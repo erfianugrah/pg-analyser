@@ -547,6 +547,7 @@ export const QUERIES = {
       schemaname as schema,
       schemaname || '.' || relname as table,
       seq_scan,
+      seq_tup_read,
       coalesce(idx_scan, 0) as idx_scan,
       n_live_tup as live_rows,
       case when seq_scan > 0

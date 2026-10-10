@@ -507,6 +507,27 @@ export const Analysis = z.object({
             cancelsStmt: z.number(),
             cancelsUser: z.number(),
             deadlocks: z.number(),
+            // Who waited for what (<= 20 per bucket). Optional so analysis.json
+            // written before wait events were kept still parses. Lock metadata
+            // and session labels only - never statement text.
+            events: z
+              .array(
+                z.object({
+                  minute: z.string(),
+                  kind: z.enum(["waiting", "acquired"]),
+                  mode: z.string(),
+                  relid: z.number().nullable(),
+                  relation: z.string().nullable(),
+                  pid: z.number(),
+                  holders: z.array(z.number()),
+                  queue: z.array(z.number()),
+                  waitMs: z.number(),
+                  appName: z.string().nullable(),
+                  userName: z.string().nullable(),
+                  holderApps: z.array(z.string()),
+                }),
+              )
+              .optional(),
           }),
         ),
         topRelations: z.array(

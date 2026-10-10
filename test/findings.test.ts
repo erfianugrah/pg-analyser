@@ -277,6 +277,10 @@ describe("review-7 batch: pg-minor / cron-history / bloat cross-check / memory",
     const f = deriveFindings(a).find((x) => x.heuristicId === "pg_minor_behind");
     expect(f?.title).toContain("15.1");
     expect(f?.title).toContain("behind");
+    // The comparison is against the community release; without the upgrade
+    // plane nobody checked what the provider can actually upgrade to.
+    expect(f?.title).toContain("community");
+    expect(f?.evidence).toContain("not checked");
     // with the Management upgrade plane present, the no-PAT complement is suppressed
     a.upgrade = {
       current_app_version: "x",
@@ -601,6 +605,58 @@ describe("disk resize-aware projection", () => {
     const f = deriveFindings(a).find((x) => x.title.startsWith("Data disk filling"));
     expect(f?.title).toContain("GB of");
     expect(f?.title).toContain("days to full");
+  });
+
+  test("a large drop in used bytes ends the fit: pre-drop growth is not projected", () => {
+    // Shape: a volume filled at ~10 GiB/day, then most of the data was dropped
+    // and space reclaimed on the last day. The pre-drop rate says nothing about
+    // the workload that remains, and one post-drop point cannot carry a fit.
+    // Dense points (6h apart, like a Grafana export) so one drop sample does
+    // not flip the recent least-squares slope negative on its own.
+    const a = base();
+    const GiB = 2 ** 30;
+    const STEP = DAY / 4;
+    const used = [...Array.from({ length: 80 }, (_, i) => (100 + i * 2.5) * GiB), 15 * GiB];
+    const at = (vals: number[], title: string) => ({
+      title,
+      unit: title.includes("%") ? "%" : "bytes",
+      points: vals.map((v, i) => ({ t: i * STEP, v })),
+    });
+    const size = Array(81).fill(400 * GiB);
+    const pct = used.map((u) => (u / (400 * GiB)) * 100);
+    a.trends = [at(pct, "Disk used (%)"), at(size, "Disk size (bytes)")];
+    expect(deriveFindings(a).some((x) => x.heuristicId === "disk_fill_projection")).toBe(false);
+  });
+
+  test("after a large drop the projection uses only the post-drop segment", () => {
+    const a = base();
+    const GiB = 2 ** 30;
+    // 10 days at +10 GiB/day, drop to 20 GiB, then 15 days at +1 GiB/day.
+    const used = [
+      ...Array.from({ length: 10 }, (_, i) => (100 + i * 10) * GiB),
+      ...Array.from({ length: 15 }, (_, i) => (20 + i) * GiB),
+    ];
+    const size = Array(25).fill(60 * GiB);
+    const pct = used.map((u) => (u / (60 * GiB)) * 100);
+    a.trends = [series("Disk used (%)", pct), series("Disk size (bytes)", size)];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "disk_fill_projection");
+    // 34 GiB used of 60 GiB at 1 GiB/day -> ~26 days; the pre-drop 10 GiB/day
+    // would have said ~3.
+    expect(f?.title).toMatch(/~2[5-7] days to full/);
+    expect(f?.evidence).toContain("dropped");
+  });
+
+  test("no-PAT: an over-provisioned volume is read from the trend series", () => {
+    // a.disk comes from the Management API and is null without a PAT; the
+    // Grafana size + used-% series carry the same two numbers.
+    const a = base();
+    const GiB = 2 ** 30;
+    const pct = Array(15).fill(6);
+    const size = Array(15).fill(2000 * GiB);
+    a.trends = [series("Disk used (%)", pct), series("Disk size (bytes)", size)];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "disk_oversized");
+    expect(f?.title).toContain("2000 GB volume, 6% used");
+    expect(f?.evidence).toContain("trend");
   });
 
   test("steady non-filling disk -> 'Disk stable' with absolute bytes", () => {
@@ -1693,6 +1749,55 @@ describe("deriveFindings", () => {
   });
 });
 
+describe("trend findings graded on the recent window, not stale history", () => {
+  const DAY = 86400;
+  // 90 daily points: `old` for the first 60 days, `recent` for the last 30.
+  const split = (old: number, recent: number) =>
+    Array.from({ length: 90 }, (_, i) => ({ t: i * DAY, v: i < 60 ? old : recent }));
+
+  test("paging that stopped weeks ago is low and dated, not 'working set paging'", () => {
+    // Shape: sustained paging on a smaller instance, none after a compute
+    // upgrade. The 90d fraction (67%) is past the sustained line on its own.
+    const a = base();
+    a.trends = [
+      { title: "Major page faults/s", unit: "", points: split(50, 0) },
+      { title: "Swap-in pages/s", unit: "", points: split(0, 0) },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "mem_pressure_paging");
+    expect(f?.severity).toBe("low");
+    expect(f?.title).not.toContain("working set paging");
+    expect(f?.title).toContain("none in the last 14d");
+    expect(f?.title).toContain("1970-03-01"); // last point above threshold (day 59)
+  });
+
+  test("paging that continues into the recent window keeps its grade", () => {
+    const a = base();
+    a.trends = [{ title: "Major page faults/s", unit: "", points: split(50, 50) }];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "mem_pressure_paging");
+    expect(f?.severity).toBe("med");
+    expect(f?.title).toContain("working set paging");
+    // The grade's basis (the recent window) is in the title, not only the 90d share.
+    expect(f?.title).toContain("100% of the last 14d");
+  });
+
+  test("a single healed EBS depletion weeks ago is low", () => {
+    const a = base();
+    const pts = Array.from({ length: 90 }, (_, i) => ({ t: i * DAY, v: i === 20 ? 0 : 99 }));
+    a.trends = [{ title: "EBS IOPS balance (%)", unit: "%", points: pts }];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "ebs_balance_low");
+    expect(f?.severity).toBe("low");
+    expect(f?.title).toContain("currently 99%");
+  });
+
+  test("a healed EBS depletion inside the recent window stays med", () => {
+    const a = base();
+    const pts = Array.from({ length: 90 }, (_, i) => ({ t: i * DAY, v: i === 85 ? 0 : 99 }));
+    a.trends = [{ title: "EBS IOPS balance (%)", unit: "%", points: pts }];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "ebs_balance_low");
+    expect(f?.severity).toBe("med");
+  });
+});
+
 describe("trend-driven capacity findings (data-aware)", () => {
   const DAY = 86400;
   // n points evenly spaced over spanDays, values start..end linearly.
@@ -2121,6 +2226,39 @@ describe("config tuning (static GUC findings)", () => {
     const f = deriveFindings(a).find((x) => x.heuristicId === "work_mem_blast");
     expect(f).toBeDefined();
     expect(f?.severity).toBe("med");
+  });
+
+  test("work_mem_blast grades on observed connections, not only the configured ceiling", () => {
+    // Shape: a platform-default max_connections (480 on a 64 GB instance)
+    // with 32 MB work_mem crosses RAM only at the ceiling; ~85 observed
+    // backends stay far under it.
+    const a = base();
+    a.sql.pgSettings = [
+      guc("shared_buffers", String((16 * 1024 ** 3) / (8 * 1024)), "8kB"), // ~64 GB RAM
+      guc("work_mem", String(32 * 1024), "kB"),
+      guc("max_connections", "480"),
+      guc("max_parallel_workers_per_gather", "8"),
+    ];
+    a.sql.connections = [
+      { state: "idle", backend_type: "client backend", connections: "83" },
+      { state: "active", backend_type: "client backend", connections: "2" },
+    ];
+    const low = deriveFindings(a).find((x) => x.heuristicId === "work_mem_blast");
+    expect(low?.severity).toBe("low");
+    expect(low?.title).toContain("max_connections");
+    expect(low?.evidence).toContain("85");
+    // A trend peak near the ceiling is real exposure again.
+    a.trends = [
+      {
+        title: "DB connections",
+        unit: "",
+        points: [
+          { t: 1, v: 120 },
+          { t: 2, v: 450 },
+        ],
+      },
+    ];
+    expect(deriveFindings(a).find((x) => x.heuristicId === "work_mem_blast")?.severity).toBe("med");
   });
 
   test("statement_timeout=0 -> statement_timeout_off; idle owned by its own finding; lock ignored", () => {
@@ -2884,6 +3022,34 @@ describe("pgvector / query-shape findings (2026-08 vectors)", () => {
     expect(f?.evidence).toContain("24.9% of db");
   });
 
+  test("vector_index_economics: a small index larger than its small table is not 'dominating storage'", () => {
+    // Measured: a 4.8 MB index on a 4.6 MB table (105% of table, 0.0% of db)
+    // was titled "dominating storage". pct_of_table alone needs a size floor.
+    const a = base();
+    a.sql.extensions = [{ name: "vector", installed: "0.8.6", latest: "0.8.6", outdated: false }];
+    const idx = (bytes: number, pctDb: number) => ({
+      schema: "public",
+      table: "docs",
+      column: "embedding",
+      dimensions: 1536,
+      method: "hnsw",
+      index: "docs_embedding_hnsw",
+      index_bytes: bytes,
+      index_size: "x",
+      table_bytes: bytes / 1.05,
+      pct_of_table: 105.3,
+      pct_of_db: pctDb,
+      idx_scan: 10,
+      definition:
+        "CREATE INDEX docs_embedding_hnsw ON public.docs USING hnsw (embedding vector_cosine_ops)",
+    });
+    a.sql.vectorIndexes = [idx(4_900_000, 0)];
+    expect(deriveFindings(a).some((x) => x.heuristicId === "vector_index_economics")).toBe(false);
+    // The same ratio on a multi-GB index is worth halving.
+    a.sql.vectorIndexes = [idx(3 * 2 ** 30, 2.1)];
+    expect(deriveFindings(a).some((x) => x.heuristicId === "vector_index_economics")).toBe(true);
+  });
+
   test("vector_index_economics: halfvec index already -> no finding", () => {
     const a = base();
     a.sql.extensions = [{ name: "vector", installed: "0.8.6", latest: "0.8.6", outdated: false }];
@@ -3350,6 +3516,28 @@ describe("report-review fixes (2026-09-03): rules that overreached their evidenc
     expect(deriveFindings(a).some((x) => x.heuristicId === "autovacuum_overdue")).toBe(true);
   });
 
+  test("a counter finding flagged low-confidence (short stats window) is graded low", () => {
+    // A card whose own evidence says "Low confidence ... re-check before
+    // acting" must not outrank findings the data supports.
+    const a = base();
+    a.sql.deadTuples = [
+      {
+        schema: "public",
+        table: "public.big",
+        dead_rows: 632_567,
+        autovacuum_at: 500,
+        overdue: "yes",
+      },
+    ];
+    a.sql.statsResetAge = "1 day 15:00:52";
+    const short = deriveFindings(a).find((x) => x.heuristicId === "autovacuum_overdue");
+    expect(short?.evidence).toContain("Low confidence");
+    expect(short?.severity).toBe("low");
+    a.sql.statsResetAge = "30 days";
+    const long = deriveFindings(a).find((x) => x.heuristicId === "autovacuum_overdue");
+    expect(long?.severity).toBe("med");
+  });
+
   test("seq_scan_heavy: a table scanned a handful of times is not 'heavy'", () => {
     const a = base();
     a.sql.seqScanHeavy = [
@@ -3380,6 +3568,44 @@ describe("report-review fixes (2026-09-03): rules that overreached their evidenc
     ];
     const f = deriveFindings(a).find((x) => x.heuristicId === "seq_scan_heavy");
     expect(f?.title).toContain("1 table sequential-scan heavy");
+  });
+
+  test("seq_scan_heavy names its tables and grades by rows read per scan", () => {
+    // The card had no evidence line - the tables were only in the drill-down -
+    // and graded med on scan COUNT alone, though a frequent scan of a small
+    // table is often the cheapest plan.
+    const a = base();
+    a.sql.seqScanHeavy = [
+      {
+        schema: "public",
+        table: "public.lookup",
+        seq_scan: 500,
+        seq_tup_read: 500 * 2_000,
+        idx_scan: 0,
+        live_rows: 2_000,
+      },
+    ];
+    const small = deriveFindings(a).find((x) => x.heuristicId === "seq_scan_heavy");
+    expect(small?.evidence).toContain("public.lookup");
+    expect(small?.evidence).toContain("2,000 rows per scan");
+    expect(small?.severity).toBe("low");
+    a.sql.seqScanHeavy = [
+      {
+        schema: "public",
+        table: "public.events",
+        seq_scan: 500,
+        seq_tup_read: 500 * 3_000_000,
+        idx_scan: 10,
+        live_rows: 3_000_000,
+      },
+    ];
+    const big = deriveFindings(a).find((x) => x.heuristicId === "seq_scan_heavy");
+    expect(big?.severity).toBe("med");
+    // Rows without seq_tup_read (older analysis.json) keep the old grade.
+    a.sql.seqScanHeavy = [
+      { schema: "public", table: "public.legacy", seq_scan: 500, idx_scan: 0, live_rows: 9_000 },
+    ];
+    expect(deriveFindings(a).find((x) => x.heuristicId === "seq_scan_heavy")?.severity).toBe("med");
   });
 
   test("index_advisor_rec: DDL targeting a managed schema is dropped; app DDL keeps calls + mean in evidence", () => {
@@ -4288,5 +4514,119 @@ describe("a stats_reset older than all readable log is not flagged", () => {
     ];
     const p = derivePositives(a).find((x) => x.title.startsWith("No restart"));
     expect(p?.title).not.toContain("falls outside");
+  });
+});
+
+describe("lock_wave: who waited for what, own-session and own-collection flags", () => {
+  type Ev = import("../src/locklog.ts").LockWaveEvent;
+  const ev = (o: Partial<Ev>): Ev => ({
+    minute: "2026-10-09 00:22",
+    kind: "waiting",
+    mode: "AccessShareLock",
+    relid: 30919,
+    relation: "public.orders",
+    pid: 123,
+    holders: [456],
+    queue: [123, 789],
+    waitMs: 1000.058,
+    appName: "PostgREST 12.2",
+    userName: "authenticator",
+    holderApps: [],
+    ...o,
+  });
+  function cascade(events: Ev[], meta?: { collectedAt: string; collectionMs?: number }) {
+    const a = base();
+    if (meta) {
+      a.meta.collectedAt = meta.collectedAt;
+      a.meta.collectionMs = meta.collectionMs;
+    }
+    a.sql.lockWave = {
+      coverage: { from: "2026-10-09 00:00", to: "2026-10-09 01:30", files: 1, bytesScanned: 4e6 },
+      buckets: [
+        {
+          minute: "2026-10-09 00:22",
+          waiting: 12,
+          maxWaitMs: 11_600,
+          acquired: 2,
+          cancelsLock: 0,
+          cancelsStmt: 0,
+          cancelsUser: 0,
+          deadlocks: 0,
+          events,
+        },
+      ],
+      topRelations: [{ relid: 30919, name: "public.orders", hits: 12 }],
+      samples: [],
+    };
+    return deriveFindings(a).find((x) => x.heuristicId === "lock_wave");
+  }
+
+  test("evidence names who waited for what: pid, app, user, mode, relation, holders, queue, wait", () => {
+    const f = cascade([ev({})]);
+    expect(f?.severity).toBe("med");
+    expect(f?.evidence).toContain("pid 123");
+    expect(f?.evidence).toContain("PostgREST 12.2");
+    expect(f?.evidence).toContain("authenticator");
+    expect(f?.evidence).toContain("AccessShareLock on public.orders");
+    expect(f?.evidence).toContain("held by 456");
+    expect(f?.evidence).toContain("queue 123, 789");
+    expect(f?.evidence).toContain("1.0 s");
+    expect(f?.evidence).not.toContain("involves pg-analyser");
+  });
+
+  test("an unresolved relation shows its oid; missing DETAIL says the holder is not in the log", () => {
+    const f = cascade([ev({ relation: null, holders: [], queue: [] })]);
+    expect(f?.evidence).toContain("relation oid 30919");
+    expect(f?.evidence).toContain("holder not logged");
+  });
+
+  test("a waiter running as pg-analyser -> low, named in title and evidence", () => {
+    const f = cascade([ev({ appName: "pg-analyser" })]);
+    expect(f?.severity).toBe("low");
+    expect(f?.title).toContain("involves pg-analyser's own session");
+    expect(f?.evidence).toContain("involves pg-analyser's own session");
+  });
+
+  test("a holder running as pg-analyser -> low", () => {
+    const f = cascade([ev({ holderApps: ["pg-analyser"] })]);
+    expect(f?.severity).toBe("low");
+    expect(f?.title).toContain("involves pg-analyser's own session");
+  });
+
+  test("the configured PG_ANALYSER_APPLICATION_NAME counts as the analyser too", () => {
+    const prev = process.env.PG_ANALYSER_APPLICATION_NAME;
+    process.env.PG_ANALYSER_APPLICATION_NAME = "audit-nightly";
+    try {
+      const f = cascade([ev({ appName: "audit-nightly" })]);
+      expect(f?.severity).toBe("low");
+      expect(f?.title).toContain("own session");
+    } finally {
+      if (prev === undefined) delete process.env.PG_ANALYSER_APPLICATION_NAME;
+      else process.env.PG_ANALYSER_APPLICATION_NAME = prev;
+    }
+  });
+
+  test("a window overlapping this run's collection gets an evidence note (severity unchanged)", () => {
+    // collected 00:27:30, took 600 s -> collection window 00:17:30 to 00:27:30
+    const f = cascade([ev({})], { collectedAt: "2026-10-09T00:27:30.000Z", collectionMs: 600_000 });
+    expect(f?.evidence).toContain("overlaps this audit's own collection");
+    expect(f?.severity).toBe("med");
+    expect(f?.title).not.toContain("own session");
+  });
+
+  test("a window well before the collection gets no overlap note", () => {
+    const f = cascade([ev({})], { collectedAt: "2026-10-10T12:00:00.000Z", collectionMs: 600_000 });
+    expect(f?.evidence).not.toContain("overlaps this audit's own collection");
+  });
+
+  test("no events (older analysis.json) -> finding still renders, no who-waited block", () => {
+    const f = cascade([]);
+    expect(f?.title).toMatch(/^Lock-wait cascade/);
+    expect(f?.evidence).not.toContain("pid ");
+  });
+
+  test("the evidence lists at most 20 events", () => {
+    const f = cascade(Array.from({ length: 20 }, (_, i) => ev({ pid: 1000 + i })));
+    expect(f?.evidence?.match(/pid 10\d\d/g)?.length).toBe(20);
   });
 });

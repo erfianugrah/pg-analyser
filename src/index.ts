@@ -364,11 +364,16 @@ export function parseFlags(argv: string[]): Flags {
   return out;
 }
 
-/** Write a project's full report set to `dir` and return its finding counts. */
+/**
+ * Write a project's full report set to `dir` and return its finding counts.
+ * A PDF failure (e.g. no Chrome) is returned as `pdfError`, not thrown: the
+ * analysis and HTML report are already on disk, and `pg-analyser pdf <dir>`
+ * can render the PDF later, so a sweep must not mark the database FAILED.
+ */
 async function emitReport(
   analysis: Analysis,
   dir: string,
-): Promise<{ high: number; med: number; low: number }> {
+): Promise<{ high: number; med: number; low: number; pdfError?: string }> {
   await mkdir(dir, { recursive: true });
   await Bun.write(join(dir, "analysis.json"), JSON.stringify(analysis, null, 2));
   // Join with the history store so combined reports get the Resource snapshot
@@ -377,13 +382,24 @@ async function emitReport(
   const overlay = await loadOverlay({ ref: analysis.meta.ref });
   const html = render(analysis, { brand: activeBrand, overlay });
   await Bun.write(join(dir, "report.html"), html);
-  await htmlToPdf(html, join(dir, "report.pdf"));
+  let pdfError: string | undefined;
+  try {
+    await htmlToPdf(html, join(dir, "report.pdf"));
+  } catch (err) {
+    pdfError = err instanceof Error ? err.message : String(err);
+  }
   const f = deriveFindings(analysis);
   return {
     high: f.filter((x) => x.severity === "high").length,
     med: f.filter((x) => x.severity === "med").length,
     low: f.filter((x) => x.severity === "low").length,
+    pdfError,
   };
+}
+
+/** Sweep progress-line suffix for a report whose PDF step failed. */
+function pdfTail(pdfError: string | undefined): string {
+  return pdfError ? ` - no PDF (${pdfError})` : "";
 }
 
 /**
@@ -468,7 +484,7 @@ async function doAllDbs(
       while (usedDirs.has(projDir))
         projDir = `${slugify(projName) || t.ref}-${t.ref.slice(0, 8)}-${date}`;
       usedDirs.add(projDir);
-      const counts = await emitReport(analysis, join(outBase, projDir));
+      const { pdfError, ...counts } = await emitReport(analysis, join(outBase, projDir));
       // Extract txid headroom: from the database row if present, else from the trend.
       let txidRemaining: number | undefined;
       let txidEtaDays: number | undefined;
@@ -512,7 +528,7 @@ async function doAllDbs(
       });
       const n = counts.high + counts.med + counts.low;
       progress.done(
-        `${sweepOutcome(analysis).head(n)}${doneTail(analysis)}${grafanaGap ? " - trends skipped" : ""}`,
+        `${sweepOutcome(analysis).head(n)}${doneTail(analysis)}${grafanaGap ? " - trends skipped" : ""}${pdfTail(pdfError)}`,
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -754,7 +770,7 @@ async function doAll(
           amcheck: runner ? amcheck : undefined,
           region: dbUrl ? (regionFromConnstring(dbUrl) ?? undefined) : undefined,
         }).finally(() => runner?.close());
-        const counts = await emitReport(analysis, join(outBase, orgDir, projDir));
+        const { pdfError, ...counts } = await emitReport(analysis, join(outBase, orgDir, projDir));
         // Extract txid headroom for the fleet index column.
         let txidRemaining: number | undefined;
         let txidEtaDays: number | undefined;
@@ -798,7 +814,7 @@ async function doAll(
         med += counts.med;
         low += counts.low;
         const n = counts.high + counts.med + counts.low;
-        progress.done(`${sweepOutcome(analysis).head(n)}${doneTail(analysis)}`);
+        progress.done(`${sweepOutcome(analysis).head(n)}${doneTail(analysis)}${pdfTail(pdfError)}`);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         errors++;
@@ -1320,8 +1336,11 @@ async function doPdf(
   if (await Bun.file(store).exists()) fillTrendsFromStore(analysis, store);
   const overlay = await loadOverlay({ ref: analysis.meta.ref, file: overlayFile });
   const pdfPath = join(dir, "report.pdf");
-  await htmlToPdf(render(analysis, { narrative, brand: activeBrand, overlay }), pdfPath);
-  console.error(`> ${pdfPath}`);
+  const passes = await htmlToPdf(
+    render(analysis, { narrative, brand: activeBrand, overlay }),
+    pdfPath,
+  );
+  console.error(`> ${pdfPath} (${passes} render passes)`);
   return pdfPath;
 }
 
