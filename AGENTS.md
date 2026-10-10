@@ -50,7 +50,7 @@ enumerates + serves API/metrics; matched projects upgrade to superuser SQL).
 | `bun test` | run tests |
 | `bun run build` | compile a standalone `pg-analyser` binary |
 
-PDF needs a system Chrome/Chromium on PATH (`chromium`, `google-chrome`, ...) or `PG_ANALYSER_CHROME=/path/to/chrome`. `analyze`/`report` need no browser.
+PDF needs a system Chrome/Chromium on PATH (`chromium`, `google-chrome`, ...), a macOS app bundle (`/Applications` or `~/Applications`: Google Chrome, Chromium), or `PG_ANALYSER_CHROME=/path/to/chrome`. `analyze`/`report` need no browser. In a sweep a PDF failure is a warning (`- no PDF (...)` on the progress line), not a FAILED database: analysis.json and report.html are already written, and `pg-analyser pdf <dir>` renders it later.
 
 ## Auth
 
@@ -507,7 +507,14 @@ src/
                  --generate-pdf-document-outline turns the group h1 / section h2
                  headings into PDF bookmarks; the print-only contents page
                  (nav.ptoc, same navGroups() data as the sidebar) gives
-                 clickable internal links. No page numbers (no target-counter()).
+                 clickable internal links, each `Title (count) ..... page` with a
+                 dot leader. Chromium has no target-counter(), so htmlToPdf
+                 renders twice: pass 1 prints empty page slots, pdfpages.ts
+                 maps the PDF's named destinations to page numbers (pure TS,
+                 no deps), fillContentsPages() injects them and the page is
+                 re-printed until no entry moves (cap 3 passes; usually 2).
+                 Parse failure or a failed later pass logs a warning and keeps
+                 the numberless PDF; it never fails the PDF.
   narrate.ts     LLM pass over the corpus + enriched findings -> narrative.md.
                  Grounded: hands the model the ranked findings (with catalogued
                  remediation + doc URL), positives, and a BOUNDED evidence digest
@@ -705,6 +712,59 @@ src/
 - Scraper dirs contain a live credential in `prometheus.yml` - gitignored.
 
 ## Verified upstream facts (Supabase, 2026-07)
+
+2026-10-10 additions (no-PAT report review, PG 17.6 project, 90 days of
+Grafana trends spanning two compute changes and a ~93% data drop):
+
+- **A large drop in used bytes ends the fill fit.** The 14d rate still read
+  the pre-drop growth and titled a 6%-used volume "filling ... ~83 days".
+  `projectDataDisk` now starts the fit after the last sample-to-sample fall
+  of `diskUsedDropFrac` (30%) and 2 GiB; with too few post-drop points there
+  is no projection, and the card names the drop when there is one.
+- **disk_oversized reads the trend series in no-PAT mode.** `a.disk` is a
+  Management API plane; the latest "Disk size (bytes)" + "Disk used (%)"
+  samples carry the same two numbers (`trendDiskVolume`).
+- **Episodic trend signals are graded on the last `recentSignalDays` (14).**
+  Every over-threshold major-fault sample in the window predated a compute
+  upgrade, yet the 90d share graded "working set paging" (med); a single EBS
+  depletion two months earlier, at 99% now, was med. Paging with nothing in
+  the last 14d is a dated low; a healed EBS dip outside it is low.
+- **A finding that carries the short-stats-window caveat is capped at low**
+  (cache_hit_low, autovacuum_overdue, counter-derived advisor lints) - a card
+  saying "Low confidence ... re-check before acting" was med.
+- **max_connections is often a platform default** (480 on 4XL, per the
+  compute-and-disk docs), so work_mem_blast grades on the observed peak
+  (client backends, or the "DB connections" trend peak) and keeps the
+  ceiling-only case as low.
+- **seq_scan_heavy names its tables and grades by rows per scan**
+  (`seq_tup_read / seq_scan`, new column; med from `seqScanMedRowsPerScan`).
+  Rows without the column keep the old grade.
+- **vector_index_economics' "index >= its table" branch needs 1 GiB**: a
+  4.8 MB index on a 4.6 MB table was "dominating storage".
+- **pg_minor_behind (no-PAT) compares with the community release only** and
+  now says the provider's upgrade target was not checked.
+- **PDF discovery covers macOS app bundles; a PDF failure in a sweep is a
+  warning**, not a FAILED database (it had also hidden the Grafana-expired
+  progress note).
+- **Lock cascades keep who waited for what, and flag the analyser's own
+  sessions.** A MED "Lock-wait cascade" was five waits in two minutes that
+  coincided with the previous analyser run, on top of 1-2 statement-timeout
+  cancels per minute for 90 minutes. The session prelude now sets
+  `application_name='pg-analyser'` (`PG_ANALYSER_APPLICATION_NAME` overrides;
+  DirectSqlRunner only). parseLockLog keeps <= 20 wait/acquired events per
+  bucket (pid, mode, relid -> name, DETAIL holders + wait queue, wait ms,
+  csvlog application_name column 23 / user_name column 2; stderr has no app).
+  A holder's app comes from any other row that pid logged. A waiter or holder
+  named pg-analyser grades the cascade low; a window overlapping
+  `collectedAt - collectionMs .. collectedAt` adds an evidence note. Statement
+  cancels count toward a cascade only in minutes with their own lock evidence;
+  lock-timeout cancels count everywhere.
+- **Chromium PDFs expose page numbers without target-counter().** Verified on
+  Chrome 155: plain-text object dictionaries (no /ObjStm), the catalog has
+  `/Dests N 0 R` with one `[pageRef /XYZ ...]` per internal-link id, and
+  /Pages /Kids give the page order. A two-pass print injecting those numbers
+  into the contents page matched the heading page for all 47 entries of a
+  53-page report (2 passes).
 
 2026-10-05 additions (no-PAT report review; two independent subagent reviews
 of findings vs analysis.json and of advice vs the docs):

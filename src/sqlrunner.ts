@@ -1,5 +1,6 @@
 import { SQL } from "bun";
 import { withSupabaseSsl } from "./dbtargets.ts";
+import { analyserAppName } from "./locklog.ts";
 import type { Management } from "./management.ts";
 import type { SqlRow } from "./schemas.ts";
 
@@ -81,7 +82,13 @@ export function sessionGuard(): string {
   const clean = (v: string) => v.replace(/[^0-9a-z ]/gi, "").trim() || "0";
   const st = clean(process.env.PG_ANALYSER_STATEMENT_TIMEOUT ?? "120s");
   const lt = clean(process.env.PG_ANALYSER_LOCK_TIMEOUT ?? "15s");
-  return `set statement_timeout='${st}'; set lock_timeout='${lt}'; `;
+  // application_name labels this session in pg_stat_activity and in every log
+  // line it produces (csvlog column 23), so a lock wait or timeout cancel in
+  // the server log can be attributed to the analyser itself. Only
+  // DirectSqlRunner uses this prelude; ManagementSqlRunner goes through the
+  // Management API read-only endpoint and is left untouched.
+  const app = analyserAppName();
+  return `set statement_timeout='${st}'; set lock_timeout='${lt}'; set application_name='${app}'; `;
 }
 
 export class DirectSqlRunner implements SqlRunner {
@@ -106,7 +113,7 @@ export class DirectSqlRunner implements SqlRunner {
    * Bun.SQL with prepare:false uses the simple-query protocol, which allows
    * multiple statements in one command and returns one result set per
    * statement. A single-statement query returns a flat row array, so normalize
-   * to SqlRow[][]. The guard's two empty SET sets lead; callers that scan the
+   * to SqlRow[][]. The guard's three empty SET sets lead; callers that scan the
    * sets (splinter picks the largest) ignore them.
    */
   async runMulti(query: string): Promise<SqlRow[][]> {

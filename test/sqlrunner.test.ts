@@ -6,6 +6,7 @@ import {
   ManagementSqlRunner,
   normalizeMultiResult,
   type SqlLike,
+  sessionGuard,
 } from "../src/sqlrunner.ts";
 
 /** A recording fake for the Bun.SQL slice DirectSqlRunner needs. */
@@ -98,6 +99,48 @@ describe("DirectSqlRunner", () => {
     const r = new DirectSqlRunner("postgres://ignored", sql);
     await r.close();
     expect(sql.ended).toBe(1);
+  });
+});
+
+describe("session prelude application_name", () => {
+  const KEY = "PG_ANALYSER_APPLICATION_NAME";
+  const withEnv = (v: string | undefined, fn: () => void) => {
+    const prev = process.env[KEY];
+    if (v === undefined) delete process.env[KEY];
+    else process.env[KEY] = v;
+    try {
+      fn();
+    } finally {
+      if (prev === undefined) delete process.env[KEY];
+      else process.env[KEY] = prev;
+    }
+  };
+
+  test("the prelude names the session pg-analyser so its log lines can be told apart", () => {
+    withEnv(undefined, () => {
+      expect(sessionGuard()).toContain("set application_name='pg-analyser'; ");
+    });
+  });
+
+  test("PG_ANALYSER_APPLICATION_NAME overrides it and is sanitised like the other values", () => {
+    withEnv("audit-nightly", () => {
+      expect(sessionGuard()).toContain("set application_name='audit-nightly'; ");
+    });
+    withEnv("x'; drop table t; --", () => {
+      const g = sessionGuard();
+      expect(g).not.toContain("drop table t;");
+      expect(g).toContain("set application_name='x drop table t --'; "); // quote and ; stripped; text stays inside the literal
+      expect(g.match(/'/g)?.length).toBe(6); // three quoted SETs, nothing injected
+    });
+    withEnv("   ", () => {
+      expect(sessionGuard()).toContain("set application_name='pg-analyser'; ");
+    });
+  });
+
+  test("DirectSqlRunner sends the application_name SET in the same message as the query", async () => {
+    const sql = fakeSql([]);
+    await new DirectSqlRunner("postgres://ignored", sql).run("select 1");
+    expect(sql.queries[0]).toMatch(/set application_name='[^']+'; .*select 1$/);
   });
 });
 

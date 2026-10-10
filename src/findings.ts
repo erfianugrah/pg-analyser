@@ -1,7 +1,12 @@
 import { appRows, isAppSchema } from "./appschema.ts";
 import { type DocRef, meta, THRESHOLDS } from "./heuristics.ts";
 import { lintFix } from "./lints.ts";
-import { classifyLockWave } from "./locklog.ts";
+import {
+  ANALYSER_APP_NAME,
+  analyserAppName,
+  classifyLockWave,
+  type LockWaveEvent,
+} from "./locklog.ts";
 import { minorsBehind } from "./pgversions.ts";
 import { referencesOwnTable } from "./rls.ts";
 import type { Analysis, SqlRow } from "./schemas.ts";
@@ -160,6 +165,50 @@ function reclaimableDiskBytes(a: Analysis): number {
   return bloat + unusedIdx + slotWal;
 }
 
+/**
+ * Over-provisioned volume (downsize candidate): filesystem used well below the
+ * provisioned size, with meaningful absolute waste. The disk analogue of
+ * cpu_oversized. Reclaimable (bloat + droppable unused indexes + retained slot
+ * WAL) refines the "true footprint" the report shows. `note` carries the
+ * source-specific context (autoscale/entitlement from the API, or the trend
+ * sample the numbers came from).
+ */
+function oversizedDiskFinding(
+  a: Analysis,
+  provisionedBytes: number,
+  usedBytes: number,
+  note: string,
+): Finding | null {
+  const usedFrac = usedBytes / provisionedBytes;
+  const wasteGb = (provisionedBytes - usedBytes) / (1024 * 1024 * 1024);
+  if (usedFrac > THRESHOLDS.diskOversizeUsedFrac || wasteGb < THRESHOLDS.diskOversizeMinWasteGb)
+    return null;
+  const reclaimableBytes = reclaimableDiskBytes(a);
+  const footprintGb = Math.max(0, (usedBytes - reclaimableBytes) / (1024 * 1024 * 1024));
+  const reclaimNote =
+    reclaimableBytes > 0
+      ? ` ~${bytesGb(reclaimableBytes)} is reclaimable (bloat, unused indexes, slot-pinned WAL), so the true footprint is ~${footprintGb.toFixed(1)} GB.`
+      : "";
+  return {
+    severity: "low",
+    category: "Capacity",
+    title: `Disk over-provisioned: ${Math.round(provisionedBytes / (1024 * 1024 * 1024))} GB volume, ${Math.round(usedFrac * 100)}% used (${bytesGb(usedBytes)})`,
+    anchor: "#infra",
+    evidence: `~${wasteGb.toFixed(0)} GB unused.${reclaimNote}${note}`,
+    ...meta("disk_oversized"),
+  };
+}
+
+/** Provisioned size and used bytes from the latest "Disk size (bytes)" and
+ * "Disk used (%)" trend samples, or null when either series is missing. */
+function trendDiskVolume(a: Analysis): { sizeBytes: number; usedBytes: number; at: number } | null {
+  const last = (title: string) => a.trends.find((s) => s.title === title)?.points.at(-1);
+  const size = last("Disk size (bytes)");
+  const pct = last("Disk used (%)");
+  if (!size || !pct || size.v <= 0) return null;
+  return { sizeBytes: size.v, usedBytes: (size.v * pct.v) / 100, at: pct.t };
+}
+
 // Leading UPDATE/DELETE target of a normalized statement (schema-qualified or
 // not, quoted or not). Anchored so it only matches the statement's own verb.
 const WRITE_RX =
@@ -244,7 +293,8 @@ function groupAdvisors(
     const caveat = winCaveat && COUNTER_DERIVED_ADVISOR_LINTS.has(g.name) ? winCaveat : "";
     const evidence = [desc, scale, caveat].filter(Boolean).join(" ") || undefined;
     return {
-      severity: sevFromLevel(g.level),
+      // A short stats window caps a counter-derived lint at low.
+      severity: caveat ? "low" : sevFromLevel(g.level),
       category,
       title: fix?.plainTitle ?? (g.count > 1 ? `${title} (${g.count}x)` : title),
       anchor,
@@ -293,12 +343,25 @@ export function configTuningFindings(a: Analysis): Finding[] {
     const parallel = Math.max(1, num(set.get("max_parallel_workers_per_gather")) || 1) + 1;
     const worstCase = workMem * maxConn * parallel;
     if (worstCase >= estRam * THRESHOLDS.workMemBlastFrac) {
+      // max_connections is often a platform default sized for the instance,
+      // so the ceiling alone is a configuration fact, not exposure. Grade on
+      // the observed peak (snapshot client backends, or the connections trend
+      // peak when present); with neither, keep the ceiling grade.
+      const trendPeak = (a.trends.find((t) => t.title === "DB connections")?.points ?? []).reduce(
+        (m, p) => Math.max(m, p.v),
+        0,
+      );
+      const observed = Math.max(clientBackendCount(a.sql.connections), Math.round(trendPeak));
+      const observedWorst = workMem * observed * parallel;
+      const exposed = observed === 0 || observedWorst >= estRam * THRESHOLDS.workMemBlastFrac;
       out.push({
-        severity: "med",
+        severity: exposed ? "med" : "low",
         category: "Capacity",
-        title: `work_mem worst case (~${bytesGb(worstCase)}) can exceed estimated RAM (~${bytesGb(estRam)})`,
+        title: exposed
+          ? `work_mem worst case (~${bytesGb(worstCase)}) can exceed estimated RAM (~${bytesGb(estRam)})`
+          : `work_mem worst case exceeds estimated RAM only at the configured max_connections (${maxConn})`,
         anchor,
-        evidence: `work_mem ${set.get("work_mem")}kB x max_connections ${maxConn} x ~${parallel} ops. RAM estimated from shared_buffers.`,
+        evidence: `work_mem ${set.get("work_mem")}kB x max_connections ${maxConn} x ~${parallel} ops = ~${bytesGb(worstCase)} vs ~${bytesGb(estRam)} RAM (estimated from shared_buffers).${observed > 0 ? ` Observed peak ${observed} connections -> ~${bytesGb(observedWorst)}.` : ""}`,
         ...meta("work_mem_blast"),
       });
     }
@@ -516,6 +579,26 @@ export function restartLogFindings(a: Analysis): Finding[] {
   return out;
 }
 
+/** "1.0 s" / "250 ms". */
+function fmtWait(ms: number): string {
+  return ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms)} ms`;
+}
+
+/** One line per wait event: who waited for what, held by whom. Lock metadata only. */
+function lockEventText(e: LockWaveEvent): string {
+  const who =
+    e.appName || e.userName
+      ? ` (${[e.appName, e.userName].filter(Boolean).join(" / ")})`
+      : " (application/user not in this log format)";
+  const rel = e.relation ?? (e.relid != null ? `relation oid ${e.relid}` : "a non-relation lock");
+  if (e.kind === "acquired")
+    return `${e.minute} pid ${e.pid}${who} acquired ${e.mode} on ${rel} after ${fmtWait(e.waitMs)}`;
+  const held = e.holders.length
+    ? `held by ${e.holders.join(", ")}${e.holderApps.length ? ` (${e.holderApps.join(", ")})` : ""}${e.queue.length ? `, queue ${e.queue.join(", ")}` : ""}`
+    : "holder not logged";
+  return `${e.minute} pid ${e.pid}${who} waited ${fmtWait(e.waitMs)} for ${e.mode} on ${rel}, ${held}`;
+}
+
 export function lockWaveFindings(a: Analysis): Finding[] {
   const lw = a.sql.lockWave;
   if (!lw) return [];
@@ -549,13 +632,43 @@ export function lockWaveFindings(a: Analysis): Finding[] {
     const windowLabel = verdict.windowResolved
       ? `${verdict.windowFrom}-${verdict.windowTo}`
       : "(unparseable timestamps in this log excerpt)";
+    // The analyser's own sessions (application_name set by sqlrunner.sessionGuard,
+    // or PG_ANALYSER_APPLICATION_NAME) show up in the log as waiters/holders.
+    const ownNames = new Set([ANALYSER_APP_NAME, analyserAppName()]);
+    const own = (verdict.involvedApps ?? []).some((n) => ownNames.has(n));
+    // This run's own collection window: collectedAt minus collectionMs .. collectedAt.
+    // Log minutes are read as UTC (same as classifyLockWave's windowing).
+    const collectedAt = Date.parse(a.meta.collectedAt);
+    const winFrom = Date.parse(`${verdict.windowFrom.replace(" ", "T")}:00Z`);
+    const winTo = Date.parse(`${verdict.windowTo.replace(" ", "T")}:00Z`) + 60_000;
+    const overlapsCollection =
+      verdict.windowResolved &&
+      a.meta.collectionMs != null &&
+      Number.isFinite(collectedAt) &&
+      Number.isFinite(winFrom) &&
+      Number.isFinite(winTo) &&
+      winFrom < collectedAt &&
+      winTo > collectedAt - a.meta.collectionMs;
+    const events = verdict.events ?? [];
     out.push({
-      severity: verdict.severity,
+      severity: own ? "low" : verdict.severity,
       category: "Performance",
-      title: `Lock-wait cascade ${windowLabel}: ${verdict.waiting} waits up to ${secs}s, ${verdict.cancels} timeout cancellations${relText}`,
+      title: `Lock-wait cascade ${windowLabel}: ${verdict.waiting} waits up to ${secs}s, ${verdict.cancels} timeout cancellations${relText}${own ? " (involves pg-analyser's own session)" : ""}`,
       anchor: "#lockwave",
       evidence: [
         `${cov}.`,
+        own
+          ? "This window involves pg-analyser's own session (application_name matches the analyser) as a waiter or holder; the analyser takes only AccessShareLock, so it can be queued behind a blocked DDL, and its long reads can hold locks that block one. Graded low."
+          : null,
+        overlapsCollection
+          ? `This window overlaps this audit's own collection (${new Date(collectedAt - (a.meta.collectionMs ?? 0)).toISOString().slice(0, 16)} to ${new Date(collectedAt).toISOString().slice(0, 16)} UTC, log minutes read as UTC): some of these waits may be the analyser's own queries.`
+          : null,
+        events.length
+          ? `Who waited for what (${events.length} event(s) kept, max 20): ${events.map(lockEventText).join("; ")}.`
+          : null,
+        verdict.cancelsStmtBackground
+          ? `${verdict.cancelsStmtBackground} statement-timeout cancel(s) in minutes of this window with no lock evidence are not counted as victims.`
+          : null,
         verdict.deadlocks > 0 ? `${verdict.deadlocks} deadlock(s) in this window.` : null,
         otherDeadlocks > 0
           ? `${otherDeadlocks} more deadlock(s) elsewhere in the scanned window (see evidence).`
@@ -1043,7 +1156,28 @@ export type DiskProjection = {
   /** Used % just before each expansion (for the evidence). */
   preExpansionPcts?: number[];
   daysToNextExpansion?: number | null;
+  /** The last large fall in used bytes; the fit starts after it. */
+  drop?: { at: number; fromBytes: number; toBytes: number } | null;
 };
+
+/**
+ * The last sample-to-sample fall in used bytes of at least `frac` of the prior
+ * value and `minBytes` absolute. Returns the index of the first post-drop point.
+ */
+function lastUsedDrop(
+  pts: Point[],
+  frac: number,
+  minBytes: number,
+): { index: number; fromBytes: number; toBytes: number } | null {
+  for (let i = pts.length - 1; i > 0; i--) {
+    const prev = (pts[i - 1] as Point).v;
+    const cur = (pts[i] as Point).v;
+    if (prev - cur >= minBytes && prev - cur >= frac * prev) {
+      return { index: i, fromBytes: prev, toBytes: cur };
+    }
+  }
+  return null;
+}
 
 /** Provisioned size in force at `t`: the last size sample at or before it
  * (the first sample when `t` precedes the series). Nearest-in-time would pair a
@@ -1086,16 +1220,25 @@ export function projectDataDisk(
 
   // Prefer a bytes projection when the size series is present.
   if (sizePts.length) {
-    const usedBytesPts = pctPts
+    const allUsedPts = pctPts
       .map((p) => {
         const sz = sizeInForce(sizePts, p.t);
         return sz == null ? null : { t: p.t, v: (sz * p.v) / 100 };
       })
       .filter((x): x is Point => x != null);
-    const usedBytesNow = usedBytesPts.length
-      ? (usedBytesPts[usedBytesPts.length - 1] as Point).v
+    const usedBytesNow = allUsedPts.length ? (allUsedPts[allUsedPts.length - 1] as Point).v : null;
+    // Fit only what follows the last data drop (see diskUsedDropFrac).
+    const d = lastUsedDrop(allUsedPts, THRESHOLDS.diskUsedDropFrac, resizeStepBytes);
+    const usedBytesPts = d ? allUsedPts.slice(d.index) : allUsedPts;
+    const drop = d
+      ? { at: (allUsedPts[d.index] as Point).t, fromBytes: d.fromBytes, toBytes: d.toBytes }
       : null;
-    if (enough && usedBytesPts.length && sizeBytesNow != null && usedBytesNow != null) {
+    if (
+      sufficient(usedBytesPts) &&
+      usedBytesPts.length &&
+      sizeBytesNow != null &&
+      usedBytesNow != null
+    ) {
       const s = trendStat(usedBytesPts)!;
       // Project at the RECENT rate from ACTUAL usage. A whole-window line
       // averages in slower past growth, and anchoring on its fitted end puts
@@ -1141,6 +1284,7 @@ export function projectDataDisk(
         expansion: lastExp,
         expansions,
         sufficient: true,
+        drop,
       };
     }
     return {
@@ -1154,6 +1298,7 @@ export function projectDataDisk(
       expansion: lastExp,
       expansions,
       sufficient: false,
+      drop,
     };
   }
 
@@ -1278,7 +1423,8 @@ export function deriveFindings(a: Analysis): Finding[] {
     a.sql.cacheBlocksAccessed == null || a.sql.cacheBlocksAccessed >= THRESHOLDS.cacheHitMinBlocks;
   if (cacheVolOk && a.sql.cacheHitPct != null && a.sql.cacheHitPct < THRESHOLDS.cacheHitPct) {
     out.push({
-      severity: "med",
+      // A short stats window caps a counter finding at low.
+      severity: winCaveat ? "low" : "med",
       category: "Performance",
       title: `Cache hit ratio ${a.sql.cacheHitPct}% (target > ${THRESHOLDS.cacheHitPct}%)`,
       anchor: "#infra",
@@ -1427,11 +1573,28 @@ export function deriveFindings(a: Analysis): Finding[] {
   );
   const seqScan = seqScanRows.length;
   if (seqScan > 0) {
+    // Rows read per scan separates a full scan of a big table from a cheap
+    // scan of a small one; rows without seq_tup_read (older analysis.json)
+    // keep the scan-count grade.
+    const perScan = (r: SqlRow) =>
+      r.seq_tup_read == null ? null : num(r.seq_tup_read) / Math.max(1, num(r.seq_scan));
+    const known = seqScanRows.map(perScan).filter((v): v is number => v != null);
+    const heavy =
+      known.length < seqScanRows.length || known.some((v) => v >= THRESHOLDS.seqScanMedRowsPerScan);
+    const fmt = (n: number) => Math.round(n).toLocaleString("en-US");
+    const evidence = seqScanRows
+      .slice(0, 5)
+      .map((r) => {
+        const p = perScan(r);
+        return `${r.table} (${fmt(num(r.seq_scan))} seq / ${fmt(num(r.idx_scan))} index scans${p != null ? `, ~${fmt(p)} rows per scan` : ""})`;
+      })
+      .join("; ");
     out.push({
-      severity: "med",
+      severity: heavy ? "med" : "low",
       category: "Performance",
       title: `${countCapped(seqScanRows.length, seqScan)} ${seqScan === 1 ? "table" : "tables"} sequential-scan heavy (missing index?)`,
       anchor: "#seqscan",
+      evidence: `${evidence}${seqScanRows.length > 5 ? `; +${seqScanRows.length - 5} more in the drill-down` : ""}.`,
       ...meta("seq_scan_heavy"),
     });
   }
@@ -1774,8 +1937,13 @@ export function deriveFindings(a: Analysis): Finding[] {
       out.push({
         severity: lag.behind >= 10 ? "med" : "low",
         category: "Security",
-        title: `Postgres ${lag.current} is ${lag.behind} minor release${lag.behind === 1 ? "" : "s"} behind ${lag.latest} (cumulative security + bugfix)`,
+        title: `Postgres ${lag.current} is ${lag.behind} minor release${lag.behind === 1 ? "" : "s"} behind the community ${lag.latest} release (cumulative security + bugfix)`,
         anchor: "#config",
+        // Without the upgrade plane the target is unknown: a managed provider
+        // ships its own builds, and its newest image can trail the community
+        // minor, so "upgrade" may have nothing to offer yet.
+        evidence:
+          "Compared with the community release only. Which version the provider can upgrade this project to was not checked (no Management API upgrade plane); a managed service's newest image can trail the community minor, so confirm the available target before planning an upgrade.",
         ...meta("pg_minor_behind"),
       });
     }
@@ -1826,35 +1994,26 @@ export function deriveFindings(a: Analysis): Finding[] {
         ...meta("disk_full"),
       });
     } else if (a.disk.sizeGb != null && a.disk.sizeGb > 0) {
-      // Over-provisioned volume (downsize candidate): filesystem used well below
-      // the provisioned size, with meaningful absolute waste. The disk analogue
-      // of cpu_oversized. Reclaimable (bloat + droppable unused indexes + WAL
-      // dir + retained slot WAL) refines the "true footprint" the report shows.
-      const provisioned = a.disk.sizeGb * 1024 * 1024 * 1024;
-      const usedFrac = a.disk.usedBytes / provisioned;
-      const wasteGb = (provisioned - a.disk.usedBytes) / (1024 * 1024 * 1024);
-      if (
-        usedFrac <= THRESHOLDS.diskOversizeUsedFrac &&
-        wasteGb >= THRESHOLDS.diskOversizeMinWasteGb
-      ) {
-        const reclaimableBytes = reclaimableDiskBytes(a);
-        const footprintGb = Math.max(
-          0,
-          (a.disk.usedBytes - reclaimableBytes) / (1024 * 1024 * 1024),
-        );
-        const reclaimNote =
-          reclaimableBytes > 0
-            ? ` ~${bytesGb(reclaimableBytes)} is reclaimable (bloat, unused indexes, slot-pinned WAL), so the true footprint is ~${footprintGb.toFixed(1)} GB.`
-            : "";
-        out.push({
-          severity: "low",
-          category: "Capacity",
-          title: `Disk over-provisioned: ${a.disk.sizeGb} GB volume, ${Math.round(usedFrac * 100)}% used (${bytesGb(a.disk.usedBytes)})`,
-          anchor: "#infra",
-          evidence: `~${wasteGb.toFixed(0)} GB unused.${reclaimNote}${a.disk.autoscale ? " Autoscale is grow-only - it will not shrink this back." : ""}${a.disk.modifiable === false ? " NOTE: this org's plan cannot modify disk without a compute upgrade." : ""}`,
-          ...meta("disk_oversized"),
-        });
-      }
+      const f = oversizedDiskFinding(
+        a,
+        a.disk.sizeGb * 1024 * 1024 * 1024,
+        a.disk.usedBytes,
+        `${a.disk.autoscale ? " Autoscale is grow-only - it will not shrink this back." : ""}${a.disk.modifiable === false ? " NOTE: this org's plan cannot modify disk without a compute upgrade." : ""}`,
+      );
+      if (f) out.push(f);
+    }
+  } else {
+    // No Management API disk plane (no-PAT): the trend series carry the same
+    // two numbers - provisioned size and used % - as of their latest sample.
+    const vol = trendDiskVolume(a);
+    if (vol) {
+      const f = oversizedDiskFinding(
+        a,
+        vol.sizeBytes,
+        vol.usedBytes,
+        ` Read from the disk trend series (latest sample ${new Date(vol.at * 1000).toISOString().slice(0, 16).replace("T", " ")} UTC).`,
+      );
+      if (f) out.push(f);
     }
   }
   // App-scoped with a dead-row floor: a managed table (realtime.subscription,
@@ -1871,7 +2030,8 @@ export function deriveFindings(a: Analysis): Finding[] {
   ).length;
   if (overdue > 0) {
     out.push({
-      severity: "med",
+      // A short stats window caps a counter finding at low.
+      severity: winCaveat ? "low" : "med",
       category: "Capacity",
       title: `${countCapped(a.sql.deadTuples.length, overdue)} ${overdue === 1 ? "table" : "tables"} past the autovacuum dead-tuple threshold (vacuum not keeping up)`,
       anchor: "#deadtuples",
@@ -2613,16 +2773,43 @@ export function deriveFindings(a: Analysis): Finding[] {
     const pagingSpanDays =
       pagingTs.length > 1 ? (Math.max(...pagingTs) - Math.min(...pagingTs)) / 86400 : 0;
     const pagingWindow = pagingSpanDays >= 1 ? ` over ${Math.round(pagingSpanDays)}d` : "";
-    const sustained = pagingFrac >= THRESHOLDS.pagingSustainedFrac;
-    out.push({
-      severity: sustained ? "med" : "low",
-      category: "Capacity",
-      title: sustained
-        ? `Memory pressure: working set paging to disk (${bits.join("; ")}${pagingWindow})`
-        : `Episodic paging, not sustained memory pressure (${bits.join("; ")}${pagingWindow})`,
-      anchor: "#trends",
-      ...meta("mem_pressure_paging"),
-    });
+    // Grade on the recent window when the series is longer than it (see
+    // recentSignalDays); the whole-window fractions stay in the title.
+    const recentDays = THRESHOLDS.recentSignalDays;
+    const endT = Math.max(...pagingTs);
+    const recent = (pts: Point[]) => pts.filter((p) => endT - p.t <= recentDays * 86400);
+    const longWindow = pagingSpanDays > recentDays;
+    const gradeFrac = longWindow
+      ? Math.max(
+          sustainedFrac(recent(mfPts), THRESHOLDS.majorFaultsPerSec, ">="),
+          sustainedFrac(recent(siPts), THRESHOLDS.swapInPagesPerSec, ">="),
+        )
+      : pagingFrac;
+    if (gradeFrac < THRESHOLDS.pagingEpisodicFrac) {
+      const lastHot = [
+        ...mfPts.filter((p) => p.v >= THRESHOLDS.majorFaultsPerSec),
+        ...siPts.filter((p) => p.v >= THRESHOLDS.swapInPagesPerSec),
+      ].reduce((t, p) => Math.max(t, p.t), 0);
+      out.push({
+        severity: "low",
+        category: "Capacity",
+        title: `Paging earlier in the window, none in the last ${recentDays}d (${bits.join("; ")}${pagingWindow}; last above threshold ${new Date(lastHot * 1000).toISOString().slice(0, 10)})`,
+        anchor: "#trends",
+        ...meta("mem_pressure_paging"),
+      });
+    } else {
+      const sustained = gradeFrac >= THRESHOLDS.pagingSustainedFrac;
+      const graded = longWindow ? `; ${pct(gradeFrac)} of the last ${recentDays}d` : "";
+      out.push({
+        severity: sustained ? "med" : "low",
+        category: "Capacity",
+        title: sustained
+          ? `Memory pressure: working set paging to disk (${bits.join("; ")}${pagingWindow}${graded})`
+          : `Episodic paging, not sustained memory pressure (${bits.join("; ")}${pagingWindow}${graded})`,
+        anchor: "#trends",
+        ...meta("mem_pressure_paging"),
+      });
+    }
   }
   // PSI saturation: sustained stall time waiting on CPU / memory / I/O (rate;
   // needs >=2 snapshots / a Prometheus). PSI is the fraction of time work was
@@ -2683,6 +2870,7 @@ export function deriveFindings(a: Analysis): Finding[] {
         label,
         episodes: countDepletionEpisodes(pts, THRESHOLDS.ebsBalancePct),
         current: last.v,
+        lastT: last.t,
         lastDipT: lastDip?.t ?? null,
         spanDays,
       };
@@ -2697,10 +2885,15 @@ export function deriveFindings(a: Analysis): Finding[] {
       const times = `${s.episodes}x${span ? ` in ${span}d` : ""}`;
       return `${s.label} depleted ${times} (last ${when}, currently ${Math.round(s.current)}%)`;
     });
+    // A healed dip older than the recent window is history (recentSignalDays).
+    const recentDip = ebsEpisodic.some(
+      (s) => s.lastDipT != null && s.lastT - s.lastDipT <= THRESHOLDS.recentSignalDays * 86400,
+    );
     out.push({
       // High only if it is depleted RIGHT NOW or recurred (>=2 episodes); a
-      // single healed dip is a scar, not an active incident -> medium.
-      severity: currentlyLow || maxEpisodes >= 2 ? "high" : "med",
+      // single healed dip is a scar, not an active incident -> medium; a
+      // healed dip outside the recent window -> low.
+      severity: currentlyLow ? "high" : !recentDip ? "low" : maxEpisodes >= 2 ? "high" : "med",
       category: "Capacity",
       title: `EBS burst balance: ${bits.join("; ")}`,
       anchor: "#trends",
@@ -2883,6 +3076,9 @@ export function deriveFindings(a: Analysis): Finding[] {
       const stepNote = steps.length
         ? `Past expansions fired at ${(dataDisk.preExpansionPcts ?? []).map((p) => `${p.toFixed(1)}%`).join(", ")} used and added ${steps.map((b) => `+${bytesGb(b)}`).join(", ")}. `
         : "";
+      const dropNote = dataDisk.drop
+        ? `Used bytes dropped ${bytesGb(dataDisk.drop.fromBytes)} -> ${bytesGb(dataDisk.drop.toBytes)} at ${new Date(dataDisk.drop.at * 1000).toISOString().slice(0, 16).replace("T", " ")} UTC; rates are fitted from that point on. `
+        : "";
       out.push({
         // An autoscaling volume grows at the trigger instead of filling, so
         // the near-term event is a billed step, not an outage: med. A volume
@@ -2895,6 +3091,7 @@ export function deriveFindings(a: Analysis): Finding[] {
             : `Data disk filling: ${absNote} -> ~${days} days to full`,
         anchor: "#trends",
         evidence:
+          dropNote +
           `${rates ? `Growth ${rates}; projected at the ${recent ? "recent" : "whole-window"} rate from current usage. ` : ""}` +
           stepNote +
           (auto != null
@@ -3050,14 +3247,18 @@ export function deriveFindings(a: Analysis): Finding[] {
   // ANN index economics (the inverse view): existing hnsw/ivfflat indexes that
   // dominate storage. Flag full-precision fp32 indexes with a large footprint
   // when halfvec is available (pgvector >= 0.7.0) - halving the index at equal
-  // recall. Thresholds: >=10% of the whole database, or >= the parent heap.
+  // recall. Thresholds: >=10% of the whole database, or >= the parent heap AND
+  // at least vectorIndexEconMinBytes (a tiny index on a tiny table is not storage).
   const vIdx = a.sql.vectorIndexes;
   if (vIdx.length) {
     const vecExt = a.sql.extensions.find((r) => r.name === "vector");
     const vecVer = /^0\.(\d+)/.exec(String(vecExt?.installed ?? ""));
     const halfvecAvailable = vecVer ? Number(vecVer[1]) >= 7 : false;
     const big = vIdx.filter(
-      (r) => num(r.index_bytes) > 0 && (num(r.pct_of_db) >= 10 || num(r.pct_of_table) >= 100),
+      (r) =>
+        num(r.index_bytes) > 0 &&
+        (num(r.pct_of_db) >= 10 ||
+          (num(r.pct_of_table) >= 100 && num(r.index_bytes) >= THRESHOLDS.vectorIndexEconMinBytes)),
     );
     const fp32 = big.filter(
       (r) =>

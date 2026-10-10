@@ -702,15 +702,30 @@ function navItems(g: NavGroup): string {
 }
 
 /**
- * Print-only contents page: the sidebar's groups and entries (same
+ * Print contents entry: title, muted finding count, dot leader, then an empty
+ * page slot (`span.pg`). The slot is filled by fillContentsPages() after a
+ * first PDF render has located each anchor (report/pdf two-pass); the count
+ * never sits in the page position.
+ */
+function printItems(g: NavGroup): string {
+  return g.entries
+    .map(
+      (e) =>
+        `<li><a href="#${e.id}"><span class=t>${e.label}</span>${e.count != null ? `<span class=c>(${e.count})</span>` : ""}<span class=d></span><span class=pg></span></a></li>`,
+    )
+    .join("");
+}
+
+/**
+ * Print-only contents pages: the sidebar's groups and entries (same
  * navGroups() data, so the two cannot disagree) as static anchor links, which
- * Chromium keeps as internal link annotations in the PDF. No page numbers:
- * Chromium has no CSS target-counter().
+ * Chromium keeps as internal link annotations in the PDF. Chromium has no CSS
+ * target-counter(), so page numbers are injected by report/pdf.
  */
 function printContents(entries: NavEntry[]): string {
   if (!entries.length) return "";
   const groups = navGroups(entries)
-    .map((g) => `<div class=g><div class=gl>${esc(g.label)}</div><ol>${navItems(g)}</ol></div>`)
+    .map((g) => `<div class=g><div class=gl>${esc(g.label)}</div><ol>${printItems(g)}</ol></div>`)
     .join("");
   return `<nav class=ptoc aria-label="Contents"><div class=ph>Contents</div><div class=gs>${groups}</div></nav>`;
 }
@@ -1910,15 +1925,16 @@ ${faviconTag(brand)}
   @page{size:A4;margin:14mm 12mm}
   @media print{
     nav.rnav{display:none}
-    nav.ptoc{display:block;break-after:page;margin:14px 0 0;font-size:12px;line-height:1.3}
+    nav.ptoc{display:block;break-before:page;break-after:page;margin:0;font-size:12px;line-height:1.35}
     nav.ptoc .ph{font-size:16px;font-weight:700;padding:8px 0 0;border-top:3px solid var(--fg);margin:0 0 10px}
-    nav.ptoc .gs{columns:3;column-gap:20px}
     nav.ptoc .g{break-inside:avoid;margin:0 0 12px}
     nav.ptoc .gl{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--mut);border-bottom:1px solid var(--line);padding:0 0 2px;margin:0 0 3px}
     nav.ptoc ol{list-style:none;margin:0;padding:0}
     nav.ptoc li{break-inside:avoid}
-    nav.ptoc a{display:flex;justify-content:space-between;gap:6px;padding:1px 0}
-    nav.ptoc .n{color:var(--mut);font-variant-numeric:tabular-nums}
+    nav.ptoc a{display:flex;align-items:baseline;padding:1px 0}
+    nav.ptoc .c{color:var(--mut);margin-left:5px;white-space:nowrap}
+    nav.ptoc .d{flex:1;min-width:12px;margin:0 4px;border-bottom:1px dotted var(--mut)}
+    nav.ptoc .pg{min-width:2.2em;text-align:right;font-variant-numeric:tabular-nums}
     /* Chromium used to shrink the whole page to fit the widest table (an
        unwrappable header row); with tables now fitting the page width, keep
        that same print density explicitly instead of by accident. */

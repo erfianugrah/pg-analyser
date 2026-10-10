@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { sweepOutcome } from "../src/index.ts";
 import type { Overlay } from "../src/overlay.ts";
+import { contentsPages, fillContentsPages } from "../src/report/pdfpages.ts";
 import {
   NAV_GROUPS,
   navGroups,
@@ -483,6 +484,31 @@ describe("render", () => {
           const hrefs = outline.flatMap(([, h]) => h);
           expect([...hrefs].sort()).toEqual([...sectionIds(html)].sort());
         }
+      });
+
+      test("entries have an empty page slot; finding counts are muted '(n)' elsewhere, and fill by id", () => {
+        const html = render(kitchenSink(), { narrative: true });
+        const toc = tocHtml(html);
+        const entries = [...toc.matchAll(/<li><a href="#([^"]+)">([\s\S]*?)<\/a><\/li>/g)];
+        expect(entries.length).toBeGreaterThan(40);
+        for (const [, , inner] of entries) {
+          expect(inner).toMatch(/<span class=d><\/span><span class=pg><\/span>$/);
+        }
+        // Counts render as "(n)" in span.c, before the leader, never in the slot.
+        expect(toc).toMatch(
+          /<span class=c>\(\d+\)<\/span><span class=d><\/span><span class=pg><\/span>/,
+        );
+        const filled = fillContentsPages(
+          html,
+          new Map(entries.map(([, id], i) => [id as string, i + 2])),
+        );
+        const f = tocHtml(filled);
+        expect(f).not.toContain("<span class=pg></span>");
+        expect(f).toMatch(
+          /<span class=c>\(\d+\)<\/span><span class=d><\/span><span class=pg>\d+<\/span>/,
+        );
+        expect(f).not.toMatch(/<span class=pg>\(/);
+        expect(contentsPages(filled).size).toBe(entries.length);
       });
 
       test("every printed link resolves to exactly one element id", () => {
