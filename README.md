@@ -729,6 +729,7 @@ a sweep.
 | Footer says advisor lint SQL drifted / catalog stale | Re-vendor `src/splinter.sql` from `supabase/splinter`, or re-review `docs/heuristics.md`. Advisory only; `--no-sync-check` skips it. |
 | Report shows a degraded/empty state                  | Project is paused or unreachable - empty sections mean "not collected", not "clean". The collection-notes section lists why.         |
 | A sweep is too quiet / you want per-plane detail     | Set `PG_ANALYSER_LOG_LEVEL=info` (or `debug`); a multi-project sweep quiets routine INFO by default (see Logging).                        |
+| A sweep stalls on one project's API / metrics call   | Each HTTP attempt times out after 120s (`request to ... timed out after ...ms`, recorded as a collection note). Tune with `PG_ANALYSER_HTTP_TIMEOUT_MS` (ms; `0` disables). |
 
 ## Reading counter-derived findings
 

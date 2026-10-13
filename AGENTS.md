@@ -231,7 +231,13 @@ src/
                  (pg_cron/storage/auth on a DB that lacks it) is logged as a
                  debug "plane absent", not a warn - the collection note is still
                  recorded (folded into the sweep's per-project done() tail).
-  transport.ts   Transport interface + DirectTransport (auth + retry)
+  transport.ts   Transport interface + DirectTransport (auth + retry). fetchRetry
+                 times out EACH attempt via AbortSignal.timeout:
+                 PG_ANALYSER_HTTP_TIMEOUT_MS, default 120000, 0 disables (Bun's
+                 fetch documents no timeout; measured 1.3.14: a silent socket
+                 rejects after 300s). A timeout is not retried. Retry-After is
+                 honoured up to 30s (longer -> normal backoff), and a retried
+                 response's body is cancelled so the socket is released.
   management.ts  typed, zod-parsed Management API wrapper (incl. diskAutoscale +
                  orgEntitlements for the disk over-provisioning context)
   sqlrunner.ts   SQL execution tiers behind one interface: ManagementSqlRunner
