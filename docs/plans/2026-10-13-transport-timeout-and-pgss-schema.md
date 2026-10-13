@@ -1,8 +1,11 @@
 # Transport timeout + quoted pgss schema - implementation plan
 
-**Status (2026-10-13): NOT STARTED.** Covers board cards `work-pg-analyser#3`
-(pgss schema, p1) and `work-pg-analyser#2` (fetchRetry, p2). Dry-run verified
-against f62fd70 (see "Dry-run status" at the end).
+**Status (2026-10-13): SHIPPED 2026-10-13 (commits: see git log).** Covers
+board cards `work-pg-analyser#3` (pgss schema, p1) and `work-pg-analyser#2`
+(fetchRetry, p2). Dry-run verified against f62fd70 (see "Dry-run status" at
+the end); executed on 8d35ef1 with the same sensor counts (1011 -> 1013 ->
+1016 -> 1021 pass, 0 fail). Tasks 2 and 3 ship as one commit (they rewrite
+the same `fetchRetry` block and test file).
 
 > **For agentic workers:** Execute this plan inline, task by task, in the current session. Steps use checkbox (`- [ ]`) syntax for tracking. Per-task subagents (subagent-driven-development) only if the user asks for them.
 
@@ -143,7 +146,7 @@ Read directly, not recalled:
 - Modify: `src/sql.ts:32-46`
 - Test: `test/sql.test.ts:199-211`, `test/collect.test.ts:3` and after line 178
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `test/sql.test.ts`, replace the whole test that starts at line 199
 (`test("non-default schema rewrites exactly the pgss planes", () => {`)
@@ -208,7 +211,7 @@ then `  });` - original lines 177-178, so 178-179 once the import above is in):
   });
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `bun --no-env-file test test/sql.test.ts test/collect.test.ts`
 Expected: 3 fail - `non-default schema rewrites exactly the pgss planes,
@@ -217,7 +220,7 @@ mixed-case pg_stat_statements schema reaches the pgss planes quoted` (each
 `toContain` reports the unquoted `public.` / `Stats.` text). Everything else
 in both files passes.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `src/sql.ts`, replace lines 32-46 (the comment block above
 `withPgssSchema` through the function's closing `}`) with:
@@ -246,7 +249,7 @@ export function withPgssSchema(
 (The `""` doubling cannot fire while the allowlist regex stands; it keeps the
 quoting correct if that regex is ever widened.)
 
-- [ ] **Step 4: Run the tests to verify they pass, then the full sensors**
+- [x] **Step 4: Run the tests to verify they pass, then the full sensors**
 
 Run: `bun --no-env-file test test/sql.test.ts test/collect.test.ts`
 Expected: all pass, 0 fail.
@@ -255,12 +258,18 @@ Run: `bun run typecheck` - Expected: exit 0, no output after the `tsc --noEmit` 
 Run: `bun run lint` - Expected: exit 0, `Checked 134 files ... No fixes applied.`
 Run: `bun --no-env-file test` - Expected: `1013 pass`, `0 fail`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/sql.ts test/sql.test.ts test/collect.test.ts
 git commit -m "fix(sql): quote the resolved pg_stat_statements schema as an identifier"
 ```
+
+Executed 2026-10-13 on 8d35ef1: red = 125 pass / 3 fail (the 3 new tests,
+each `toContain` receiving unquoted `public.` / `Stats.`); green = 128 pass /
+0 fail; typecheck exit 0, lint exit 0 (134 files), full suite 1013 pass /
+0 fail. Deviation: the git gate denies agent commits, so the commit is a
+step in the scratchpad commit script (run by the user), not made here.
 
 ---
 
@@ -270,7 +279,7 @@ git commit -m "fix(sql): quote the resolved pg_stat_statements schema as an iden
 - Modify: `src/transport.ts:17-43`
 - Test: `test/transport.test.ts:2` and append at end of file
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `test/transport.test.ts`, replace line 2:
 
@@ -354,14 +363,14 @@ describe("fetchRetry Retry-After cap and body drain", () => {
 });
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `bun --no-env-file test test/transport.test.ts`
 Expected: FAIL at load - `SyntaxError: Export named 'fetchRetry' not found in
 module '.../src/transport.ts'.` reported as `# Unhandled error between tests`,
 then `0 pass`, `1 fail`, `1 error`; `fetchRetry` is not exported yet.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `src/transport.ts`, replace lines 17-43 (from the `// Transient statuses
 worth retrying` comment through the closing `}` of `fetchRetry`) with:
@@ -421,7 +430,7 @@ export async function fetchRetry(
 }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass, then the full sensors**
+- [x] **Step 4: Run the tests to verify they pass, then the full sensors**
 
 Run: `bun --no-env-file test test/transport.test.ts`
 Expected: `8 pass`, `0 fail`.
@@ -430,12 +439,21 @@ Run: `bun run typecheck` - Expected: exit 0.
 Run: `bun run lint` - Expected: exit 0, `No fixes applied.`
 Run: `bun --no-env-file test` - Expected: `1016 pass`, `0 fail`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/transport.ts test/transport.test.ts
 git commit -m "fix(transport): cap Retry-After and cancel the body of retried responses"
 ```
+
+Executed 2026-10-13: red = load error `SyntaxError: Export named 'fetchRetry'
+not found in module '.../src/transport.ts'.` under `# Unhandled error between
+tests`, 0 pass / 1 fail / 1 error; green = transport file 8 pass / 0 fail;
+typecheck exit 0, lint exit 0 (134 files), full suite 1016 pass / 0 fail.
+Deviation: commit deferred to the scratchpad commit script (git gate), and
+grouped with Task 3 into ONE commit because both tasks rewrite the same
+`fetchRetry` block in `src/transport.ts` and the same `test/transport.test.ts`
+import line - per-file staging cannot separate them.
 
 ---
 
@@ -445,7 +463,7 @@ git commit -m "fix(transport): cap Retry-After and cancel the body of retried re
 - Modify: `src/transport.ts` (the block written in Task 2)
 - Test: `test/transport.test.ts:2` and append at end of file
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `test/transport.test.ts`, replace line 2 (the import written in Task 2) with:
 
@@ -540,7 +558,7 @@ describe("httpTimeoutMs (PG_ANALYSER_HTTP_TIMEOUT_MS)", () => {
 });
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `bun --no-env-file test test/transport.test.ts`
 Expected: FAIL at load - `SyntaxError: Export named 'httpTimeoutMs' not found
@@ -548,7 +566,7 @@ in module '.../src/transport.ts'.` reported as `# Unhandled error between
 tests`, then `0 pass`, `1 fail`, `1 error` (`DEFAULT_HTTP_TIMEOUT_MS` is
 missing too; Bun names only one).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `src/transport.ts`, replace the block from
 `export const MAX_RETRY_AFTER_MS = 30_000;` through the closing `}` of
@@ -651,7 +669,7 @@ export async function fetchRetry(
 `DirectTransport.mgmt` and `DirectTransport.metrics` keep calling
 `fetchRetry(url, init)`; they pick up the env-driven default with no change.
 
-- [ ] **Step 4: Run the tests to verify they pass, then the full sensors**
+- [x] **Step 4: Run the tests to verify they pass, then the full sensors**
 
 Run: `bun --no-env-file test test/transport.test.ts`
 Expected: `13 pass`, `0 fail`.
@@ -660,12 +678,19 @@ Run: `bun run typecheck` - Expected: exit 0.
 Run: `bun run lint` - Expected: exit 0, `No fixes applied.`
 Run: `bun --no-env-file test` - Expected: `1021 pass`, `0 fail`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/transport.ts test/transport.test.ts
 git commit -m "fix(transport): time out each HTTP attempt (PG_ANALYSER_HTTP_TIMEOUT_MS)"
 ```
+
+Executed 2026-10-13: red = load error `SyntaxError: Export named
+'httpTimeoutMs' not found in module '.../src/transport.ts'.`, 0 pass / 1 fail
+/ 1 error; green = transport file 13 pass / 0 fail; typecheck exit 0, lint
+exit 0 (134 files), full suite 1021 pass / 0 fail. Deviation: committed
+together with Task 2 as one commit (same `fetchRetry` block, same test file);
+the commit subject is this task's, the body names both changes.
 
 ---
 
@@ -675,7 +700,7 @@ git commit -m "fix(transport): time out each HTTP attempt (PG_ANALYSER_HTTP_TIME
 - Modify: `AGENTS.md:234`
 - Modify: `README.md` (Troubleshooting table, after the row starting `| A sweep is too quiet`)
 
-- [ ] **Step 1: Make the change**
+- [x] **Step 1: Make the change**
 
 In `AGENTS.md`, replace line 234:
 
@@ -702,7 +727,7 @@ starts `| A sweep is too quiet / you want per-plane detail`:
 | A sweep stalls on one project's API / metrics call   | Each HTTP attempt times out after 120s (`request to ... timed out after ...ms`, recorded as a collection note). Tune with `PG_ANALYSER_HTTP_TIMEOUT_MS` (ms; `0` disables). |
 ```
 
-- [ ] **Step 2: Verify**
+- [x] **Step 2: Verify**
 
 Run: `rg -c "PG_ANALYSER_HTTP_TIMEOUT_MS" AGENTS.md README.md src/transport.ts`
 Expected (in any order): `AGENTS.md:1`, `README.md:1`, `src/transport.ts:3`
@@ -711,18 +736,22 @@ Expected (in any order): `AGENTS.md:1`, `README.md:1`, `src/transport.ts:3`
 Run: `bun run lint` - Expected: exit 0 (biome ignores `.md`; this guards a
 stray edit elsewhere).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add AGENTS.md README.md
 git commit -m "docs: document PG_ANALYSER_HTTP_TIMEOUT_MS and the fetchRetry bounds"
 ```
 
+Executed 2026-10-13: `rg -c` printed `README.md:1`, `src/transport.ts:3`,
+`AGENTS.md:1`; lint exit 0 (134 files). Deviation: commit deferred to the
+scratchpad commit script (git gate).
+
 ---
 
 ### Task 5: close out
 
-- [ ] **Step 1: Mark this plan shipped** - change the status line at the top to
+- [x] **Step 1: Mark this plan shipped** - change the status line at the top to
 `**Status (<ship date>): SHIPPED.**` followed by the commit shas of Tasks 1-4,
 and tick the checkboxes.
 
@@ -734,12 +763,18 @@ Expected: both cards reported moved to `review` (queued if no token is
 available; `vkctl flush` replays the queue). Agents stop at In Review; only
 the user moves a card to Done.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add docs/plans/2026-10-13-transport-timeout-and-pgss-schema.md
 git commit -m "docs(plans): mark transport-timeout + pgss-schema plan shipped"
 ```
+
+Executed 2026-10-13. Deviations: Step 1 - the status banner reads "commits:
+see git log" because the shas do not exist until the user runs the commit
+script. Step 2 - NOT done in this session (left unticked): the card move is
+done by the coordinating session after the user pushes. Step 3 - deferred to
+the scratchpad commit script, which commits this file last.
 
 ---
 
