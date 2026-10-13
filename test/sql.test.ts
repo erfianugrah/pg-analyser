@@ -196,18 +196,26 @@ describe("pgss schema resolution (self-hosted pg_stat_statements)", () => {
     expect(withPgssSchema(undefined)).toEqual({});
   });
 
-  test("non-default schema rewrites exactly the pgss planes", () => {
+  test("non-default schema rewrites exactly the pgss planes, quoted", () => {
     const out = withPgssSchema("public");
     for (const k of PGSS_KEYS) {
       expect(out[k]).toBeDefined();
-      expect(out[k]).toContain("public.pg_stat_statements");
+      expect(out[k]).toContain('"public".pg_stat_statements');
       expect(out[k]).not.toContain("extensions.pg_stat_statements");
     }
     // statsResetAge reads the _info view - the prefix replace must carry it
-    expect(out.statsResetAge).toContain("public.pg_stat_statements_info");
+    expect(out.statsResetAge).toContain('"public".pg_stat_statements_info');
     // non-pgss planes are untouched
     expect("dbSize" in out).toBe(false);
     expect("locks" in out).toBe(false);
+  });
+
+  test("a mixed-case schema is inlined as a quoted identifier (no case-folding)", () => {
+    const out = withPgssSchema("Stats");
+    for (const k of PGSS_KEYS) {
+      expect(out[k]).toContain('"Stats".pg_stat_statements');
+      expect(out[k]).not.toMatch(/(^|[^"])Stats\.pg_stat_statements/);
+    }
   });
 
   test("rejects a non-identifier schema (inlined, no bind params)", () => {
