@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { collect } from "../src/collect.ts";
 import { makeLogger } from "../src/log.ts";
+import { QUERIES } from "../src/sql.ts";
 import advisorsPerf from "./fixtures/api/advisors-performance.json";
 import apiCounts from "./fixtures/api/api-counts.json";
 import backupsUnused from "./fixtures/api/disk.json"; // reused only for shape presence
@@ -175,6 +176,23 @@ describe("collect", () => {
     expect(seen.some((q) => q.includes("pg_stat_statements"))).toBe(true);
     // and the read-only SQL endpoint was NOT hit
     expect(t.calls.mgmt.some((p) => p.includes("query/read-only"))).toBe(false);
+  });
+
+  test("a mixed-case pg_stat_statements schema reaches the pgss planes quoted", async () => {
+    const seen: string[] = [];
+    const runner = {
+      source: "superuser" as const,
+      run: async (q: string) => {
+        seen.push(q);
+        return q === QUERIES.pgssSchema ? [{ schema: "Stats" }] : [];
+      },
+    };
+    const t = fakeTransport({ onMgmt: fullRoutes(), onMetrics: okMetrics });
+    await collect("ref", t, "0.0.0-test", { syncCheck: false, sqlRunner: runner });
+    // every plane that reads the extension's views went out schema-qualified AND quoted
+    const pgss = seen.filter((q) => /\.pg_stat_statements/.test(q));
+    expect(pgss.length).toBeGreaterThan(0);
+    for (const q of pgss) expect(q).toContain('"Stats".pg_stat_statements');
   });
 
   test("a recovering backend (EAUTHQUERY) short-circuits to ONE note, not a warn per plane", async () => {

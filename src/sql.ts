@@ -32,15 +32,18 @@ export const PGSS_KEYS = [
 // Rewrite the pgss planes for a resolved extension schema. The schema comes
 // from pg_extension on the target DB - validate it as a plain identifier
 // before inlining (the SQL here takes no bind params); anything else falls
-// back to the hosted default.
+// back to the hosted default. Inline it QUOTED: the probe returns nspname
+// verbatim, and an unquoted `Stats.pg_stat_statements` case-folds to `stats`
+// and fails every pgss plane into a collection note.
 export function withPgssSchema(
   schema: string | undefined,
 ): Partial<Record<(typeof PGSS_KEYS)[number], string>> {
   const s = schema && /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(schema) ? schema : PGSS_DEFAULT_SCHEMA;
   if (s === PGSS_DEFAULT_SCHEMA) return {};
+  const ident = `"${s.replaceAll('"', '""')}"`;
   const out: Partial<Record<(typeof PGSS_KEYS)[number], string>> = {};
   for (const k of PGSS_KEYS) {
-    out[k] = QUERIES[k].replaceAll("extensions.pg_stat_statements", `${s}.pg_stat_statements`);
+    out[k] = QUERIES[k].replaceAll("extensions.pg_stat_statements", `${ident}.pg_stat_statements`);
   }
   return out;
 }
