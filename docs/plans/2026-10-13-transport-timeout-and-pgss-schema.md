@@ -755,7 +755,10 @@ scratchpad commit script (git gate).
 `**Status (<ship date>): SHIPPED.**` followed by the commit shas of Tasks 1-4,
 and tick the checkboxes.
 
-- [ ] **Step 2: Move the cards**
+- [x] **Step 2: Move the cards**
+
+> Done 2026-10-13 after the push: #3 -> review on 335ece0, #2 -> review on
+> 711dc46 + 9280c65.
 
 Run: `vkctl comment work-pg-analyser#2 "Shipped <sha>: ... Verify: bun --no-env-file test"`
 (same for #3), then `vkctl mv work-pg-analyser#3 work-pg-analyser#2 review`
