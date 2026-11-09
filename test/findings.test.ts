@@ -70,6 +70,7 @@ function base(): Analysis {
       visibilityMap: [],
       hotUpdates: [],
       publicSchemaCreate: [],
+      secdefTriggerFns: [],
       replicationSlots: [],
       preparedXacts: [],
       xminHolders: [],
@@ -1884,6 +1885,65 @@ describe("trend-driven capacity findings (data-aware)", () => {
     expect(deriveFindings(short).some((x) => x.title.includes("consistently idle"))).toBe(false);
   });
 
+  // 60 daily points; the implied max_connections (DB connections / ceiling %)
+  // steps from 160 to 240 at changeDay - a compute change on Supabase.
+  const sized = (changeDay: number, cpu: (d: number) => number, mem: (d: number) => number) => {
+    const days = Array.from({ length: 60 }, (_, d) => d);
+    const pt = (f: (d: number) => number) => days.map((d) => ({ t: d * DAY, v: f(d) }));
+    const a = base();
+    a.trends = [
+      { title: "CPU utilization (%)", unit: "%", points: pt(cpu) },
+      { title: "Memory used (%)", unit: "%", points: pt(mem) },
+      { title: "DB connections", unit: "", points: pt(() => 40) },
+      {
+        title: "Connection ceiling (%)",
+        unit: "%",
+        points: pt((d) => (40 / (d < changeDay ? 160 : 240)) * 100),
+      },
+    ];
+    return a;
+  };
+  const idleCard = (a: ReturnType<typeof base>) =>
+    deriveFindings(a).find((x) => x.title.includes("consistently idle"));
+
+  test("cpu_oversized grades only the current compute size", () => {
+    // busy before the change (whole-window p95 40%), idle after -> fires on the segment
+    const f = idleCard(
+      sized(
+        20,
+        (d) => (d < 20 ? 40 : 5),
+        () => 20,
+      ),
+    );
+    expect(f?.title).toContain("since the last compute change");
+    expect(f?.title).toContain("memory p95 20%");
+    expect(f?.title).not.toContain("over-provisioned");
+  });
+
+  test("cpu_oversized stays quiet when memory has no headroom for a smaller size", () => {
+    expect(
+      idleCard(
+        sized(
+          20,
+          () => 5,
+          () => 70,
+        ),
+      ),
+    ).toBeUndefined();
+  });
+
+  test("cpu_oversized stays quiet when the current size is younger than the minimum window", () => {
+    expect(
+      idleCard(
+        sized(
+          50,
+          () => 5,
+          () => 20,
+        ),
+      ),
+    ).toBeUndefined();
+  });
+
   test("Memory sustained high -> mem_saturated", () => {
     const m = base();
     m.trends = [{ title: "Memory used (%)", unit: "%", points: series(15, 10, 90, 92) }];
@@ -2896,6 +2956,9 @@ describe("new coverage findings (stage 2/3)", () => {
     a.sql.topStatements = [{ queryid: "1", pct: 15, calls: 999, mean_ms: 2, query: "select 1" }];
     const lo = deriveFindings(a).find((x) => x.heuristicId === "top_query_db_time");
     expect(lo?.severity).toBe("low");
+    // pct is over app statements (platform housekeeping excluded), not the
+    // whole of pg_stat_statements - the title must say so.
+    expect(lo?.title).toContain("15% of app query time");
     // expensive dominant query: slow mean -> med
     a.sql.topStatements = [{ queryid: "1", pct: 15, calls: 10, mean_ms: 800, query: "select 1" }];
     const hi = deriveFindings(a).find((x) => x.heuristicId === "top_query_db_time");
@@ -4681,5 +4744,42 @@ describe("lock_wave: who waited for what, own-session and own-collection flags",
   test("the evidence lists at most 20 events", () => {
     const f = cascade(Array.from({ length: 20 }, (_, i) => ev({ pid: 1000 + i })));
     expect(f?.evidence?.match(/pid 10\d\d/g)?.length).toBe(20);
+  });
+});
+
+describe("SECURITY DEFINER exec lints skip trigger functions", () => {
+  const lint = (fn: string) => ({
+    name: "anon_security_definer_function_executable",
+    title: "Public Can Execute SECURITY DEFINER Function",
+    level: "WARN",
+    description: "Detects `SECURITY DEFINER` functions that are callable without signing in.",
+    detail: `Function \`${fn}\` can be executed by the \`anon\` role as a \`SECURITY DEFINER\` function via \`/rest/v1/rpc/x\`.`,
+  });
+
+  test("trigger functions are dropped from the count and named in the evidence", () => {
+    const a = base();
+    a.advisors.security = [
+      lint("public.stamp_modified()"),
+      lint("public.set_owner()"),
+      lint("public.do_thing(p_id uuid)"),
+    ];
+    a.sql.secdefTriggerFns = [{ fn: "public.stamp_modified()" }, { fn: "public.set_owner()" }];
+    const f = deriveFindings(a).find(
+      (x) => x.title === "Anonymous users can run an owner-privileged function",
+    );
+    expect(f).toBeDefined();
+    expect(f?.evidence).not.toContain("Affects");
+    expect(f?.evidence).toContain("2 trigger functions not counted");
+  });
+
+  test("a lint made only of trigger functions produces no finding", () => {
+    const a = base();
+    a.advisors.security = [lint("public.stamp_modified()")];
+    a.sql.secdefTriggerFns = [{ fn: "public.stamp_modified()" }];
+    expect(
+      deriveFindings(a).find(
+        (x) => x.title === "Anonymous users can run an owner-privileged function",
+      ),
+    ).toBeUndefined();
   });
 });

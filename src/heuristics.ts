@@ -188,6 +188,10 @@ export const THRESHOLDS = {
    * before recommending a smaller tier). */
   cpuOversizePct: 20,
   cpuOversizeMinDays: 14,
+  /** ...and memory p95 on the current size at/below this %: one compute size
+   * down halves RAM (docs table: Small 2, Medium 4, Large 8, XL 16 GB), so
+   * above ~40% a smaller size would sit near its memory ceiling. */
+  cpuOversizeMaxMemP95Pct: 40,
   /** Memory sustained-high: >= memSustainedFrac of the window at/above this %. */
   memSustainedHighPct: 85,
   memSustainedFrac: 0.3,

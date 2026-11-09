@@ -108,6 +108,14 @@ const PLATFORM_NOISE = [
   .map((p) => `'${p}'`)
   .join(",");
 
+// The app-workload predicate every pg_stat_statements view uses. PostgREST's
+// request queries ARE the Data API workload, and each one is
+// `WITH pgrst_source AS (...)` that also contains pg_catalog.count(...) and
+// current_setting('response.headers', ...) - so %pgrst%, %pg_catalog% and
+// %current_setting% above dropped every Data API query from the top lists.
+// PostgREST's own schema-cache / config reads have no pgrst_source and stay out.
+const APP_QUERY = `(query not ilike all (array[${PLATFORM_NOISE}]) or query ilike '%pgrst_source%')`;
+
 // Statement types that are not ongoing application workload: transaction
 // control, DDL, migrations, session/admin commands. A POSIX regex anchored at
 // the statement start, so it matches the verb without false-flagging a table
@@ -306,7 +314,7 @@ export const QUERIES = {
       round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 1) as pct,
       left(regexp_replace(query, '\\s+', ' ', 'g'), 160) as query
     from extensions.pg_stat_statements
-    where query not ilike all (array[${PLATFORM_NOISE}])
+    where ${APP_QUERY}
       and query !~* '${NOT_APP_STATEMENT}'
     order by total_exec_time desc
     limit 20`,
@@ -322,7 +330,7 @@ export const QUERIES = {
       round((100 * calls / nullif(sum(calls) over (), 0))::numeric, 1) as pct_calls,
       left(regexp_replace(query, '\\s+', ' ', 'g'), 160) as query
     from extensions.pg_stat_statements
-    where query not ilike all (array[${PLATFORM_NOISE}])
+    where ${APP_QUERY}
       and query !~* '${NOT_APP_STATEMENT}'
     order by calls desc
     limit 20`,
@@ -357,7 +365,7 @@ export const QUERIES = {
            / nullif(shared_blks_hit + shared_blks_read, 0)))::bigint as eviction_impact,
       left(regexp_replace(query, '\\s+', ' ', 'g'), 160) as query
     from extensions.pg_stat_statements
-    where query not ilike all (array[${PLATFORM_NOISE}])
+    where ${APP_QUERY}
       and query !~* '${NOT_APP_STATEMENT}'
       and calls >= 20
     order by temp_blks_written desc, shared_blks_read desc, stddev_exec_time desc
@@ -376,7 +384,7 @@ export const QUERIES = {
     with cand as (
       select queryid, query, total_exec_time, calls, mean_exec_time
       from extensions.pg_stat_statements
-      where query not ilike all (array[${PLATFORM_NOISE}])
+      where ${APP_QUERY}
         and query !~* '${NOT_APP_STATEMENT}'
         and calls >= 5
       order by total_exec_time desc
@@ -1470,7 +1478,7 @@ export const QUERIES = {
       round((100 * wal_bytes / nullif(sum(wal_bytes) over (), 0))::numeric, 1) as pct_wal,
       left(regexp_replace(query, '\\s+', ' ', 'g'), 160) as query
     from extensions.pg_stat_statements
-    where query not ilike all (array[${PLATFORM_NOISE}])
+    where ${APP_QUERY}
       and query !~* '${NOT_APP_STATEMENT}'
       and wal_bytes > 0
     order by wal_bytes desc
@@ -1492,7 +1500,7 @@ export const QUERIES = {
       left(regexp_replace(query, '\\s+', ' ', 'g'), 160) as query
     from extensions.pg_stat_statements
     where jit_functions > 0
-      and query not ilike all (array[${PLATFORM_NOISE}])
+      and ${APP_QUERY}
       and query !~* '${NOT_APP_STATEMENT}'
     order by (jit_generation_time + jit_emission_time) desc
     limit 10`,
@@ -1612,6 +1620,20 @@ export const QUERIES = {
       ) as public_create
     from pg_namespace
     where nspname = 'public'`,
+
+  // SECURITY DEFINER trigger functions, formatted exactly like splinter's
+  // lint detail (`schema.name(identity args)`). The anon/authenticated
+  // "can execute a SECURITY DEFINER function" lints gate only on prosecdef +
+  // EXECUTE, so they count these too - but a trigger function cannot be called
+  // over RPC (verified PG17: "trigger functions can only be called as
+  // triggers"), so findings drop them from those two lints. Catalog read only.
+  secdefTriggerFns: /* sql */ `
+    select n.nspname || '.' || p.proname
+      || '(' || pg_get_function_identity_arguments(p.oid) || ')' as fn
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+    where p.prosecdef
+      and p.prorettype in ('trigger'::regtype, 'event_trigger'::regtype)`,
 } as const;
 
 export type QueryKey = keyof typeof QUERIES;

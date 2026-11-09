@@ -60,6 +60,7 @@ function base(): Analysis {
       visibilityMap: [],
       hotUpdates: [],
       publicSchemaCreate: [],
+      secdefTriggerFns: [],
       replicationSlots: [],
       preparedXacts: [],
       xminHolders: [],

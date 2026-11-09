@@ -459,14 +459,10 @@ async function doAllDbs(
     // global --prometheus / PG_ANALYSER_PROMETHEUS_* when there's no profile
     // grafana block. An unmapped region in a profile that HAS one never gets
     // here: grafanaProfileProblems fails the run in main() before the sweep.
-    const graf = prof ? resolveGrafana(prof, t.region) : null;
     progress.step(`${label} (${t.ref})`);
     try {
       const analysis = await collect(t.ref, tp, VERSION, {
-        prometheusUrl: graf?.url ?? prometheusUrl,
-        prometheusCookie: graf?.cookie,
-        prometheusMatcher: graf?.matcher,
-        trendDays: prof?.trendDays,
+        ...profileTrendOpts(t, prometheusUrl),
         interval,
         sqlRunner: runner,
         syncCheck,
@@ -569,6 +565,30 @@ function sweepLogger(): Logger {
  * "ok - N findings" and showed a clean index row. Mark it PARTIAL on the console
  * and carry the reason as the index row's error so it sorts first and shows ERROR.
  */
+/**
+ * Trend options for one target: its profile's regional Grafana (host/uid/
+ * cookie by the target's region) and trend window, else the global
+ * --prometheus. Shared by the sweep and single-DB `analyze --profile`, which
+ * used to drop the profile's Grafana and run trend-less.
+ */
+export function profileTrendOpts(
+  t: SweepTarget,
+  fallbackUrl?: string,
+): {
+  prometheusUrl?: string;
+  prometheusCookie?: string;
+  prometheusMatcher?: string;
+  trendDays?: number;
+} {
+  const graf = t.profile ? resolveGrafana(t.profile, t.region) : null;
+  return {
+    prometheusUrl: graf?.url ?? fallbackUrl,
+    prometheusCookie: graf?.cookie,
+    prometheusMatcher: graf?.matcher,
+    trendDays: t.profile?.trendDays,
+  };
+}
+
 export function sweepOutcome(a: Analysis): {
   head: (n: number) => string;
   row: { error?: string };
@@ -990,6 +1010,7 @@ async function doAnalyze(
   dbUrl?: string,
   syncCheck?: boolean,
   amcheck?: boolean | "heap",
+  target?: SweepTarget,
 ): Promise<string> {
   const transport = resolveTransport();
   if (!transport && !dbUrl)
@@ -1008,13 +1029,15 @@ async function doAnalyze(
   console.error(
     `> analyzing ${ref} via ${transport ? "the Management API" : "no-PAT db-url mode"}`,
   );
+  // A --profile target carries its own regional Grafana + trend window.
+  const trendOpts = target ? profileTrendOpts(target, prometheusUrl) : { prometheusUrl };
   const analysis = await collect(ref, transport, VERSION, {
-    prometheusUrl,
+    ...trendOpts,
     interval,
     sqlRunner: runner,
     syncCheck,
     amcheck,
-    region: dbUrl ? (regionFromConnstring(dbUrl) ?? undefined) : undefined,
+    region: target?.region ?? (dbUrl ? (regionFromConnstring(dbUrl) ?? undefined) : undefined),
   }).finally(() => runner?.close());
   await mkdir(outDir, { recursive: true });
   const jsonPath = join(outDir, "analysis.json");
@@ -1605,6 +1628,7 @@ async function main(): Promise<void> {
           singleDbUrl,
           !flags.noSyncCheck,
           flags.amcheck,
+          targets[0],
         );
         break;
       }

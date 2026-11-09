@@ -67,6 +67,7 @@ function makeAnalysis(opts: {
       visibilityMap: [],
       hotUpdates: [],
       publicSchemaCreate: [],
+      secdefTriggerFns: [],
       replicationSlots: opts.slots ?? [],
       preparedXacts: [],
       xminHolders: [],

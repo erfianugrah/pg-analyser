@@ -722,6 +722,47 @@ src/
 
 ## Verified upstream facts (Supabase, 2026-07)
 
+2026-11-09 additions (no-PAT report review, PG 17.6 project, 90 days of
+Grafana trends spanning three compute resizes; each shape re-run on
+`postgres:17-alpine`):
+
+- **Every Data API query was filtered out of the top-statement views.**
+  PostgREST's request statements are `WITH pgrst_source AS (...)` and also
+  contain `pg_catalog.count(_postgrest_t)` and
+  `current_setting('response.headers', true)`, which `%pgrst%`,
+  `%pg_catalog%` and `%current_setting%` matched. `APP_QUERY` (sql.ts) keeps
+  any `pgrst_source` statement; on PG17 with pg_stat_statements the old
+  predicate returned only the plain SELECT and the new one both. The
+  top-query card's percentage is over that app set, so its title now says
+  "of app query time", not "of total database time".
+- **A trigger function cannot be called over RPC.** PG17: `select f()` on a
+  `returns trigger` function raises "trigger functions can only be called as
+  triggers" (in FROM: "unsupported return type trigger"), yet anon holds
+  EXECUTE on it by default. Splinter 0028/0029 (upstream checked 2026-11-09,
+  vendored copy unchanged) gate only on prosecdef + EXECUTE, so they count
+  triggers. `secdefTriggerFns` lists them in the lint's own
+  `schema.name(identity args)` format and `securityAdvisorFindings` drops
+  them, naming the count; a lint of only triggers gives no card.
+- **max_connections marks the compute size.** The compute-and-disk docs set
+  it per size (Small 90, Medium 120, Large 160, XL 240, 2XL 380, 4XL 480);
+  connections / "Connection ceiling (%)" stepped 90 -> 120 -> 160 -> 240 on
+  the reviewed project, the last step at the stats reset. `cpu_oversized`
+  now grades only the points since the last step (`lastComputeChange`) and
+  needs memory p95 <= `cpuOversizeMaxMemP95Pct` (40; one size down halves
+  RAM), and its title states the signal, not "likely over-provisioned": the
+  90d p95 had mixed four sizes while memory, not CPU, was near its ceiling
+  on Small (p95 83%, swapping).
+- **Revoking EXECUTE from anon alone leaves anon able to call the function.**
+  Postgres grants EXECUTE to PUBLIC on every new function and anon inherits
+  it: on PG17, with Supabase-style default privileges,
+  `has_function_privilege('anon', ...)` stayed true after
+  `revoke ... from anon` and went false only after `from public` too
+  (service_role kept its explicit grant). The 0028/0029 fixes in lints.ts
+  now revoke from PUBLIC as well, as the Supabase functions docs ("Function
+  privileges") do.
+- **`analyze --profile` resolves the profile's Grafana.** Only the sweep did;
+  a single-DB analyze ran trend-less. Both now use `profileTrendOpts`.
+
 2026-10-10 additions (no-PAT report review, PG 17.6 project, 90 days of
 Grafana trends spanning two compute changes and a ~93% data drop):
 

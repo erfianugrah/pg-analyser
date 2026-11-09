@@ -273,8 +273,8 @@ export const LINT_FIXES: Record<string, LintFix> = {
     whyItMatters:
       "The anon role can call a SECURITY DEFINER function, which runs with the owner's rights. An unauthenticated caller executes privileged code - whatever the owner can do, anon can trigger.",
     whatToDo:
-      "The anon role can execute a SECURITY DEFINER function (which runs with the owner's rights). Consider revoking execute from anon unless it is meant to be public.",
-    sql: "REVOKE EXECUTE ON FUNCTION <schema>.<function>(<args>) FROM anon;",
+      "The anon role can execute a SECURITY DEFINER function (which runs with the owner's rights). Unless it is meant to be public, check that the body verifies the caller and consider revoking execute from both PUBLIC and anon: anon also inherits the EXECUTE Postgres grants PUBLIC on every new function, so revoking from anon alone leaves it callable.",
+    sql: "REVOKE EXECUTE ON FUNCTION <schema>.<function>(<args>) FROM PUBLIC, anon;",
     howToVerify: "Re-run the Security Advisor - the lint should clear.",
   },
   authenticated_security_definer_function_executable: {
@@ -282,8 +282,8 @@ export const LINT_FIXES: Record<string, LintFix> = {
     whyItMatters:
       "Every authenticated user can call a SECURITY DEFINER function that runs with the owner's rights, so any account executes privileged code. Scope execute to the roles that actually need it.",
     whatToDo:
-      "Every authenticated user can execute a SECURITY DEFINER function. Consider restricting execute to only the roles that need it.",
-    sql: "REVOKE EXECUTE ON FUNCTION <schema>.<function>(<args>) FROM authenticated;",
+      "Every authenticated user can execute a SECURITY DEFINER function. Consider restricting execute to only the roles that need it: revoke it from PUBLIC (which every role inherits) as well as from anon and authenticated, then grant it back to the roles that need it.",
+    sql: "REVOKE EXECUTE ON FUNCTION <schema>.<function>(<args>) FROM PUBLIC, anon, authenticated;",
     howToVerify: "Re-run the Security Advisor - the lint should clear.",
   },
   fkey_to_auth_unique: {

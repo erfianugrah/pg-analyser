@@ -424,6 +424,8 @@ export const Analysis = z.object({
     hotUpdates: SqlRows.default([]),
     // Whether the PUBLIC role can CREATE in schema public. Back-compat default.
     publicSchemaCreate: SqlRows.default([]),
+    // SECURITY DEFINER trigger functions (excluded from the RPC-exec lints).
+    secdefTriggerFns: SqlRows.default([]),
     replicationSlots: SqlRows,
     // Prepared transactions holding XIDs. Back-compat default.
     preparedXacts: SqlRows.default([]),

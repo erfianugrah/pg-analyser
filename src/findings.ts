@@ -255,6 +255,7 @@ function groupAdvisors(
   anchor: string,
   ref: string | undefined,
   winCaveat: string | null = null,
+  notes: ReadonlyMap<string, string> = new Map(),
 ): Finding[] {
   const byTitle = new Map<
     string,
@@ -291,7 +292,8 @@ function groupAdvisors(
     const desc = descRaw ? (/[.!?]$/.test(descRaw) ? descRaw : `${descRaw}.`) : "";
     const scale = g.count > 1 ? `Affects ${g.count} objects.` : "";
     const caveat = winCaveat && COUNTER_DERIVED_ADVISOR_LINTS.has(g.name) ? winCaveat : "";
-    const evidence = [desc, scale, caveat].filter(Boolean).join(" ") || undefined;
+    const evidence =
+      [desc, scale, caveat, notes.get(g.name)].filter(Boolean).join(" ") || undefined;
     return {
       // A short stats window caps a counter-derived lint at low.
       severity: caveat ? "low" : sevFromLevel(g.level),
@@ -309,6 +311,63 @@ function groupAdvisors(
       changelogUrl: fix?.changelogUrl ?? base.changelogUrl,
     };
   });
+}
+
+/**
+ * Start (epoch s) of the current compute size: the first point at the latest
+ * implied max_connections (DB connections / Connection ceiling %). Supabase
+ * sets max_connections per compute size (docs compute-and-disk table: Small
+ * 90, Medium 120, Large 160, XL 240, ...), so a step of more than 10% marks a
+ * resize. null when either series is missing or no step was seen.
+ */
+export function lastComputeChange(
+  conns: ReadonlyArray<{ t: number; v: number }>,
+  ceiling: ReadonlyArray<{ t: number; v: number }>,
+): number | null {
+  const pct = new Map(ceiling.map((p) => [p.t, p.v]));
+  let prev: number | null = null;
+  let since: number | null = null;
+  for (const p of [...conns].sort((x, y) => x.t - y.t)) {
+    const c = pct.get(p.t);
+    if (!c || !p.v) continue;
+    const max = p.v / (c / 100);
+    if (prev != null && Math.abs(max - prev) / prev > 0.1) since = p.t;
+    prev = max;
+  }
+  return since;
+}
+
+/** Splinter lints that gate only on prosecdef + EXECUTE for an API role. */
+const SECDEF_EXEC_LINTS = new Set([
+  "anon_security_definer_function_executable",
+  "authenticated_security_definer_function_executable",
+]);
+
+/**
+ * Security advisor cards, minus trigger functions in the two SECURITY DEFINER
+ * exec lints: those lints (upstream too, checked 2026-11-09) count any
+ * SECURITY DEFINER function the role can EXECUTE, but a trigger function
+ * cannot be called over RPC, so it is not the exposure the card describes.
+ * The dropped count is named in the card's evidence; a lint made only of
+ * trigger functions produces no card.
+ */
+function securityAdvisorFindings(a: Analysis): Finding[] {
+  const triggers = new Set((a.sql.secdefTriggerFns ?? []).map((r) => `\`${String(r.fn)}\``));
+  const dropped = new Map<string, number>();
+  const kept = a.advisors.security.filter((l) => {
+    const isTrigger =
+      SECDEF_EXEC_LINTS.has(l.name) &&
+      [...triggers].some((t) => String(l.detail ?? "").includes(t));
+    if (isTrigger) dropped.set(l.name, (dropped.get(l.name) ?? 0) + 1);
+    return !isTrigger;
+  });
+  const notes = new Map(
+    [...dropped].map(([name, n]) => [
+      name,
+      `${n} trigger function${n === 1 ? "" : "s"} not counted (a trigger function cannot be called over RPC).`,
+    ]),
+  );
+  return groupAdvisors(kept, "Security", "#adv-sec", a.meta.ref, null, notes);
 }
 
 /**
@@ -1421,7 +1480,7 @@ export function deriveFindings(a: Analysis): Finding[] {
   out.push(
     ...groupAdvisors(a.advisors.performance, "Performance", "#adv-perf", a.meta.ref, winCaveat),
   );
-  out.push(...groupAdvisors(a.advisors.security, "Security", "#adv-sec", a.meta.ref));
+  out.push(...securityAdvisorFindings(a));
 
   // Performance - SQL-derived. The cache-hit ratio is only trustworthy once the
   // DB has done enough block access since stats reset; on a tiny/idle DB (e.g. a
@@ -1517,7 +1576,9 @@ export function deriveFindings(a: Analysis): Finding[] {
     out.push({
       severity: expensive && !hist ? "med" : "low",
       category: "Performance",
-      title: `One query is ${topByTime.pct}% of total database time (${topByTime.calls} calls, ${topByTime.mean_ms}ms mean)`,
+      // pct is over the app-workload set (sql.ts APP_QUERY: platform
+      // housekeeping excluded), not all of pg_stat_statements.
+      title: `One query is ${topByTime.pct}% of app query time (${topByTime.calls} calls, ${topByTime.mean_ms}ms mean)`,
       anchor: "#outliers",
       evidence: [String(topByTime.query ?? ""), hist].filter(Boolean).join(" "),
       ...meta("top_query_db_time"),
@@ -3009,14 +3070,39 @@ export function deriveFindings(a: Analysis): Finding[] {
         anchor: "#trends",
         ...meta("cpu_saturated"),
       });
-    } else if (s.spanDays >= THRESHOLDS.cpuOversizeMinDays && s.p95 <= THRESHOLDS.cpuOversizePct) {
-      out.push({
-        severity: "low",
-        category: "Capacity",
-        title: `CPU consistently idle: p95 ${Math.round(s.p95)}% over ${Math.round(s.spanDays)}d (peak ${Math.round(s.max)}%) - likely over-provisioned`,
-        anchor: "#trends",
-        ...meta("cpu_oversized"),
-      });
+    } else {
+      // Oversize is a statement about the CURRENT instance, so grade only the
+      // points since the last compute change: a 90d window spanning
+      // Small->XL (seen 2026-11-09) mixed four sizes into one p95. And a
+      // smaller size cuts RAM too (one step down halves it in the docs table),
+      // so memory p95 must leave room before CPU idleness means anything.
+      const since = lastComputeChange(
+        pointsOf("DB connections"),
+        pointsOf("Connection ceiling (%)"),
+      );
+      const seg = since == null ? cpuPts : cpuPts.filter((p) => p.t >= since);
+      const ss = sufficient(seg) ? trendStat(seg) : null;
+      const memSeg = pointsOf("Memory used (%)").filter((p) => since == null || p.t >= since);
+      const memP95 = memSeg.length >= 2 ? (trendStat(memSeg)?.p95 ?? null) : null;
+      if (
+        ss &&
+        ss.spanDays >= THRESHOLDS.cpuOversizeMinDays &&
+        ss.p95 <= THRESHOLDS.cpuOversizePct &&
+        (memP95 == null || memP95 <= THRESHOLDS.cpuOversizeMaxMemP95Pct)
+      ) {
+        const scope =
+          since == null
+            ? `over ${Math.round(ss.spanDays)}d`
+            : `over ${Math.round(ss.spanDays)}d since the last compute change (${new Date(since * 1000).toISOString().slice(0, 10)})`;
+        const mem = memP95 == null ? "" : `, memory p95 ${Math.round(memP95)}%`;
+        out.push({
+          severity: "low",
+          category: "Capacity",
+          title: `CPU consistently idle: p95 ${Math.round(ss.p95)}% ${scope} (peak ${Math.round(ss.max)}%)${mem}`,
+          anchor: "#trends",
+          ...meta("cpu_oversized"),
+        });
+      }
     }
   }
 
