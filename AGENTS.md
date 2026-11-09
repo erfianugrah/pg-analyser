@@ -173,8 +173,11 @@ regional Grafana is a separate ALB (per-region session cookie), so trends are
 resolved PER PROJECT: `regionFromConnstring` derives the region from the
 connstring, `resolveGrafana` maps it to that region's host/uid/cookie (host from
 `hostTemplate.{region}` or a per-region override), and only `{ref}` stays
-templated in the matcher. A region absent from the map -> that project's trends
-are skipped (SQL/advisors still run). `grafana.regions` is keyed by AWS region
+templated in the matcher. A region absent from the map, a key that is not an AWS
+region name, or an entry with no host/uid is a ConfigError before the sweep
+(`grafanaProfileProblems`; until 2026-11-09 it was a collection note found
+after the sweep line said ok). A database meant to run without trends goes in
+a separate profile with no grafana block. `grafana.regions` is keyed by AWS region
 ONLY - one Grafana target (host/uid/cookie) per region PER PROFILE, because the
 key is the region string itself, not a (region, org) pair. Two databases that
 share an AWS region but need DIFFERENT Grafana instances/cookies (e.g. two

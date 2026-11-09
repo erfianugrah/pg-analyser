@@ -442,8 +442,10 @@ bun run src/index.ts full --profile pg-analyser.profile.json
 The sweep derives each project's **region** from its connstring, maps it to that
 region's Grafana host/uid/cookie, and substitutes the project `{ref}` into the
 matcher - so one profile spans projects across regions, each hitting its own
-regional Grafana. A region absent from the map just skips that project's trends
-(SQL + advisors still run). The filename is free (it's passed to `--profile`);
+regional Grafana. A database whose region has no entry, a region key that is not an AWS region
+name, or an entry with no host/uid stops the run with a `config error` before
+any database is touched. A database that should run without trends goes in a
+separate profile with no `grafana` block, chained with another `--profile`. The filename is free (it's passed to `--profile`);
 keep it matching the `pg-analyser.profile.json` / `pg-analyser.*.profile.json` gitignore
 pattern so the cookies + connstrings are never committed.
 

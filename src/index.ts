@@ -33,7 +33,13 @@ import { bindProgress, envLevelExplicit, type Logger, makeLogger } from "./log.t
 import { Management } from "./management.ts";
 import { buildMessages, clientFromEnv, narrate } from "./narrate.ts";
 import { loadOverlay } from "./overlay.ts";
-import { type Profile, parseProfile, profileEntries, resolveGrafana } from "./profile.ts";
+import {
+  grafanaProfileProblems,
+  type Profile,
+  parseProfile,
+  profileEntries,
+  resolveGrafana,
+} from "./profile.ts";
 import { backfillInstructions, toOpenMetrics } from "./promexport.ts";
 import { htmlToPdf } from "./report/pdf.ts";
 import {
@@ -144,7 +150,10 @@ Flags:
                        profile's use the token), Grafana, and trend window.
                        grafana.regions is one target PER REGION PER PROFILE -
                        two DBs sharing a region but needing different Grafana
-                       creds need separate profile files, chained. See
+                       creds need separate profile files, chained. With a
+                       grafana block, every DB's region must have an entry:
+                       a missing or misspelt region is a config error before
+                       any DB is touched. See
                        pg-analyser.profile.example.json, or
                        pg-analyser.org-{a,b}.profile.example.json for the
                        same-region-different-cookie split.
@@ -447,22 +456,10 @@ async function doAllDbs(
     const tp = prof?.noPat ? null : transport;
     // Per-project regional Grafana: the target's profile maps its region (derived
     // from its connstring) to that region's host/uid/cookie. Falls back to the
-    // global --prometheus / PG_ANALYSER_PROMETHEUS_* when there's no profile match.
+    // global --prometheus / PG_ANALYSER_PROMETHEUS_* when there's no profile
+    // grafana block. An unmapped region in a profile that HAS one never gets
+    // here: grafanaProfileProblems fails the run in main() before the sweep.
     const graf = prof ? resolveGrafana(prof, t.region) : null;
-    // A profile WITH a grafana block but no entry for this project's region =
-    // trends can't be fetched; surface it in the report note + the done line
-    // rather than a silently trend-less report.
-    const grafanaGap =
-      prof?.grafana && !graf
-        ? (() => {
-            const region = t.region ?? "(underivable from connstring)";
-            const have = Object.keys(prof.grafana?.regions ?? {});
-            // List the region keys the profile DOES have, so a one-digit typo
-            // (ap-northeast-1 vs -2) is obvious instead of a silent skip.
-            const hint = have.length ? ` (profile maps: ${have.join(", ")})` : "";
-            return `no Grafana config for region "${region}"${hint} - trends skipped`;
-          })()
-        : null;
     progress.step(`${label} (${t.ref})`);
     try {
       const analysis = await collect(t.ref, tp, VERSION, {
@@ -478,7 +475,6 @@ async function doAllDbs(
         region: t.region ?? regionFromConnstring(t.dbUrl) ?? undefined,
         logger: sweepLog,
       }).finally(() => runner.close());
-      if (grafanaGap) analysis.errors.push({ source: "trends", message: grafanaGap });
       const projName = t.name || analysis.meta.name || t.ref;
       let projDir = `${slugify(projName) || t.ref}-${date}`;
       while (usedDirs.has(projDir))
@@ -527,9 +523,7 @@ async function doAllDbs(
         ...sweepOutcome(analysis).row,
       });
       const n = counts.high + counts.med + counts.low;
-      progress.done(
-        `${sweepOutcome(analysis).head(n)}${doneTail(analysis)}${grafanaGap ? " - trends skipped" : ""}${pdfTail(pdfError)}`,
-      );
+      progress.done(`${sweepOutcome(analysis).head(n)}${doneTail(analysis)}${pdfTail(pdfError)}`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       rows.push({
@@ -1547,6 +1541,19 @@ async function main(): Promise<void> {
         for (const t of resolveTargets(profileEntries(p), single ? flags.ref : undefined))
           targets.push({ ...t, profile: p });
       }
+      // Fail before any database is touched when a profile's Grafana block
+      // can't resolve trends for one of its databases (a misspelt region key
+      // used to surface only as a collection note after the sweep said "ok").
+      const problems = activeProfiles.flatMap((p, i) =>
+        grafanaProfileProblems(
+          p,
+          targets.filter((t) => t.profile === p),
+        ).map((m) => `${flags.profiles[i]}: ${m}`),
+      );
+      if (problems.length)
+        throw new ConfigError(
+          `profile Grafana config would skip trends:\n  - ${problems.join("\n  - ")}`,
+        );
     } else {
       const raw: RawEntry[] = [];
       if (flags.dbUrls.length || flags.dbConfig) {

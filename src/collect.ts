@@ -98,8 +98,9 @@ export async function collect(
       const expectedAbsence = /(relation|schema) "[^"]+" does not exist/i.test(message);
       // A Grafana/Prometheus datasource that redirects to an SSO login
       // (expired/missing session cookie) or hands back an HTML login page is
-      // simply UNAVAILABLE for this project - the direct analogue of the sweep's
-      // grafanaGap ("no Grafana config for region") skip, not a real failure.
+      // simply UNAVAILABLE for this project, not a real failure (a profile
+      // region that does not resolve never gets here: it is a ConfigError
+      // before the sweep, see grafanaProfileProblems).
       // Still record it as a collection note (so the report shows trends were
       // skipped) but demote the log from WARN "plane failed" to a quiet INFO -
       // an expired cookie mid-sweep shouldn't read like something broke. Covers

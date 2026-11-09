@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { parseProfile, profileEntries, resolveGrafana } from "../src/profile.ts";
+import {
+  grafanaProfileProblems,
+  parseProfile,
+  profileEntries,
+  resolveGrafana,
+} from "../src/profile.ts";
 
 const REF = "abcdefghijklmnopqrst";
 
@@ -105,5 +110,74 @@ describe("resolveGrafana", () => {
     expect(resolveGrafana(p, null)).toBeNull();
     const noGraf = parseProfile(JSON.stringify({ databases: [{ dbUrl: "postgresql://a" }] }));
     expect(resolveGrafana(noGraf, "ap-southeast-1")).toBeNull();
+  });
+});
+
+describe("grafanaProfileProblems", () => {
+  const sg = { name: "cust-a", ref: REF, region: "ap-southeast-1" };
+  const eu = { name: "cust-b", ref: REF, region: "eu-central-1" };
+  const withRegions = (regions: Record<string, unknown>, extra: Record<string, unknown> = {}) =>
+    parseProfile(
+      JSON.stringify({
+        ...full,
+        grafana: { ...full.grafana, ...extra, regions },
+      }),
+    );
+
+  test("a fully mapped profile has no problems", () => {
+    expect(grafanaProfileProblems(parseProfile(JSON.stringify(full)), [sg, eu])).toEqual([]);
+  });
+
+  test("no grafana block = SQL-only profile, nothing to check", () => {
+    const p = parseProfile(JSON.stringify({ databases: [{ dbUrl: "postgresql://a" }] }));
+    expect(grafanaProfileProblems(p, [{ ref: REF, region: "us-west-2" }])).toEqual([]);
+  });
+
+  test("a misspelt region key is rejected with the target region as the suggestion", () => {
+    const problems = grafanaProfileProblems(withRegions({ "ap-southheast-1": { cookie: "c" } }), [
+      sg,
+    ]);
+    expect(problems).toHaveLength(2);
+    expect(problems[0]).toContain(
+      'grafana.regions key "ap-southheast-1" is not an AWS region name',
+    );
+    expect(problems[0]).toContain('did you mean "ap-southeast-1"?');
+    expect(problems[1]).toContain('database "cust-a"');
+    expect(problems[1]).toContain("is in ap-southeast-1");
+    expect(problems[1]).toContain("grafana.regions maps: ap-southheast-1");
+  });
+
+  test("a valid but different region key (one-digit slip) names the target and the keys", () => {
+    const problems = grafanaProfileProblems(withRegions({ "ap-northeast-2": { cookie: "c" } }), [
+      { name: "cust-c", ref: REF, region: "ap-northeast-1" },
+    ]);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("is in ap-northeast-1");
+    expect(problems[0]).toContain("grafana.regions maps: ap-northeast-2");
+    expect(problems[0]).toContain("profile without a grafana block");
+  });
+
+  test("an underivable region asks for databases[].region", () => {
+    const problems = grafanaProfileProblems(parseProfile(JSON.stringify(full)), [
+      { name: "cust-d", ref: REF },
+    ]);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('set "region" on its databases[] entry');
+  });
+
+  test("a region entry with no resolvable host or datasource uid is reported", () => {
+    const problems = grafanaProfileProblems(
+      withRegions(
+        { "ap-southeast-1": { cookie: "c" } },
+        { hostTemplate: undefined, datasourceUid: undefined },
+      ),
+      [sg],
+    );
+    expect(problems.some((m) => m.includes('grafana.regions["ap-southeast-1"] has no host'))).toBe(
+      true,
+    );
+    expect(
+      problems.some((m) => m.includes('grafana.regions["ap-southeast-1"] has no datasource uid')),
+    ).toBe(true);
   });
 });

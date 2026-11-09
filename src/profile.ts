@@ -83,7 +83,8 @@ export function profileEntries(p: Profile): RawEntry[] {
  * Resolve the Grafana trend config for one project in a given region:
  * regional host (template or override) + datasource UID + that region's cookie.
  * Returns null (trends skipped for this project) when there's no grafana block,
- * no region, or the region isn't in the map / lacks a resolvable host+uid. The
+ * no region, or the region isn't in the map / lacks a resolvable host+uid (main()
+ * rejects those three up front via grafanaProfileProblems). The
  * matcher's {ref} is substituted downstream by fetchTrends.
  */
 export function resolveGrafana(
@@ -103,4 +104,73 @@ export function resolveGrafana(
     cookie: creds.cookie,
     matcher: g.matcher,
   };
+}
+
+/** AWS region shape (ap-southeast-1, us-gov-west-1); a key outside it is a typo. */
+const AWS_REGION = /^[a-z]{2}(-gov)?-(north|south|east|west|central|(north|south)(east|west))-\d+$/;
+
+function editDistance(a: string, b: string): number {
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j++)
+      cur[j] = Math.min(
+        prev[j]! + 1,
+        cur[j - 1]! + 1,
+        prev[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1),
+      );
+    prev = cur;
+  }
+  return prev[b.length]!;
+}
+
+/**
+ * Config problems that would leave a profile's databases without trends. A
+ * profile with a grafana block asks for trends, so a region key that is not an
+ * AWS region, a region entry with no host/uid, or a database whose region has
+ * no entry is a mistake in the file - reported up front, before any database
+ * is touched, instead of a collection note found after the sweep. Empty when
+ * the profile has no grafana block (SQL-only is a valid choice) or every
+ * database resolves. A database that should run without trends belongs in a
+ * separate profile with no grafana block, chained with another --profile.
+ */
+export function grafanaProfileProblems(
+  p: Profile,
+  targets: ReadonlyArray<{ name?: string; ref: string; region?: string | null }>,
+): string[] {
+  const g = p.grafana;
+  if (!g) return [];
+  const problems: string[] = [];
+  const keys = Object.keys(g.regions);
+  const targetRegions = [...new Set(targets.flatMap((t) => (t.region ? [t.region] : [])))];
+  for (const key of keys) {
+    if (!AWS_REGION.test(key)) {
+      const near = targetRegions.find((r) => editDistance(r, key) <= 2);
+      problems.push(
+        `grafana.regions key "${key}" is not an AWS region name${near ? ` (did you mean "${near}"?)` : ""}`,
+      );
+    }
+    const creds = g.regions[key]!;
+    if (!creds.host && !g.hostTemplate)
+      problems.push(
+        `grafana.regions["${key}"] has no host: set grafana.hostTemplate or a per-region "host"`,
+      );
+    if (!creds.uid && !g.datasourceUid)
+      problems.push(
+        `grafana.regions["${key}"] has no datasource uid: set grafana.datasourceUid or a per-region "uid"`,
+      );
+  }
+  for (const t of targets) {
+    const who = `database "${t.name ?? t.ref}" (${t.ref})`;
+    if (!t.region) {
+      problems.push(
+        `${who}: region can't be derived from its connstring - set "region" on its databases[] entry`,
+      );
+    } else if (!g.regions[t.region]) {
+      problems.push(
+        `${who} is in ${t.region}, but grafana.regions maps: ${keys.join(", ") || "(none)"} - add "${t.region}", or move this database to a profile without a grafana block`,
+      );
+    }
+  }
+  return problems;
 }
