@@ -27,7 +27,7 @@
     "test:live": "bun acceptance/live-sql.ts && bun acceptance/live-catalogue-sql.ts && bun acceptance/live-promtool.ts"
   },
   "dependencies": {
-    "zod": "4.4.3"
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.2",
