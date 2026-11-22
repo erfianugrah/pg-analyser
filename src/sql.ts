@@ -352,6 +352,8 @@ export const QUERIES = {
     select
       queryid::text as queryid,
       calls,
+      rows,
+      round((rows::numeric / nullif(calls, 0))::numeric, 1) as rows_per_call,
       round(mean_exec_time::numeric, 2) as mean_ms,
       round(stddev_exec_time::numeric, 2) as stddev_ms,
       round((stddev_exec_time / nullif(mean_exec_time, 0))::numeric, 2) as cv,

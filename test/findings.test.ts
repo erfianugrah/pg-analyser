@@ -2802,6 +2802,69 @@ describe("stall-victim note on the unstable-latency card (Check 5)", () => {
     const f = deriveFindings(a).find((x) => x.heuristicId === "query_high_variance");
     expect(f?.evidence ?? "").not.toMatch(/stall signature/i);
   });
+
+  test("card12: high stall_ratio + large max_ms but rows_per_call > 1 suppresses stall signature", () => {
+    const a = base();
+    a.sql.queryIoStats = [
+      {
+        queryid: "1",
+        calls: 474,
+        rows: 9480,
+        rows_per_call: 20,
+        mean_ms: 420,
+        stddev_ms: 1000,
+        cv: 2.4,
+        max_ms: 7700,
+        stall_ratio: 18.3,
+        query: "select 1",
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "query_high_variance");
+    // The stall signature is suppressed because rows_per_call > 1 means
+    // batch-size variance can explain the max/mean spread.
+    expect(f?.evidence ?? "").not.toMatch(/stall signature/i);
+    expect(f?.evidence).toMatch(/batch-size variance/);
+  });
+
+  test("card12: high stall_ratio + large max_ms with rows_per_call <= 1 keeps stall signature", () => {
+    const a = base();
+    a.sql.queryIoStats = [
+      {
+        queryid: "1",
+        calls: 100,
+        rows: 100,
+        rows_per_call: 1,
+        mean_ms: 50,
+        stddev_ms: 120,
+        cv: 2.4,
+        max_ms: 6000,
+        stall_ratio: 120,
+        query: "select 1",
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "query_high_variance");
+    expect(f?.evidence ?? "").toMatch(/stall signature/i);
+    expect(f?.evidence ?? "").not.toMatch(/batch-size variance/);
+  });
+
+  test("card12: rows_per_call undefined (legacy data) keeps existing stall behavior", () => {
+    const a = base();
+    a.sql.queryIoStats = [
+      {
+        queryid: "1",
+        calls: 50,
+        mean_ms: 80,
+        stddev_ms: 200,
+        cv: 2.5,
+        max_ms: 8000,
+        stall_ratio: 100,
+        query: "select 1",
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "query_high_variance");
+    // undefined rows_per_call -> num() returns 0 -> rowsPerCall <= 1 -> stall kept
+    expect(f?.evidence ?? "").toMatch(/stall signature/i);
+  });
 });
 
 describe("live_lock_contention (wait-event sampling, Check 6)", () => {
