@@ -1541,15 +1541,18 @@ export function deriveFindings(a: Analysis): Finding[] {
     // stall signature. MANDATORY caveat - pg_stat_statements records only
     // COMPLETED executions, so statements killed by statement_timeout never land
     // here; this under-counts cascade victims and is corroboration, not a detector.
-    // When rows-per-call varies (multi-row bulk operations), the spread may come
-    // from batch-size variance rather than a stall - skip the stall signature.
+    // When rows-per-call varies (non-integer average -> batch size differs across
+    // calls), the spread may come from batch-size variance rather than a stall.
+    // Constant integer rows_per_call means the batch size is stable -> stall still applies.
     const rowsPerCall = num(vary.rows_per_call);
     const stall =
-      num(vary.stall_ratio) > 10 && num(vary.max_ms) > 5000 && rowsPerCall <= 1
-        ? " The max/mean spread is a stall signature (lock queue, I/O, or cold cache) - corroborate with the lock-wave / contention-episode findings. Caveat: pg_stat_statements records only completed executions, so statements killed by statement_timeout never appear here; this under-counts cascade victims and is corroboration, never the primary detector."
-        : rowsPerCall > 1 && num(vary.stall_ratio) > 10 && num(vary.max_ms) > 5000
-          ? ` The max/mean spread is ${num(vary.stall_ratio)}x (max ${num(vary.max_ms)}ms, mean ${num(vary.mean_ms)}ms), but rows-per-call is ${rowsPerCall} - a bulk/multi-row operation where batch-size variance alone can produce this spread, not necessarily a stall.`
-          : "";
+      num(vary.stall_ratio) > 10 && num(vary.max_ms) > 5000
+        ? rowsPerCall > 1 && !Number.isInteger(rowsPerCall)
+          ? ` The max/mean spread is ${num(vary.stall_ratio)}x (max ${num(vary.max_ms)}ms, mean ${num(vary.mean_ms)}ms), but rows-per-call varies (avg ${rowsPerCall}) - batch-size variance alone can produce this spread, not necessarily a stall.`
+          : rowsPerCall > 1
+            ? ` The max/mean spread is a stall signature (lock queue, I/O, or cold cache). ${rowsPerCall} rows/call, ${(num(vary.mean_ms) / rowsPerCall).toFixed(1)}ms/row mean, max ${(num(vary.max_ms) / rowsPerCall).toFixed(1)}ms/row - per-row latency still unstable. Caveat: pg_stat_statements records only completed executions, so statements killed by statement_timeout never appear here; this under-counts cascade victims and is corroboration, never the primary detector.`
+            : " The max/mean spread is a stall signature (lock queue, I/O, or cold cache) - corroborate with the lock-wave / contention-episode findings. Caveat: pg_stat_statements records only completed executions, so statements killed by statement_timeout never appear here; this under-counts cascade victims and is corroboration, never the primary detector."
+        : "";
     const hist = cronHistoricalNote(a, vary);
     out.push({
       severity: "low",
