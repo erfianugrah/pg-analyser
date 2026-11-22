@@ -1771,6 +1771,23 @@ describe("trend findings graded on the recent window, not stale history", () => 
     expect(f?.title).toContain("1970-03-01"); // last point above threshold (day 59)
   });
 
+  test("card13: one recent hot sample under the episodic share is not 'none in the last 14d'", () => {
+    // Shape: paging stopped weeks ago, but one sample above threshold landed
+    // inside the last 14d. 4 samples/day over 90d (360 points): the recent
+    // window holds 57 points, so 1 hot sample is 1.75%, under pagingEpisodicFrac.
+    const a = base();
+    const SIX_H = DAY / 4;
+    const pts = Array.from({ length: 360 }, (_, i) => ({ t: i * SIX_H, v: i < 240 ? 50 : 0 }));
+    pts[340] = { t: 340 * SIX_H, v: 50 };
+    a.trends = [{ title: "Major page faults/s", unit: "", points: pts }];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "mem_pressure_paging");
+    expect(f?.severity).toBe("low");
+    expect(f?.title).not.toContain("none in the last 14d");
+    expect(f?.title).toContain("1 sample above threshold in the last 14d");
+    expect(f?.title).toContain("below the episodic share (2%)");
+    expect(f?.title).toContain(new Date(340 * SIX_H * 1000).toISOString().slice(0, 10));
+  });
+
   test("paging that continues into the recent window keeps its grade", () => {
     const a = base();
     a.trends = [{ title: "Major page faults/s", unit: "", points: split(50, 50) }];

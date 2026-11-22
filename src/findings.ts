@@ -2862,14 +2862,26 @@ export function deriveFindings(a: Analysis): Finding[] {
         )
       : pagingFrac;
     if (gradeFrac < THRESHOLDS.pagingEpisodicFrac) {
-      const lastHot = [
+      const hotAll = [
         ...mfPts.filter((p) => p.v >= THRESHOLDS.majorFaultsPerSec),
         ...siPts.filter((p) => p.v >= THRESHOLDS.swapInPagesPerSec),
-      ].reduce((t, p) => Math.max(t, p.t), 0);
+      ];
+      const lastHot = hotAll.reduce((t, p) => Math.max(t, p.t), 0);
+      // Count the recent-window hot samples: a sample above threshold inside
+      // the window can still sit under the episodic share, so the title must
+      // not say 'none' unless the count is zero.
+      const hotRecent = [
+        ...recent(mfPts).filter((p) => p.v >= THRESHOLDS.majorFaultsPerSec),
+        ...recent(siPts).filter((p) => p.v >= THRESHOLDS.swapInPagesPerSec),
+      ].length;
+      const recentClause =
+        hotRecent === 0
+          ? `none in the last ${recentDays}d`
+          : `${hotRecent} sample${hotRecent === 1 ? "" : "s"} above threshold in the last ${recentDays}d, below the episodic share (${pct(gradeFrac)})`;
       out.push({
         severity: "low",
         category: "Capacity",
-        title: `Paging earlier in the window, none in the last ${recentDays}d (${bits.join("; ")}${pagingWindow}; last above threshold ${new Date(lastHot * 1000).toISOString().slice(0, 10)})`,
+        title: `Paging earlier in the window, ${recentClause} (${bits.join("; ")}${pagingWindow}; last above threshold ${new Date(lastHot * 1000).toISOString().slice(0, 10)})`,
         anchor: "#trends",
         ...meta("mem_pressure_paging"),
       });
