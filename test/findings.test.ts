@@ -2803,15 +2803,15 @@ describe("stall-victim note on the unstable-latency card (Check 5)", () => {
     expect(f?.evidence ?? "").not.toMatch(/stall signature/i);
   });
 
-  test("card12redo: varying rows_per_call (non-integer >1) suppresses stall signature", () => {
+  test("card12r3: 20 rows/call (474 calls) suppresses stall signature, grades ms/row", () => {
     const a = base();
     a.sql.queryIoStats = [
       {
         queryid: "1",
         calls: 474,
-        // synthetic fixture: rows derived from calls * rows_per_call
-        rows: Math.round(474 * 20.3),
-        rows_per_call: 20.3,
+        // synthetic fixture: rows = calls * rows_per_call
+        rows: 9480,
+        rows_per_call: 20,
         mean_ms: 420,
         stddev_ms: 1000,
         cv: 2.4,
@@ -2821,14 +2821,61 @@ describe("stall-victim note on the unstable-latency card (Check 5)", () => {
       },
     ];
     const f = deriveFindings(a).find((x) => x.heuristicId === "query_high_variance");
-    // Non-integer rows_per_call means rows vary across calls -
-    // batch-size variance can explain the max/mean spread, not a stall.
-    // The evidence must say "varies" (new code), not "is N - a bulk" (old).
+    // Multi-row statement: batch-size variance can explain the max/mean spread.
+    // Pre-redo expectation restored (not refitted to a non-integer average).
     expect(f?.evidence ?? "").not.toMatch(/stall signature/i);
-    expect(f?.evidence).toMatch(/rows-per-call varies/);
+    expect(f?.evidence).toMatch(/batch-size variance/);
+    expect(f?.evidence).toMatch(/21\.00ms\/row mean/);
   });
 
-  test("card12redo: constant rows_per_call (integer >1) keeps stall signature", () => {
+  test("card12r3: calls=2 rows=10 is multi-row: ms/row graded, no stall named", () => {
+    const a = base();
+    a.sql.queryIoStats = [
+      {
+        queryid: "1",
+        calls: 2,
+        rows: 10,
+        rows_per_call: 5,
+        mean_ms: 300,
+        stddev_ms: 4000,
+        cv: 2.4,
+        max_ms: 6000,
+        stall_ratio: 20,
+        query: "select 1",
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "query_high_variance");
+    // total 600ms over 10 rows = 60ms/row. Integer rows_per_call (5) is a rounded
+    // average, not proof of constant batches: no stall claim.
+    expect(f?.evidence ?? "").toMatch(/60\.00ms\/row mean/);
+    expect(f?.evidence ?? "").not.toMatch(/stall signature/i);
+    expect(f?.evidence).toMatch(/batch-size variance/);
+  });
+
+  test("card12r3: calls=2 rows=1 (rows < calls) is multi-row: ms/row graded, no stall named", () => {
+    const a = base();
+    a.sql.queryIoStats = [
+      {
+        queryid: "1",
+        calls: 2,
+        rows: 1,
+        rows_per_call: 0.5,
+        mean_ms: 300,
+        stddev_ms: 4000,
+        cv: 2.4,
+        max_ms: 6000,
+        stall_ratio: 20,
+        query: "select 1",
+      },
+    ];
+    const f = deriveFindings(a).find((x) => x.heuristicId === "query_high_variance");
+    // total 600ms over 1 row = 600ms/row.
+    expect(f?.evidence ?? "").toMatch(/600\.00ms\/row mean/);
+    expect(f?.evidence ?? "").not.toMatch(/stall signature/i);
+    expect(f?.evidence).toMatch(/batch-size variance/);
+  });
+
+  test("card12r3: integer rows_per_call=5 is not proof of constant batches: no stall named", () => {
     const a = base();
     a.sql.queryIoStats = [
       {
@@ -2846,12 +2893,11 @@ describe("stall-victim note on the unstable-latency card (Check 5)", () => {
       },
     ];
     const f = deriveFindings(a).find((x) => x.heuristicId === "query_high_variance");
-    // Integer rows_per_call means constant batch size - stall signature applies.
-    // The evidence should show per-row metrics ("ms/row") since rows_per_call > 1.
-    // Pre-card code has no per-row grading, so checking ms/row discriminates.
-    expect(f?.evidence ?? "").toMatch(/stall signature/);
-    expect(f?.evidence ?? "").toMatch(/ms\/row/);
-    expect(f?.evidence ?? "").not.toMatch(/batch-size variance/);
+    // rows_per_call is a rounded average: 5 does not mean every call moved 5 rows.
+    // Multi-row -> ms/row graded (150*200/1000 = 30.00ms/row), no stall claim.
+    expect(f?.evidence ?? "").toMatch(/30\.00ms\/row mean/);
+    expect(f?.evidence ?? "").not.toMatch(/stall signature/);
+    expect(f?.evidence).toMatch(/batch-size variance/);
   });
 
   test("rows_per_call <= 1 keeps stall signature", () => {
@@ -2891,7 +2937,7 @@ describe("stall-victim note on the unstable-latency card (Check 5)", () => {
       },
     ];
     const f = deriveFindings(a).find((x) => x.heuristicId === "query_high_variance");
-    // undefined rows_per_call -> num() returns 0 -> rowsPerCall <= 1 -> stall kept
+    // undefined rows/calls (legacy) -> totalRows 0 -> not multi-row -> stall kept
     expect(f?.evidence ?? "").toMatch(/stall signature/i);
   });
 });
