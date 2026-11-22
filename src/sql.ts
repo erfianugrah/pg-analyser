@@ -116,6 +116,12 @@ const PLATFORM_NOISE = [
 // PostgREST's own schema-cache / config reads have no pgrst_source and stay out.
 const APP_QUERY = `(query not ilike all (array[${PLATFORM_NOISE}]) or query ilike '%pgrst_source%')`;
 
+// The RPC function a PostgREST request calls. The function name sits after the
+// parameter list, past the 160-char query text cut, so it is extracted from the
+// full text into its own column. PostgREST quotes the call as "schema"."fn"(;
+// pg_catalog.count(...) is unquoted, so it never matches.
+const RPC_FN_SQL = `case when query ilike '%pgrst_source%' then substring(query from '("[^"]+"\\."[^"]+")\\(') end`;
+
 // Statement types that are not ongoing application workload: transaction
 // control, DDL, migrations, session/admin commands. A POSIX regex anchored at
 // the statement start, so it matches the verb without false-flagging a table
@@ -312,6 +318,7 @@ export const QUERIES = {
       calls,
       round(mean_exec_time::numeric, 2) as mean_ms,
       round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 1) as pct,
+      ${RPC_FN_SQL} as rpc_fn,
       left(regexp_replace(query, '\\s+', ' ', 'g'), 160) as query
     from extensions.pg_stat_statements
     where ${APP_QUERY}
@@ -328,6 +335,7 @@ export const QUERIES = {
       round(total_exec_time::numeric, 1) as total_ms,
       round(mean_exec_time::numeric, 2) as mean_ms,
       round((100 * calls / nullif(sum(calls) over (), 0))::numeric, 1) as pct_calls,
+      ${RPC_FN_SQL} as rpc_fn,
       left(regexp_replace(query, '\\s+', ' ', 'g'), 160) as query
     from extensions.pg_stat_statements
     where ${APP_QUERY}
@@ -363,6 +371,7 @@ export const QUERIES = {
       round(shared_blks_read
         * (shared_blks_read::numeric
            / nullif(shared_blks_hit + shared_blks_read, 0)))::bigint as eviction_impact,
+      ${RPC_FN_SQL} as rpc_fn,
       left(regexp_replace(query, '\\s+', ' ', 'g'), 160) as query
     from extensions.pg_stat_statements
     where ${APP_QUERY}
@@ -1476,6 +1485,7 @@ export const QUERIES = {
       pg_size_pretty(wal_bytes::bigint) as wal,
       calls,
       round((100 * wal_bytes / nullif(sum(wal_bytes) over (), 0))::numeric, 1) as pct_wal,
+      ${RPC_FN_SQL} as rpc_fn,
       left(regexp_replace(query, '\\s+', ' ', 'g'), 160) as query
     from extensions.pg_stat_statements
     where ${APP_QUERY}
