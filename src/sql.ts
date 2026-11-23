@@ -1076,6 +1076,18 @@ export const QUERIES = {
   // reflects DB-layer pg_hba, not the platform SSL toggle. Evidence + a hedged
   // low finding, used only when the authoritative plane is absent. database and
   // user_name are text[]; flatten for display.
+  // What the --db-url role may actually do, checked once before the planes that
+  // need more than pg_monitor. A `postgres`-role connstring (not a true
+  // superuser on hosted Supabase) can list the log directory and read pg_ls_waldir (pg_monitor) but
+  // is denied pg_hba_file_rules and pg_read_file (42501). has_function_privilege
+  // is true for a superuser, so supabase_admin passes both.
+  rolePrivileges: /* sql */ `
+    select
+      current_user as role,
+      (select rolsuper from pg_roles where rolname = current_user) as superuser,
+      has_function_privilege('pg_catalog.pg_hba_file_rules()', 'execute') as hba_rules,
+      has_function_privilege('pg_catalog.pg_read_file(text, bigint, bigint)', 'execute') as read_file`,
+
   hbaRules: /* sql */ `
     select
       type,

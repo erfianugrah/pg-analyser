@@ -212,6 +212,39 @@ export async function collect(
     }
   }
 
+  // Which superuser-only functions the --db-url role can execute. The tier flag
+  // only says "a connstring was given"; the role inside it is often `postgres`,
+  // which is denied pg_hba_file_rules and pg_read_file. Skip those planes with
+  // ONE note instead of a warn per plane. A failed or empty probe leaves both
+  // true, so an unexpected catalogue keeps the old attempt-and-note behaviour.
+  let canHbaRules = true;
+  let canReadFile = true;
+  if (sqlServing && runner.source === "superuser") {
+    try {
+      const row = (await runner.run(QUERIES.rolePrivileges))[0];
+      if (row) {
+        canHbaRules = row.hba_rules !== false;
+        canReadFile = row.read_file !== false;
+        if (!canHbaRules || !canReadFile) {
+          const skipped = [
+            !canHbaRules ? "the pg_hba weak-auth check (pg_hba_file_rules)" : null,
+            !canReadFile
+              ? "server-log reads (lock waves, freeze and restart history; pg_read_file)"
+              : null,
+          ].filter(Boolean);
+          errors.push({
+            source: "sqlPrivileges",
+            message: `the --db-url role "${String(row.role)}" is not a superuser, so ${skipped.join(" and ")} were skipped; connect as supabase_admin for them`,
+          });
+        }
+      }
+    } catch (err) {
+      clog.debug("privilege probe failed; superuser-only planes will be attempted", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   // Resolve where pg_stat_statements is installed before fanning out: hosted
   // Supabase puts it in `extensions`, self-hosted Postgres usually in
   // `public`. The pgss planes are schema-qualified, so a wrong schema
@@ -377,7 +410,7 @@ export async function collect(
     // pg_hba_file_rules requires a true superuser (supabase_admin); the PAT
     // read-only user is denied it (42501). Only attempt it on the superuser
     // SQL tier - otherwise it warns + records a note on every PAT run.
-    runner.source === "superuser" ? sql("hbaRules") : Promise.resolve([]),
+    runner.source === "superuser" && canHbaRules ? sql("hbaRules") : Promise.resolve([]),
     // pg_ls_waldir() needs superuser / pg_monitor; the PAT read-only user lacks
     // it. Gate to the superuser tier so it never warns on a PAT run. (sql()
     // already no-ops when the preflight found the DB not accepting connections.)
@@ -835,7 +868,7 @@ export async function collect(
   let lockWave: Analysis["sql"]["lockWave"] = null;
   let freezeLog: Analysis["sql"]["freezeLog"] = null;
   let restartLog: Analysis["sql"]["restartLog"] = null;
-  if (logProbe?.readable && probeRows.length > 0) {
+  if (logProbe?.readable && probeRows.length > 0 && canReadFile) {
     const CHUNK = 4_000_000;
     const RUN_BUDGET = 20_000_000;
     const textFiles = probeRows.filter((r) => /\.(csv|log)$/i.test(String(r.name)));

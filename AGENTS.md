@@ -121,9 +121,12 @@ of planes, so a superuser `--db-url` reaches that data directly):
   `pg_hba_file_rules` with 42501, so attempting it in PAT mode can never succeed
   and only spams a warn+note on every run. It runs whenever a superuser --db-url
   is present (no-PAT OR PAT+--db-url); a PAT alone never triggers it. The tier
-  flag can't see the role INSIDE a superuser connstring, so a `postgres`-role
-  --db-url still 42501s through the normal `safe()` note - the gate only kills
-  the guaranteed-failure read-only path.
+  flag can't see the role INSIDE the connstring, so `rolePrivileges`
+  (has_function_privilege on pg_hba_file_rules and pg_read_file) runs once
+  after the preflight: a `postgres`-role --db-url skips hbaRules and the
+  server-log tail/restart reads with ONE `sqlPrivileges` note naming the role
+  (work-pg-analyser#21). pg_ls_logdir and pg_ls_waldir still run for it
+  (pg_monitor). A failed or empty probe falls back to attempting both.
 - **Genuinely NOT reachable via SQL** (platform/infra, correctly left null/[]):
   service health, disk provisioning (size/IOPS/type), pooler CONFIG (Supavisor),
   GoTrue authConfig, network restrictions (cloud firewall), edge functions,

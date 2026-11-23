@@ -763,3 +763,88 @@ describe("logDirProbe (superuser log-directory three-fact probe)", () => {
     ).toBe(true);
   });
 });
+
+describe("sqlPrivileges (non-superuser --db-url, e.g. the postgres role)", () => {
+  const t = () => fakeTransport({ onMgmt: fullRoutes(), onMetrics: okMetrics });
+  const logRows = [
+    {
+      node_addr: "10.0.0.7",
+      name: "postgresql.csv",
+      size: 5000,
+      modification: "2026-07-15T18:15:00Z",
+    },
+  ];
+
+  test("denied pg_hba_file_rules + pg_read_file -> neither is attempted, ONE note names the role", async () => {
+    const seen: string[] = [];
+    const runner = {
+      source: "superuser" as const,
+      run: async (q: string) => {
+        seen.push(q);
+        if (q === QUERIES.rolePrivileges)
+          return [{ role: "postgres", superuser: false, hba_rules: false, read_file: false }];
+        if (/pg_ls_logdir\(\)/.test(q)) return logRows;
+        if (/pg_read_file|pg_hba_file_rules/.test(q))
+          throw new Error("permission denied for function");
+        return [];
+      },
+    };
+    const a = await collect("ref", t(), "0.0.0-test", { syncCheck: false, sqlRunner: runner });
+    expect(seen.some((q) => q === QUERIES.hbaRules)).toBe(false);
+    expect(seen.some((q) => q !== QUERIES.rolePrivileges && /pg_read_file\(/.test(q))).toBe(false);
+    const notes = a.errors.filter((e) => e.source === "sqlPrivileges");
+    expect(notes).toHaveLength(1);
+    expect(notes[0]?.message).toContain("postgres");
+    expect(a.errors.some((e) => e.source === "hbaRules" || e.source === "sql:hbaRules")).toBe(
+      false,
+    );
+    expect(a.errors.some((e) => e.source === "lockWave")).toBe(false);
+    // the listing itself still works for this role, so the probe facts stay
+    expect(a.meta.logProbe?.readable).toBe(true);
+  });
+
+  test("granted -> both planes run as before, no privileges note", async () => {
+    const seen: string[] = [];
+    const runner = {
+      source: "superuser" as const,
+      run: async (q: string) => {
+        seen.push(q);
+        if (q === QUERIES.rolePrivileges)
+          return [{ role: "supabase_admin", superuser: true, hba_rules: true, read_file: true }];
+        if (/pg_ls_logdir\(\)/.test(q)) return logRows;
+        return [];
+      },
+    };
+    const a = await collect("ref", t(), "0.0.0-test", { syncCheck: false, sqlRunner: runner });
+    expect(seen.some((q) => q === QUERIES.hbaRules)).toBe(true);
+    expect(seen.some((q) => q !== QUERIES.rolePrivileges && /pg_read_file\(/.test(q))).toBe(true);
+    expect(a.errors.some((e) => e.source === "sqlPrivileges")).toBe(false);
+  });
+
+  test("probe fails or returns nothing -> fall back to attempting both (old behaviour)", async () => {
+    const seen: string[] = [];
+    const runner = {
+      source: "superuser" as const,
+      run: async (q: string) => {
+        seen.push(q);
+        if (q === QUERIES.rolePrivileges) throw new Error("boom");
+        return [];
+      },
+    };
+    await collect("ref", t(), "0.0.0-test", { syncCheck: false, sqlRunner: runner });
+    expect(seen.some((q) => q === QUERIES.hbaRules)).toBe(true);
+  });
+
+  test("read-only (PAT) tier never runs the probe", async () => {
+    const seen: string[] = [];
+    const readonly = {
+      source: "read-only" as const,
+      run: async (q: string) => {
+        seen.push(q);
+        return [];
+      },
+    };
+    await collect("ref", t(), "0.0.0-test", { syncCheck: false, sqlRunner: readonly });
+    expect(seen.some((q) => /has_function_privilege/.test(q))).toBe(false);
+  });
+});
