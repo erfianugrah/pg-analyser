@@ -140,12 +140,12 @@ export const LINT_FIXES: Record<string, LintFix> = {
   rls_enabled_no_policy: {
     plainTitle: "Row security is on but there are no policies",
     whyItMatters:
-      "RLS with no policy is default-deny: client roles get zero rows. The table silently returns nothing through the API, which is almost always an accidental lockout rather than the intent.",
+      "RLS with no policy is default-deny for client roles: anon and authenticated get zero rows through the API. That is the intended setup for a table only server code reads with the service role key (which bypasses RLS), and an accidental lockout when the app expects to read it from the client. Which one it is depends on how the app reaches the table.",
     whatToDo:
-      "RLS is enabled with no policies, so the table returns no rows to client roles. Consider adding a policy (or disabling RLS if the lockout is unintended).",
-    sql: '-- e.g. let owners read their own rows:\nCREATE POLICY "owner can read" ON <schema>.<table>\n  FOR SELECT USING ( (select auth.uid()) = <owner_column> );',
+      "If the app reads the table from the client, add a policy for the intended access. If only server code (an Edge Function or backend) reads it with the service role key, it can stay as it is, as long as that key never reaches the client. Do not disable RLS to clear the lint: on an exposed schema that opens the table to anyone holding the anon key.",
+    sql: '-- only if the client should read it, e.g. let owners read their own rows:\nCREATE POLICY "owner can read" ON <schema>.<table>\n  FOR SELECT USING ( (select auth.uid()) = <owner_column> );',
     howToVerify:
-      "Query the table as an authenticated role - the intended rows should return; the lint should clear.",
+      "Query the table as an authenticated role: the intended rows return once a policy exists. A server-only table still returns none, which is expected (the lint stays).",
   },
   rls_disabled_in_public: {
     plainTitle: "Public table with row security off",
