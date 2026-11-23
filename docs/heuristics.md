@@ -13,8 +13,9 @@ already DETECTS most of these signals; this catalog makes the detection
 - **grounded**: every threshold cites a maintainer/docs source, not a guess.
 - **evergreen**: thresholds are stable Postgres/Supabase facts, dated so we know
   their vintage.
-- **narratable**: each heuristic ships an `evidence` + `remediation` + `docUrl`
-  so both the deterministic report and the LLM `narrate` pass are accurate.
+- **narratable**: each heuristic ships `whyItMatters` + `remediation` +
+  `howToVerify` + `docUrl` (the evidence line is built at each push in
+  findings.ts) so both the deterministic report and the LLM `narrate` pass are accurate.
 
 ## Provenance & the sync model
 
@@ -26,7 +27,7 @@ The heuristics in THIS file are the *supplement* - the compute/disk/memory/
 realtime/auth planes the advisors do not cover. Those can go stale, so:
 
 1. **Provenance is always shown** (no network): each heuristic carries a
-   `reviewedDate`; the report footer states the vintage + notes advisor lints
+   `reviewed` date; the report footer states the vintage + notes advisor lints
    are live.
 2. **CI drift check** (`scripts/check-inspect-drift.ts` family) fingerprints the
    upstream sources and warns when they move.
@@ -57,10 +58,11 @@ date tracks when we last confirmed them against upstream.
 | `index_advisor_rec` | `index_advisor()` (hypopg) returns CREATE INDEX DDL for a top-15 statement by total time; DDL targeting a managed schema (auth/storage/realtime...) is dropped - not the user's tables to index, and those are typically sub-ms lookups hypopg can always shave; evidence quotes calls + mean ms so the reader can weigh it | any DDL on an app schema | med | HAVE (superuser + extension) |
 | `unused_index` | `pg_stat_user_indexes.idx_scan = 0`, non-constraint, application schema; SQL fallback suppressed when the advisor's `unused_index` lint already fired | idx_scan 0 | low | HAVE |
 | `duplicate_index` | two indexes with identical column set on a table; SQL fallback suppressed when the advisor's `duplicate_index` lint already fired | any pair | med | HAVE |
-| `top_time_query` / `top_query_db_time` | `pg_stat_statements` top by total_exec_time; low attribution by default, med only with real per-call cost (mean >= 50 ms) OR a >= 3x share AND >= 10 min of total exec time in the window - a 44% share of an idle database (25 s in a week, measured) is not a MED. pg_net's worker statements (`net.http_request_queue` pop, `net._http_response` reaper) are platform noise and excluded | >= 10% of DB time | low/med | HAVE |
+| `top_query_db_time` | `pg_stat_statements` top by total_exec_time (share of app-query time, not all DB time); low attribution by default, med only with real per-call cost (mean >= 50 ms) OR a >= 3x share AND >= 10 min of total exec time in the window - a 44% share of an idle database (25 s in a week, measured) is not a MED. pg_net's worker statements (`net.http_request_queue` pop, `net._http_response` reaper) are platform noise and excluded | >= 10% of DB time | low/med | HAVE |
 | `functional_predicate` | WHERE wraps an indexed col in a function (e.g. `left(id::text,n)`) defeats the index -> seq scan | any on large table | med | NEW (best-effort; narrate diagnoses root cause) |
 | `query_temp_spill` | a single query's `pg_stat_statements.temp_blks_written` (sorts/hashes spilling to disk) | >= `tempSpillBlocks` 12500 blks (~100MB) | med | HAVE |
 | `query_high_variance` | a query's coefficient of variation (stddev/mean exec time), floored on mean | cv >= `queryCvWarn` 2 AND mean >= `queryCvMinMeanMs` 10ms | low | HAVE |
+| `auth_lookup_heavy` | statements Supabase Auth ran (`service = Auth`, from the pg_stat_statements role `supabase_auth_admin`) as a share of top-by-calls - the signature of `getUser()` on every request | >= `authLookupPctCalls` 25% | low | HAVE |
 | `fk_unindexed` | a foreign key whose referencing columns are not a leading prefix of any valid index (`pg_constraint` + `pg_index`, app-scoped); suppressed when the advisor's `unindexed_foreign_keys` lint fired | any | med | HAVE |
 | `invalid_index` | `pg_index.indisvalid=false` / `indisready=false` (failed CONCURRENTLY build) - planner-ignored but still write overhead | any | med | HAVE |
 | `visibility_map_low` | large app table with a low all-visible page fraction (`relallvisible / relpages`) - index-only scans still hit the heap; vacuum behind | < 80% on a >10MB table | low | HAVE |
@@ -89,7 +91,7 @@ Sources: Supabase Query Optimization docs; `supabase/cli` inspect queries.
 | `rls_col_unindexed` | column compared in an RLS policy has no btree index | any RLS table | med | HAVE |
 | `multiple_permissive_policies` | 2+ permissive policies for the same role + action on a table | any table | med | HAVE (via advisor) |
 | `policy_exists_rls_disabled` | policy defined but RLS not enabled on the table | any | high | HAVE (via advisor) |
-| `rls_no_role_target` | policy uses no `TO authenticated` (anon pays the RLS cost) | any | low | NEW |
+| `rls_no_role_target` | policy uses no `TO authenticated` (anon pays the RLS cost) | any | low | HAVE |
 | `rls_self_reference` | policy `USING`/`WITH CHECK` subqueries its OWN table (deparsed text, `referencesOwnTable`) in a shape that recurses: the policy is `FOR SELECT`/`FOR ALL` (either clause), OR it is write-only and some SELECT/ALL policy on the same table contains any subquery. Verified on PG 17.11 by running every shape - see AGENTS.md 2026-09-03 | recursing shape | high | HAVE |
 | `rls_self_reference_latent` | write-only (INSERT/UPDATE/DELETE) self-referencing policy whose table has only subquery-free SELECT policies, or none. Does not recurse today, but: with no SELECT policy the inner lookup sees zero rows (a `NOT EXISTS` duplicate check is a silent no-op - measured), and any subquery later added to a SELECT policy breaks every write with 42P17 | non-recursing shape | low | HAVE |
 | `public_schema_create` | `PUBLIC` retains `CREATE` on schema `public` (`aclexplode` grantee 0) - any role can create objects there (privilege-escalation surface); modern Postgres revokes it | any | med | HAVE |
@@ -127,11 +129,12 @@ Point-in-time snapshot sections carry no signal at rest, so the report gates
 them on data / thresholds rather than always rendering an empty or noise table
 (the full corpus is always in `analysis.json` regardless):
 
-- **Role connection usage** - shown only when a role reaches `roleConnShowFrac`
-  (50%) of its limit (below the `role_conn_high` finding gate of 80%, so the
-  table appears before saturation is critical).
-- **Transaction-ID wraparound** - shown only when a table's `pct_wraparound`
-  reaches `txidWarnPct` (20%).
+- **Role connection usage** - always shown when collected (the per-role
+  breakdown answers where connections go even when no role is near its
+  limit); `role_conn_high` fires at 80%.
+- **Transaction-ID wraparound** - shown when a table or the database reaches
+  `freezeBlockedAge` (200M XID age) or a table's `pct_wraparound` reaches
+  `txidWarnPct` (20%).
 - **Exclusive locks** - the query filters `locktype = 'relation'` + strong modes
   (AccessExclusive/Exclusive/ShareRowExclusive). The old `mode='ExclusiveLock'`-
   only form also matched the `virtualxid`/`transactionid` lock every backend
@@ -154,7 +157,6 @@ only decide the default.
 |---|---|---|---|---|
 | `direct_conn_high` | direct connections / `max_connections` | >= 70% | med | HAVE |
 | `role_conn_high` | a role's connections / its `conn_limit` | >= 80% | med | HAVE |
-| _(display)_ role-usage table shown | max role conn / limit >= `roleConnShowFrac` 50% | - | presentation gate |
 | `pooler_clients_waiting` | `pgbouncer_pools_client_waiting_connections` | > 0 | med | HAVE |
 | `connections_ceiling` | peak `pg_stat_database_num_backends` (trend) vs `max_connections` (pg_settings) | peak >= 80% of max | high | HAVE (trend) |
 | `idle_in_txn_open` | a backend in `idle in transaction` at collection time (`pg_stat_activity` max state age) - pins locks + xmin horizon | >= `idleInTxnAgeS` 300s | med | HAVE |
@@ -178,11 +180,11 @@ supabase/supabase#39227, supavisor#595 (connection leak).
 | id | signal | threshold | sev | status |
 |---|---|---|---|---|
 | `autovacuum_overdue` | dead tuples past the per-table autovacuum trigger, app schemas only, with a dead-row floor (`autovacuumOverdueMinDeadRows` = 1000) - a managed 200-row table a few dozen rows past its trigger between naptime ticks is autovacuum working, not falling behind | overdue AND >= 1000 dead | med | HAVE |
-| `dead_tuple_ratio` | `n_dead_tup` vs `n_live_tup` | dead >= ~2x live -> AV not keeping up | med | PARTIAL |
+| `dead_tuple_ratio` | `n_dead_tup` vs `n_live_tup` | dead >= ~2x live -> AV not keeping up (`deadTupleLiveMultiple` is defined but unused) | med | NEW |
 | `table_bloat` | reclaimable waste bytes (estimate) | >= 50MB (med >= 500MB) | low/med | HAVE |
-| `txid_wraparound` | `age(relfrozenxid)` toward the 2B ceiling | >= 20% (high >= 40%) | med/high | HAVE |
-| `xmin_horizon_pin` | a long-running / idle-in-txn session pins the xmin horizon, blocking vacuum | any + rising dead tuples | high | NEW |
-| `multixact_wraparound` | `mxid_age(relminmxid)` toward multixact's OWN 2B ceiling (heavy row locking; separate from txid) | >= 20% (high >= 40%) | med/high | HAVE |
+| `txid_wraparound` | `age(relfrozenxid)` toward the 2B ceiling | age >= `freezeBlockedAge` 200M (high at <= `freezeWarnRemaining` 40M remaining or with a horizon holder); `txidWarnPct` 20% / `txidHighPct` 40% only for old snapshots without a remaining column | med/high | HAVE |
+| `xmin_horizon_blocked` | a long-running / idle-in-txn session, slot or prepared xact pins the xmin horizon, blocking vacuum | any holder | high/med | HAVE |
+| `multixact_wraparound` | `mxid_age(relminmxid)` toward multixact's OWN 2B ceiling (heavy row locking; separate from txid) | mxid age >= `freezeBlockedAge` 200M (high at <= 40M remaining); 20% / 40% only for old snapshots | med/high | HAVE |
 | `never_autovacuumed` | app table (>= 10k rows) with `last_autovacuum` AND `last_vacuum` both null - no visibility map / stale planner stats. "Never" is bounded by the cumulative-stats window: an unclean restart / recovery / explicit reset wipes every table's timestamps, so the title says "no vacuum on record in the ~Nd stats window" when the window is known | any | low | HAVE |
 | `stale_table_stats` | table >= 10 MB reporting `n_live_tup = 0` with NO vacuum or analyze timestamp on record (`maintained = false` in biggestTables). A stats reset clears the counters and all four timestamps together, and any later VACUUM/ANALYZE re-counts live rows (measured PG 17.11), so this is the reset signature; an emptied-and-vacuumed table keeps its timestamps and is NOT flagged. Evidence carries dead rows, `pg_class.reltuples` and the stats-window age - reltuples alone is not decisive (a page-skipping vacuum leaves it as an extrapolation) | 0 live, unmaintained, >= 10 MB | low | HAVE |
 
@@ -268,7 +270,7 @@ Sources: Supabase Compute & Disk docs; Supabase High Disk I/O docs.
 | `disk_io_budget_depleted` | small instance bursting then throttled to baseline | sustained at baseline under load | med | NEW |
 | `ebs_balance_low` | `aws_ec2_ebsiobalance_percent_minimum` / `aws_ec2_ebsbyte_balance_percent_minimum` (CloudWatch-backed source only) | worst point <= 20% | high | HAVE (trend) |
 | `disk_fill_projection` | used BYTES (size in force at each point x used %, continuous across an auto-expansion while the % drops at each resize), projected from CURRENT usage at the slope of the last 14d (`diskFillRecentDays`, when that segment passes `sufficient()`; else the whole window). A whole-window line anchored on its own fitted end read ~33 days where the recent rate from actual usage read ~22 on an accelerating project. When every past expansion fired with used % in 85-95% (`diskAutoscaleTriggerBand`), the card leads with the next expansion (`~N days, at ~90%`) and the step sizes, and keeps days-to-full as the no-autoscale worst case. Evidence quotes both rates. Horizon capped to ~3x observed span | on track to full within <=120d | med when autoscale is inferred; else high (<=30d) / med | HAVE (trend) |
-| `toast_cache_cold` | `pg_statio_user_tables` TOAST cache-hit ratio `toast_blks_hit / (hit+read)` with meaningful read volume - an out-of-line column re-read from disk on every scan (large JSON/blob/vector de-toasting; per-relation IO the global cache-hit ratio hides) | hit <= 95% AND toast_blks_read >= 50000 (~400MB) | med | NEW (original; Postgres storage-toast) |
+| `toast_cache_cold` | `pg_statio_user_tables` TOAST cache-hit ratio `toast_blks_hit / (hit+read)` with meaningful read volume - an out-of-line column re-read from disk on every scan (large JSON/blob/vector de-toasting; per-relation IO the global cache-hit ratio hides) | hit <= 95% AND toast_blks_read >= 50000 (~400MB) | med | HAVE (original; Postgres storage-toast) |
 | `wal_retained_inactive_slot` | inactive replication slot retaining WAL | any | high | HAVE |
 | `wal_slot_lag` | active slot retained WAL | >= 1GB | med | HAVE |
 | `wal_archival_backlog` | `pg_ls_archive_statusdir_wal_pending_count` (trend) | sustained avg >= 1 pending | high | HAVE (trend) |
@@ -315,11 +317,11 @@ High Disk I/O troubleshooting.
 | `track_io_timing_off` | `track_io_timing = off` - no per-query I/O timing (blinds pg_stat_statements + pg-analyser's own I/O analysis); negligible overhead on tsc-clocksource hosts | =off | low | HAVE |
 | `lock_wave` | retrospective server-log parse (superuser + probe-gated): a burst of "still waiting for ...Lock" + timeout-cancellation lines = a lock-queue cascade (DDL queued behind readers, then readers queued behind the DDL). Worst 10-min window drives severity; a deadlock line alone is >=MED. Requires LOCK EVIDENCE in the window (a wait, a lock-timeout cancel or a deadlock) - statement-timeout cancels count as cascade victims only then; a cancel-only burst is `statement_timeout_burst`. Evidence names the span of matched events and the bytes scanned (the newest tails), since a quiet tail is not an unscanned one. Events whose timestamps don't parse fold into one bucket spanning the whole scan; the 10-minute thresholds can't grade it, so it is capped at LOW and titled without a from-to range. PRIVACY: only parsed counts + literal-free reconstructed sample phrases are stored, never raw log text | HIGH: lock evidence AND (cancels>=50, or maxWait>=60s & waits>=10); MED: lock evidence AND (waits>=10 / cancels>=10 / any deadlock) | high/med | HAVE |
 | `statement_timeout_burst` | same log parse: >= 10 `canceling statement due to statement timeout` lines in a 10-min window with NO lock line at all - statements running past their fuse (Supabase roles: anon 3s, authenticated 8s), a batch job, a cold cache, an I/O stall. Measured: 74 cancels in two minutes, zero waits, previously titled a HIGH lock cascade. Evidence names the role-level statement_timeout values in force | MED >= 50 cancels; LOW >= 10 | med/low | HAVE |
-| `restart_shutdown_cut_off` | server log (`restartlog.ts`, fed by a server-side filtered read of every uncompressed log file, newest first, up to 256 MB; the lock-wave tails as fallback): each startup paired with the stop before it. An immediate-mode stop is reported as recovery by design (it skips the shutdown checkpoint). MED when a `received ... shutdown request` is followed by a start that ran crash recovery (`shutdown was interrupted` / `not properly shut down`); LOW when the shutdown checkpoint finished but `database system is shut down` was never logged and the next start was clean. Names a `pg_stat_checkpointer.stats_reset` within 10 min of a listed restart. Signal only: the log cannot say what stopped the server. Whether the cut-off loses the stats is version-dependent (17.4/17.11 kept them for the postmaster-only shape, 18.6 lost them) | any cut-off stop | med/low | NEW |
-| `restart_crash_recovery` | same parse: crash recovery with no shutdown request in the preceding 30 min of scanned text - a backend crash, the OOM killer, or a stop logged in an older unscanned file. Every restart card, and the "No restart in the scanned server log" line, names the newest contiguous UTC stretch (a gap over 6 h between matched lines splits it), the count of older fragments, and the bytes the scan covered. The no-restart line also names a `pg_stat_checkpointer.stats_reset` that falls in a gap inside that window (the restart behind it is in unreadable log text); a reset older than every readable line is left unmentioned | any | med | NEW |
-| `lock_forensics` | observability posture (mirrors `track_io_timing_off`): (1) `log_lock_waits=off` so lock waits leave no log trail; (2) no session/role-scoped `lock_timeout` (checked via `pg_roles.rolconfig`) so a blocked migration waits indefinitely. Guardrail advice is session/role-scoped ONLY - a cluster-wide `lock_timeout` is never recommended (settled design). `deadlock_timeout > 5s` is a one-line note in the same card, not its own finding. Positive when `log_lock_waits=on` | see signal | low | NEW |
-| `contention_episode` | metrics-side retrospective (needs Prometheus/Grafana): a synchronized burst of transaction rollbacks + active backends + share-lock counts = a mass-cancellation event. Separate native-resolution scan (`--incident-scan-days`, default 7) because the 30d trend panels average a 10-min event away. Hot buckets gated on `max(absFloor, k x median-over-nonzero)` so a chatty baseline does not fire; adjacent hot buckets merge into episodes | HIGH: >=2 correlated series & rollbackTotal>=100; MED: >=2 series; LOW: single series | high/med/low | NEW |
-| `live_lock_contention` | point-in-time: wait-event samples taken during collection catch active backends waiting on a `Lock` RIGHT NOW (not retrospective - use `lock_wave`/`contention_episode` for after-the-fact). Sampling count via `PG_ANALYSER_WAIT_SAMPLES` (default 5, 0 disables) | `Lock` in >=2 of the samples | med | NEW |
+| `restart_shutdown_cut_off` | server log (`restartlog.ts`, fed by a server-side filtered read of every uncompressed log file, newest first, up to 256 MB; the lock-wave tails as fallback): each startup paired with the stop before it. An immediate-mode stop is reported as recovery by design (it skips the shutdown checkpoint). MED when a `received ... shutdown request` is followed by a start that ran crash recovery (`shutdown was interrupted` / `not properly shut down`); LOW when the shutdown checkpoint finished but `database system is shut down` was never logged and the next start was clean. Names a `pg_stat_checkpointer.stats_reset` within 10 min of a listed restart. Signal only: the log cannot say what stopped the server. Whether the cut-off loses the stats is version-dependent (17.4/17.11 kept them for the postmaster-only shape, 18.6 lost them) | any cut-off stop | med/low | HAVE |
+| `restart_crash_recovery` | same parse: crash recovery with no shutdown request in the preceding 30 min of scanned text - a backend crash, the OOM killer, or a stop logged in an older unscanned file. Every restart card, and the "No restart in the scanned server log" line, names the newest contiguous UTC stretch (a gap over 6 h between matched lines splits it), the count of older fragments, and the bytes the scan covered. The no-restart line also names a `pg_stat_checkpointer.stats_reset` that falls in a gap inside that window (the restart behind it is in unreadable log text); a reset older than every readable line is left unmentioned | any | med | HAVE |
+| `lock_forensics` | observability posture (mirrors `track_io_timing_off`): (1) `log_lock_waits=off` so lock waits leave no log trail; (2) no session/role-scoped `lock_timeout` (checked via `pg_roles.rolconfig`) so a blocked migration waits indefinitely. Guardrail advice is session/role-scoped ONLY - a cluster-wide `lock_timeout` is never recommended (settled design). `deadlock_timeout > 5s` is a one-line note in the same card, not its own finding. Positive when `log_lock_waits=on` | see signal | low | HAVE |
+| `contention_episode` | metrics-side retrospective (needs Prometheus/Grafana): a synchronized burst of transaction rollbacks + active backends + share-lock counts = a mass-cancellation event. Separate native-resolution scan (`--incident-scan-days`, default 7) because the 30d trend panels average a 10-min event away. Hot buckets gated on `max(absFloor, k x median-over-nonzero)` so a chatty baseline does not fire; adjacent hot buckets merge into episodes | HIGH: >=2 correlated series & rollbackTotal>=100; MED: >=2 series; LOW: single series | high/med/low | HAVE |
+| `live_lock_contention` | point-in-time: wait-event samples taken during collection catch active backends waiting on a `Lock` RIGHT NOW (not retrospective - use `lock_wave`/`contention_episode` for after-the-fact). Sampling count via `PG_ANALYSER_WAIT_SAMPLES` (default 5, 0 disables) | `Lock` in >=2 of the samples | med | HAVE |
 | `work_mem_spill` | `pg_stat_database_temp_bytes_total` rising (sorts/hashes spill to disk) | rate >= 1MB/s (trend) | med | HAVE |
 | `checkpoint_pressure` | `pg_stat_bgwriter_checkpoints_req_total` vs `_timed_total` rate (trend), using only points after the checkpointer's `stats_reset` so a long window doesn't blend two regimes. Evidence quotes the `max_wal_size` / `checkpoint_timeout` in force | requested >= 30% of checkpoints -> raise max_wal_size | med | HAVE (trend) |
 | `checkpoint_pressure_counters` | cumulative `pg_stat_checkpointer` (`pg_stat_bgwriter` pre-17) timed vs requested since `stats_reset`. Fires when there are no trends or the post-reset trend segment is too short (`sufficient()`). max_wal_size is reload-level, so the CLI applies the fix with a reload (CLI v2 checks the parameter context; only "Restart: Yes" parameters restart) | requested >= 30% and >= 10 checkpoints | med (>= 50%) / low | HAVE |
@@ -441,7 +443,7 @@ Sources: production war stories; Supabase system-design best-practices.
 |---|---|---|---|---|
 | `pg_update_available` | `current_app_version != latest_app_version` | mismatch | low | HAVE |
 | `pitr_absent` | no-PAT + superuser sees no live WAL archiving (`archive_mode` off, or on with `archived_count = 0`); gated to no-PAT so it never contradicts `backups.pitr_enabled` | not archiving | low | HAVE |
-| `storage_bucket_public` | a bucket is public | any (security note, cross-ref advisor) | low | NEW (informational) |
+| `public_bucket` | a bucket is public | any (security note, cross-ref advisor) | low | HAVE |
 
 Notes: PITR / backup posture and public-bucket exposure are informational
 hygiene, not perf - surfaced low-severity so the "what to check" story is
@@ -469,7 +471,9 @@ The `hbaRules` query is only ATTEMPTED on the superuser SQL tier
 (`runner.source === "superuser"` in collect.ts): the PAT read-only user is
 always denied `pg_hba_file_rules` (42501), so PAT-mode audits skip it silently
 rather than logging a warn+note per run. Present whenever a superuser --db-url
-is (no-PAT or PAT+--db-url).
+is (no-PAT or PAT+--db-url) AND the role can execute `pg_hba_file_rules`: the
+`rolePrivileges` probe skips it for a `postgres`-role connstring with one
+`sqlPrivileges` note.
 
 Sources: Supabase Network Restrictions / SSL Enforcement docs; PG docs pg_hba.conf.
 
@@ -497,13 +501,15 @@ inspect SQL.
 
 ## Cross-cutting: severity & narration contract
 
-Each heuristic in `src/heuristics.ts` carries: `id`, `plane`, `severity` (or a
-function of the measured value), `title(ctx)`, `evidence(ctx)`, `remediation`,
-`docUrl`, `reviewedDate`. `deriveFindings` attaches these to every `Finding` so:
+Each heuristic in `src/heuristics.ts` carries: `id`, `plane`, `whyItMatters`,
+`remediation`, `howToVerify`, optional `sql`, `docUrl`, optional `refs` /
+`changelogUrl`, and `reviewed`. Severity, title and evidence are set at each
+push in `findings.ts`. `deriveFindings` attaches the registry fields to every
+`Finding` (via `meta(id)`) so:
 - the deterministic report can show what/why/how inline (no LLM),
 - the `narrate` LLM pass has grounded, cited facts to synthesize from (it must
   not invent thresholds - it cites these),
-- the sync check can report each heuristic's `reviewedDate` vintage.
+- the sync check can report each heuristic's `reviewed` vintage.
 
 ## Source index
 

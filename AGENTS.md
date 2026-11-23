@@ -48,7 +48,7 @@ enumerates + serves API/metrics; matched projects upgrade to superuser SQL).
 | `bun run check:schemas` | warn when the app-schema denylist (src/appschema.ts) drifts from splinter.sql's unused_index exclusions |
 | `bun run check:docurls` | warn when a finding's layered doc references (Supabase docUrl + Postgres/AWS refs + changelogUrl) 404 or redirect to a renamed path |
 | `bun test` | run tests |
-| `bun run build` | compile a standalone `pg-analyser` binary |
+| `bun run build` | compile a standalone `pg-analyser` binary (`scripts/build.ts`; bakes the git commit into `--version` / `meta.sbperfVersion` and warns when run inside the checkout at another commit) |
 
 PDF needs a system Chrome/Chromium on PATH (`chromium`, `google-chrome`, ...), a macOS app bundle (`/Applications` or `~/Applications`: Google Chrome, Chromium), or `PG_ANALYSER_CHROME=/path/to/chrome`. `analyze`/`report` need no browser. In a sweep a PDF failure is a warning (`- no PDF (...)` on the progress line), not a FAILED database: analysis.json and report.html are already written, and `pg-analyser pdf <dir>` renders it later.
 
