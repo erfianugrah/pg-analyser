@@ -88,6 +88,9 @@ pg-analyser full --ref <ref>    # works anywhere
 ```
 
 Rebuild after code changes (`bun run build && mv pg-analyser ~/.local/bin/`).
+The build bakes in the git commit (`pg-analyser --version` prints `0.12.0+<sha>`,
+and reports carry it), and a binary run inside this checkout at a different
+commit prints a one-line warning to rebuild.
 
 **`bun link`** (tracks live source, no rebuild - best while developing):
 

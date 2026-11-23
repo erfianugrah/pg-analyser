@@ -14,7 +14,7 @@ import {
   runBench,
 } from "./bench.ts";
 import { type Brand, DEFAULT_BRAND, loadBrand } from "./brand.ts";
-
+import { BUILD_SHA, repoHead, staleBuildWarning, versionString } from "./buildinfo.ts";
 import { evaluateGate, type GateOptions, renderGateText } from "./check.ts";
 import { collect } from "./collect.ts";
 import { ConfigError, loadConfig, loadConfigOptional } from "./config.ts";
@@ -59,7 +59,7 @@ import { DEFAULT_STORE, HistoryStore } from "./store.ts";
 import { makeTransport, type Transport } from "./transport.ts";
 import { computeTrends } from "./trends.ts";
 
-const VERSION = pkg.version;
+const VERSION = versionString(pkg.version, BUILD_SHA);
 
 // Report branding, resolved once at startup (Supabase default; --brand /
 // PG_ANALYSER_BRAND / ./pg-analyser.brand.json override). Read by the render call sites.
@@ -1507,6 +1507,8 @@ async function main(): Promise<void> {
     process.exit(0);
   }
   if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") usage(0);
+  const stale = staleBuildWarning(BUILD_SHA, BUILD_SHA ? repoHead(process.cwd()) : null);
+  if (stale) console.error(stale);
   const flags = parseFlags(argv.slice(1));
   if (flags.interval && !INTERVALS.includes(flags.interval as (typeof INTERVALS)[number])) {
     console.error(`error: --interval must be one of ${INTERVALS.join(" | ")}`);

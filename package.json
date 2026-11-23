@@ -23,7 +23,7 @@
     "check:schemas": "bun run scripts/check-schemas-drift.ts",
     "check:docurls": "bun run scripts/check-docurls.ts",
     "smoke": "bun run smoke.ts",
-    "build": "bun build ./src/index.ts --compile --outfile pg-analyser",
+    "build": "bun run scripts/build.ts",
     "test:live": "bun acceptance/live-sql.ts && bun acceptance/live-catalogue-sql.ts && bun acceptance/live-promtool.ts"
   },
   "dependencies": {
