@@ -719,6 +719,13 @@ src/
   then app-only is the correct default.
 - Generated reports contain live query text - `reports/` is gitignored.
 - Scraper dirs contain a live credential in `prometheus.yml` - gitignored.
+- **Public mirror: tracked files and commit messages carry only public,
+  generic names** (no label schemes, hostnames, datasource ids, or
+  customer/project names; such terms are blocked locally via
+  `confidential_terms`). The `scrape-init` Grafana dashboard
+  (`src/scraper.ts`) is generated from `buildPanels()` and keyed on the native
+  `supabase_project_ref` label, so it works on any Prometheus; other dashboard
+  exports stay gitignored.
 
 ## Verified upstream facts (Supabase, 2026-07)
 
