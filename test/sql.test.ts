@@ -236,3 +236,12 @@ test("fkUnindexed slices the ZERO-based indkey array ([0:N-1], wiki form)", () =
   expect(QUERIES.fkUnindexed).toContain("indpred is null");
   expect(QUERIES.fkUnindexed).toContain("indexprs is null");
 });
+
+describe("top statement views carry the executing service", () => {
+  test("topStatements, topByCalls and queryIoStats tag supabase_auth_admin rows as Auth", () => {
+    for (const k of ["topStatements", "topByCalls", "queryIoStats"] as const) {
+      expect(QUERIES[k]).toMatch(/supabase_auth_admin/);
+      expect(QUERIES[k]).toMatch(/as service/);
+    }
+  });
+});

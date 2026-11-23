@@ -84,6 +84,9 @@ export const THRESHOLDS = {
   /** checkpoint_completion_target below this spreads checkpoint I/O too tightly
    * (spiky flushes); modern Postgres defaults to 0.9. */
   checkpointCompletionMin: 0.7,
+  /** Auth's own statements (supabase_auth_admin) at or above this share of
+   * top-by-calls point at getUser() on every request. */
+  authLookupPctCalls: 25,
   /** Derived disk IOPS / provisioned warning fraction. */
   diskIopsFrac: 0.8,
   /** Derived disk throughput / provisioned warning fraction. */
@@ -1216,6 +1219,25 @@ export const HEURISTICS: Record<string, Heuristic> = {
       "Set checkpoint_completion_target to 0.9 so checkpoint writes are paced across the interval instead of flushed in a burst. On hosted Supabase it already defaults to 0.9, so this mainly applies to self-hosted / --db-url targets.",
     docUrl:
       "https://www.postgresql.org/docs/current/runtime-config-wal.html#GUC-CHECKPOINT-COMPLETION-TARGET",
+    reviewed: R,
+  },
+  auth_lookup_heavy: {
+    id: "auth_lookup_heavy",
+    plane: "Query",
+    whyItMatters:
+      "Each supabase.auth.getUser() call is a request to the Auth server, which loads the session, MFA claims, factors, identities and user from Postgres. When an app or Edge Function calls it on every request, those lookups become a large share of everything the database runs, and each request waits on the extra round trip.",
+    remediation:
+      "Where code only needs to know who the user is, use supabase.auth.getClaims() instead: with asymmetric JWT signing keys it verifies the token locally against cached public keys and runs no Auth or database query (with a legacy symmetric secret it still calls Auth). Keep getUser() where a signed-out or banned user must be refused before the token expires, for example payments or credit changes.",
+    howToVerify:
+      "After the change, the Auth statements (service = Auth) should drop down the most-frequent-queries table, and /auth/v1/user requests in the API logs should fall.",
+    docUrl: "https://supabase.com/docs/guides/auth/server-side/creating-a-client",
+    refs: [
+      {
+        tier: "fix",
+        label: "JWT signing keys",
+        url: "https://supabase.com/docs/guides/auth/signing-keys",
+      },
+    ],
     reviewed: R,
   },
   track_io_timing_off: {

@@ -4938,3 +4938,41 @@ describe("SECURITY DEFINER exec lints skip trigger functions", () => {
     ).toBeUndefined();
   });
 });
+
+describe("auth_lookup_heavy (getUser() per request shows as Auth's own statements)", () => {
+  const authRow = (table: string, pct: number) => ({
+    queryid: table,
+    calls: 28000,
+    pct_calls: pct,
+    service: "Auth",
+    query: `SELECT ${table}.id FROM ${table} WHERE ${table}.user_id = $1`,
+  });
+
+  test("Auth lookups at >= 25% of calls -> one low finding naming getClaims()", () => {
+    const a = base();
+    a.sql.topByCalls = [
+      authRow("sessions", 9.5),
+      authRow("mfa_amr_claims", 9.4),
+      authRow("identities", 9.3),
+      authRow("mfa_factors", 9.3),
+      authRow("users", 9.2),
+      { queryid: "app", calls: 1000, pct_calls: 2, service: null, query: "select 1 from orders" },
+    ];
+    const f = deriveFindings(a).filter((x) => x.heuristicId === "auth_lookup_heavy");
+    expect(f).toHaveLength(1);
+    expect(f[0]?.severity).toBe("low");
+    expect(f[0]?.title).toContain("46.7%");
+    expect(f[0]?.remediation).toMatch(/getClaims\(\)/);
+  });
+
+  test("Auth below the threshold, or no service column -> no finding", () => {
+    const a = base();
+    a.sql.topByCalls = [authRow("users", 9.2), authRow("sessions", 9.5)];
+    expect(deriveFindings(a).some((x) => x.heuristicId === "auth_lookup_heavy")).toBe(false);
+    const b = base();
+    b.sql.topByCalls = [
+      { queryid: "x", calls: 5, pct_calls: 90, query: "SELECT users.id FROM users" },
+    ];
+    expect(deriveFindings(b).some((x) => x.heuristicId === "auth_lookup_heavy")).toBe(false);
+  });
+});

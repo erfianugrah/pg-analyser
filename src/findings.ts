@@ -3418,6 +3418,25 @@ export function deriveFindings(a: Analysis): Finding[] {
   // EXPLAIN shows whether the plan is the problem. All low severity.
   const stmtRows = [...a.sql.topStatements, ...a.sql.queryIoStats];
   const callRows = [...a.sql.topByCalls, ...a.sql.topStatements];
+
+  // Auth's own user lookups dominating call counts: an app (or Edge Function)
+  // that calls auth.getUser() on every request makes Auth load the session,
+  // MFA claims, factors, identities and user from Postgres each time, which can
+  // add up to a large share of all statement calls. Only topByCalls carries
+  // pct_calls; rows without the service column (older snapshots) never match.
+  const authPct = a.sql.topByCalls
+    .filter((r) => r.service === "Auth")
+    .reduce((s, r) => s + (Number(r.pct_calls) || 0), 0);
+  if (authPct >= THRESHOLDS.authLookupPctCalls) {
+    out.push({
+      severity: "low",
+      category: "Performance",
+      title: `Auth's own user lookups are ${authPct.toFixed(1)}% of statement calls`,
+      anchor: "#calls",
+      ...meta("auth_lookup_heavy"),
+    });
+  }
+
   const VECTOR_OP = /(<=>|<->|<#>|<\+>|<~>|<%>)/;
   const seen = new Set<string>();
   const uniq = (rows: typeof stmtRows) =>

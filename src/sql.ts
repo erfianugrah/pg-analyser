@@ -122,6 +122,12 @@ const APP_QUERY = `(query not ilike all (array[${PLATFORM_NOISE}]) or query ilik
 // pg_catalog.count(...) is unquoted, so it never matches.
 const RPC_FN_SQL = `case when query ilike '%pgrst_source%' then substring(query from '("[^"]+"\\."[^"]+")\\(') end`;
 
+// Which Supabase service ran the statement, from the pg_stat_statements userid.
+// Auth (GoTrue) connects as supabase_auth_admin and Storage as
+// supabase_storage_admin; their statements carry no schema prefix, so the text
+// alone reads like app queries. NULL = the app (postgres, authenticator, ...).
+const SERVICE_SQL = `case (select rolname from pg_roles where oid = userid) when 'supabase_auth_admin' then 'Auth' when 'supabase_storage_admin' then 'Storage' end`;
+
 // Statement types that are not ongoing application workload: transaction
 // control, DDL, migrations, session/admin commands. A POSIX regex anchored at
 // the statement start, so it matches the verb without false-flagging a table
@@ -319,6 +325,7 @@ export const QUERIES = {
       round(mean_exec_time::numeric, 2) as mean_ms,
       round((100 * total_exec_time / nullif(sum(total_exec_time) over (), 0))::numeric, 1) as pct,
       ${RPC_FN_SQL} as rpc_fn,
+      ${SERVICE_SQL} as service,
       left(regexp_replace(query, '\\s+', ' ', 'g'), 160) as query
     from extensions.pg_stat_statements
     where ${APP_QUERY}
@@ -336,6 +343,7 @@ export const QUERIES = {
       round(mean_exec_time::numeric, 2) as mean_ms,
       round((100 * calls / nullif(sum(calls) over (), 0))::numeric, 1) as pct_calls,
       ${RPC_FN_SQL} as rpc_fn,
+      ${SERVICE_SQL} as service,
       left(regexp_replace(query, '\\s+', ' ', 'g'), 160) as query
     from extensions.pg_stat_statements
     where ${APP_QUERY}
@@ -374,6 +382,7 @@ export const QUERIES = {
         * (shared_blks_read::numeric
            / nullif(shared_blks_hit + shared_blks_read, 0)))::bigint as eviction_impact,
       ${RPC_FN_SQL} as rpc_fn,
+      ${SERVICE_SQL} as service,
       left(regexp_replace(query, '\\s+', ' ', 'g'), 160) as query
     from extensions.pg_stat_statements
     where ${APP_QUERY}
@@ -1500,6 +1509,7 @@ export const QUERIES = {
       calls,
       round((100 * wal_bytes / nullif(sum(wal_bytes) over (), 0))::numeric, 1) as pct_wal,
       ${RPC_FN_SQL} as rpc_fn,
+      ${SERVICE_SQL} as service,
       left(regexp_replace(query, '\\s+', ' ', 'g'), 160) as query
     from extensions.pg_stat_statements
     where ${APP_QUERY}

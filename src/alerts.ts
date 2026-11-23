@@ -391,6 +391,7 @@ export const EXCLUSIONS: Record<string, { clause: ExclusionClause; why: string }
     why: "index_advisor advisory output; no metric family",
   },
   invalid_index: { clause: "no-metric", why: "pg_stat_user_indexes SQL; no metric family" },
+  auth_lookup_heavy: { clause: "no-metric", why: "pg_stat_statements SQL; no metric family" },
   query_disk_reads_high: { clause: "no-metric", why: "pg_stat_statements SQL; no metric family" },
   query_high_variance: { clause: "no-metric", why: "pg_stat_statements SQL; no metric family" },
   query_temp_spill: { clause: "no-metric", why: "pg_stat_statements SQL; no metric family" },

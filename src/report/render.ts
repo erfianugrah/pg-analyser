@@ -1286,7 +1286,7 @@ export function render(
         : "";
 
   const statsWindow = a.sql.statsResetAge ? ` (over ${a.sql.statsResetAge.split(".")[0]})` : "";
-  const outliersNote = `top 5 by share of DB time - app workload only; platform, migration, DDL and transaction-control statements filtered out${statsWindow}`;
+  const outliersNote = `top 5 by share of DB time - app workload; platform introspection, migration, DDL and transaction-control statements filtered out, and statements Supabase Auth or Storage ran for the app are marked in the service column${statsWindow}`;
   const verdict = computeVerdict(findings, degraded);
   // Every report section, produced by id. The body emits them in NAV_GROUPS
   // order (group by group, members in map order) under a heading per group,
@@ -1378,7 +1378,7 @@ ${capabilitiesSection(a)}`,
     calls: drill(
       "calls",
       "Most-frequent queries",
-      "top 5 by call count - chatty / hot-path app workload (platform/migration/DDL noise filtered)",
+      "top 5 by call count - chatty / hot-path app workload (platform/migration/DDL noise filtered; service = Auth or Storage marks statements those services ran, e.g. Auth loading the user on every getUser() call)",
       chartFor(a.sql.topByCalls, errored.has("sql:topByCalls"), {
         labelKey: "query",
         valueKey: "pct_calls",
