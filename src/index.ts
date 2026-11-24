@@ -1470,7 +1470,7 @@ async function doAlertsInit(ref: string | undefined, dir: string): Promise<void>
   // --ref '~<regex>' produces a regex matcher instead of equality. The common
   // case is '~.+' (label present) for multi-project scrapers sharing a TSDB
   // with other node/postgres exporters: without it, node_* rules fire on ANY
-  // scraped host (edge routers, memledger postgres), not just Supabase projects.
+  // scraped host (edge routers, other Postgres hosts), not just Supabase projects.
   const regex = ref?.startsWith("~") ? ref.slice(1) : undefined;
   const matcher = regex
     ? `supabase_project_ref=~"${regex}"`

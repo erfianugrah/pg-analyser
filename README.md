@@ -453,7 +453,7 @@ keep it matching the `pg-analyser.profile.json` / `pg-analyser.*.profile.json` g
 pattern so the cookies + connstrings are never committed.
 
 **PAT + profile (keep the graphs AND the Management-API planes):** the profile
-defaults to `"noPat": true` (the customer-audit mode - DB connstring + Grafana
+defaults to `"noPat": true` (the multi-organisation mode - DB connstring + Grafana
 only). Set **`"noPat": false`** in the profile and, as long as a
 `SUPABASE_ACCESS_TOKEN` is resolvable, the run uses the PAT for the API planes +
 metrics (disk/autoscale/entitlement, backups, pooler, security config, hosted

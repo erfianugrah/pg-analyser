@@ -11,7 +11,7 @@ import { NON_APP_SCHEMAS_SQL } from "./appschema.ts";
  * pgss planes below are schema-qualified, so collect resolves the real
  * schema once via the `pgssSchema` probe and rewrites them with
  * withPgssSchema() - a bare `extensions.` reference silently empties every
- * pgss plane on a self-hosted DB (memledger, 2026-08-10).
+ * pgss plane on a self-hosted DB (seen 2026-08-10).
  */
 
 // The hosted-Supabase location; also the fallback when the probe can't run.
@@ -1292,7 +1292,7 @@ export const QUERIES = {
       )
       -- Expression ANN indexes (e.g. (embedding::halfvec(384))) carry indkey 0
       -- for every key, so the check above can't attribute them to a column and
-      -- false-positives (all three of memledger's halfvec HNSW indexes fired
+      -- false-positives (all three halfvec HNSW indexes on a self-hosted Postgres fired
       -- here 2026-08-11). Attribute them via pg_depend: an expression index
       -- depends on every column its expression references.
       and not exists (

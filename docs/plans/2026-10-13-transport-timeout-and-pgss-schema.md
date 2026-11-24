@@ -1,8 +1,7 @@
 # Transport timeout + quoted pgss schema - implementation plan
 
 **Status (2026-10-13): SHIPPED 2026-10-13 (commits: see git log).** Covers
-board cards `work-pg-analyser#3` (pgss schema, p1) and `work-pg-analyser#2`
-(fetchRetry, p2). Dry-run verified against f62fd70 (see "Dry-run status" at
+two board cards (pgss schema, p1; fetchRetry, p2). Dry-run verified against f62fd70 (see "Dry-run status" at
 the end); executed on 8d35ef1 with the same sensor counts (1011 -> 1013 ->
 1016 -> 1021 pass, 0 fail). Tasks 2 and 3 ship as one commit (they rewrite
 the same `fetchRetry` block and test file).
@@ -757,14 +756,9 @@ and tick the checkboxes.
 
 - [x] **Step 2: Move the cards**
 
-> Done 2026-10-13 after the push: #3 -> review on 335ece0, #2 -> review on
-> 711dc46 + 9280c65.
-
-Run: `vkctl comment work-pg-analyser#2 "Shipped <sha>: ... Verify: bun --no-env-file test"`
-(same for #3), then `vkctl mv work-pg-analyser#3 work-pg-analyser#2 review`
-Expected: both cards reported moved to `review` (queued if no token is
-available; `vkctl flush` replays the queue). Agents stop at In Review; only
-the user moves a card to Done.
+> Done 2026-10-13 after the push: both cards moved to review (on 335ece0 and
+> on 711dc46 + 9280c65). Agents stop at In Review; only the user moves a card
+> to Done.
 
 - [x] **Step 3: Commit**
 

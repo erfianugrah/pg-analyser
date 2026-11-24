@@ -35,7 +35,7 @@ prepared transaction, never terminates a backend, never runs VACUUM. A task that
 adds a write path is a failed task.
 
 **Second standing constraint - no customer, org, or person names anywhere.**
-This work was motivated by a field incident; nothing identifying it belongs in
+Nothing identifying a customer, org or person belongs in
 the repo, in a test fixture, in a comment, or in a commit message.
 
 ---

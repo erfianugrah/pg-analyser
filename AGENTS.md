@@ -125,7 +125,7 @@ of planes, so a superuser `--db-url` reaches that data directly):
   (has_function_privilege on pg_hba_file_rules and pg_read_file) runs once
   after the preflight: a `postgres`-role --db-url skips hbaRules and the
   server-log tail/restart reads with ONE `sqlPrivileges` note naming the role
-  (work-pg-analyser#21). pg_ls_logdir and pg_ls_waldir still run for it
+  (2026-11-23). pg_ls_logdir and pg_ls_waldir still run for it
   (pg_monitor). A failed or empty probe falls back to attempting both.
 - **Genuinely NOT reachable via SQL** (platform/infra, correctly left null/[]):
   service health, disk provisioning (size/IOPS/type), pooler CONFIG (Supavisor),
@@ -196,7 +196,7 @@ string in two files never collides. Runnable example of the split:
 (both keyed on `ap-southeast-1`, different cookies). Nothing internal is baked into the repo:
 hosts, UIDs, cookies and connstrings all live in the gitignored profile
 (`pg-analyser.profile.json` / `pg-analyser.*.profile.json`; keep `.example`). Supersedes
-`pg-analyser.databases.json` for the work case (it's a superset); overlays are a
+`pg-analyser.databases.json` for the multi-org case (it's a superset); overlays are a
 separate presentation layer and untouched.
 
 ### SQL tiers (PAT vs superuser)

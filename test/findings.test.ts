@@ -3454,7 +3454,7 @@ describe("pgvector / query-shape findings (2026-08 vectors)", () => {
 
 test("queue_poll_pressure: truncated 160-char pgss text cut inside the locking clause still matches", () => {
   const a = base();
-  // live shape from memledger: "... ORDER BY ts DESC NULLS LAST LIMIT $1 FOR UP"
+  // live shape from a self-hosted Postgres: "... ORDER BY ts DESC NULLS LAST LIMIT $1 FOR UP"
   a.sql.topStatements = [
     {
       queryid: "3",
@@ -3471,7 +3471,7 @@ test("queue_poll_pressure: truncated 160-char pgss text cut inside the locking c
 
 test("queue_poll_pressure: same queryid in topByCalls (low share) and topStatements (high share) still fires", () => {
   const a = base();
-  // live memledger shape: topByCalls copy has pct_calls 9.5 / pct 0.0,
+  // live self-hosted Postgres shape: topByCalls copy has pct_calls 9.5 / pct 0.0,
   // topStatements copy has pct 81.0 - the qualifying row must survive dedup.
   a.sql.topByCalls = [
     {

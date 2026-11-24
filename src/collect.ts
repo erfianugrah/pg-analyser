@@ -248,7 +248,7 @@ export async function collect(
   // Resolve where pg_stat_statements is installed before fanning out: hosted
   // Supabase puts it in `extensions`, self-hosted Postgres usually in
   // `public`. The pgss planes are schema-qualified, so a wrong schema
-  // silently empties ALL of them via safe() (memledger, 2026-08-10: 251 pgss
+  // silently empties ALL of them via safe() (self-hosted DB, 2026-08-10: 251 pgss
   // rows present, topStatements empty). Probe once, rewrite, merge.
   let sqlQ: Record<keyof typeof QUERIES, string> = QUERIES;
   if (sqlServing) {
